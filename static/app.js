@@ -14,11 +14,20 @@ function h(tag, attrs = {}, ...kids) {
   return el;
 }
 
+// calls that wait on the local model: Dot shows it is working while they run
+const MODEL_CALL = /\/(explain|test-connection)$|^\/graph\/(index|search|suggest)$/;
+
 async function api(path, opts = {}) {
-  const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...opts.headers } });
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(r.statusText), { body, status: r.status });
-  return body;
+  const working = MODEL_CALL.test(path);
+  if (working) buddy.busy(1);
+  try {
+    const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...opts.headers } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(r.statusText), { body, status: r.status });
+    return body;
+  } finally {
+    if (working) buddy.busy(-1);
+  }
 }
 
 // ---------- model status chip ----------
@@ -259,40 +268,52 @@ function paperTable(papers, s, fw, nextId) {
     return h("p", { class: "none quiet" }, lib.q ? `No papers match "${lib.q}".` : "No papers with this status.");
   }
   // "You are here" in the Library: the next presentation overall (nextId comes from the unfiltered list).
-  return h("table", { class: "papers" },
-    h("thead", {}, h("tr", {}, ["Paper", "Presentation", "Reflection", "Progress", "AI summary", "Time spent", "Last opened", "Done", ""]
-      .map((t) => t === "AI summary"
-        ? h("th", { scope: "col", title: AI_SUMMARY_TIP, "aria-describedby": "ai-summary-help" },
-          t, h("span", { id: "ai-summary-help", hidden: true }, AI_SUMMARY_TIP))
-        : h("th", { scope: "col" }, t)))),
-    h("tbody", {}, papers.map((p) => paperRow(p, s, fw, p.id === nextId))));
+  return h("ol", { class: "pcards" }, papers.map((p, i) => paperRow(p, s, fw, p.id === nextId, i)));
 }
 
-function paperRow(p, s, fw, isNext) {
-  const done = h("input", { type: "checkbox", checked: p.reflection_done,
+// One paper: cover, what it is, how far you are, and the one thing to do next. Only facts that exist are shown.
+function paperRow(p, s, fw, isNext, i = 0) {
+  const done = h("input", { type: "checkbox", checked: p.reflection_done, class: "switch",
     "aria-label": `Reflection done for ${p.title}`,
     onchange: async () => { await api(`/papers/${p.id}`, { method: "PATCH",
       body: JSON.stringify({ reflection_done: done.checked }) });
       if (done.checked) buddy.say(`Reflection done for "${p.title}". Nice work.`, { mood: "happy" });
       libRedraw(); } });
-  return h("tr", {},
-    h("td", { class: "c-title" },
-      h("a", { href: `#read/${p.id}`, class: "title" }, p.title),
-      h("span", { class: "authors" }, p.authors || "Authors unknown"),
-      p.tags.length ? h("span", { class: "tags" }, p.tags.map((t) => h("span", { class: "tag" }, t))) : null),
-    h("td", { "data-label": "Presentation" }, p.presentation_date
-      ? h("span", {}, h("span", { class: isNext ? "hl" : "" }, fmtDate(p.presentation_date)),
-          h("span", { class: "sub" }, relDays(p.presentation_date)))
-      : h("span", { class: "quiet" }, "No date")),
-    h("td", { "data-label": "Reflection", class: "num" }, p.reflection_no ? `${p.reflection_no} / ${s.reflections_target}` : h("span", { class: "quiet" }, "None")),
-    h("td", { "data-label": "Progress" }, h("span", { class: "prog" }, progressBar(p.progress),
-      h("span", { class: "num" }, `${p.steps_done} / ${p.progress.length}`))),
-    h("td", { "data-label": "AI summary" }, h("span", { class: `primer ${p.primer_status}` }, PRIMER[p.primer_status])),
-    h("td", { "data-label": "Time spent", class: "num" }, fmtSpent(p.seconds)),
-    h("td", { "data-label": "Last opened" }, ago(p.last_opened)),
-    h("td", { "data-label": "Reflection done", class: "c-done" }, done),
-    h("td", { class: "c-actions" },
-      h("a", { class: "btn ghost", href: `#read/${p.id}` }, "Open"),
+  const total = p.progress.length;
+  const at = p.progress.findIndex((x) => x !== "done");
+  const step = at < 0 ? null : fw.steps[at];
+  const where = p.steps_done === total ? `All ${total} steps done`
+    : p.progress.every((x) => x === "empty") ? `Not started, ${fw.steps.reduce((t, x) => t + x.minutes, 0)} min in all`
+    : `Step ${step.n} of ${total - 1}: ${step.title}`;
+  const go = p.steps_done === total ? "Review" : p.progress.every((x) => x === "empty") ? "Start reading" : "Continue";
+  const chip = (text, cls = "") => h("span", { class: `pchip ${cls}` }, text);
+  const chips = [
+    p.presentation_date
+      ? chip(`Talk ${fmtDate(p.presentation_date)}, ${relDays(p.presentation_date)}`, isNext ? "next" : "")
+      : h("button", { type: "button", class: "pchip add", onclick: () => detailsDialog(p, s, false) }, "+ Set talk date"),
+    p.reflection_no ? chip(`Reflection ${p.reflection_no} of ${s.reflections_target}`) : null,
+    p.primer_status !== "not_made" ? chip(`AI summary ${PRIMER[p.primer_status].toLowerCase()}`, p.primer_status) : null,
+    p.seconds >= 60 ? chip(`${fmtSpent(p.seconds)} read`) : null,
+    chip(p.last_opened ? `Opened ${ago(p.last_opened).toLowerCase()}` : "Not opened yet", "soft"),
+    ...p.tags.map((t) => chip(t, "tag")),
+  ].filter(Boolean);
+  return h("li", { class: `pcard${isNext ? " is-next" : ""}${p.reflection_done ? " is-done" : ""}`, style: `--i:${i}` },
+    h("a", { class: "pcover", href: `#read/${p.id}`, tabindex: -1, "aria-hidden": "true" },
+      h("img", { src: `/papers/${p.id}/cover`, alt: "", loading: "lazy", decoding: "async",
+        onerror: (e) => e.target.replaceWith(h("span", { class: "pcover-none" }, "PDF")) })),
+    h("div", { class: "pmain" },
+      h("a", { href: `#read/${p.id}`, class: "ptitle" }, p.title),
+      h("span", { class: "pauthors" }, p.authors || "Authors unknown"),
+      h("div", { class: "chips" }, chips)),
+    h("div", { class: "ptrack" },
+      h("span", { class: "pwhere" }, where),
+      h("span", { class: "steps", role: "img", "aria-label": `${p.steps_done} of ${total} steps done` },
+        p.progress.map((x, k) => h("i", { class: `${x}${k === at ? " here" : ""}`, style: `--k:${k}`,
+          title: `Step ${fw.steps[k].n}, ${fw.steps[k].title}: ${x === "done" ? "done" : x === "partial" ? "started" : "not started"}` }))),
+      h("span", { class: "pcount" }, `${p.steps_done} / ${total}`)),
+    h("div", { class: "pact" },
+      h("a", { class: `btn${go === "Review" ? " ghost" : ""}`, href: `#read/${p.id}` }, go),
+      h("label", { class: "pdone" }, done, "Reflection done"),
       rowMenu(p, s)));
 }
 

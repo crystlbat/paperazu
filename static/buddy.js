@@ -30,7 +30,13 @@ const buddy = (() => {
     surprised: { eyes: "wide", mouth: "o" },
   };
 
-  const st = { mood: "idle", dx: 0, dy: 0, blink: false, talkFrame: 0, talking: false,
+  // the rim of the grid, clockwise, for the "working" light that runs around it
+  const RIM = [...Array(W).keys()].map((x) => x)
+    .concat([...Array(H - 2).keys()].map((y) => (y + 1) * W + W - 1))
+    .concat([...Array(W).keys()].map((x) => (H - 1) * W + W - 1 - x))
+    .concat([...Array(H - 2).keys()].map((y) => (H - 2 - y) * W));
+
+  const st = { mood: "idle", dx: 0, dy: 0, blink: false, talkFrame: 0, talking: false, busy: 0, spin: 0,
     muted: localStorage.getItem("buddy-muted") === "1", last: null };
 
   const root = document.createElement("aside");
@@ -55,12 +61,32 @@ const buddy = (() => {
   const muteBtn = root.querySelector(".buddy-mute");
 
   function draw() {
-    const m = MOODS[st.mood];
-    const dx = m.dx ?? st.dx, dy = m.dy ?? st.dy;
+    const m = MOODS[st.busy && !st.talking ? "think" : st.mood];
+    const dx = st.busy ? [-1, 0, 1, 0][Math.floor(st.spin / 6) % 4] : m.dx ?? st.dx, dy = m.dy ?? st.dy;
     const eyes = st.blink && m.eyes !== "closed" ? "closed" : m.eyes;
     const mouth = st.talking ? (st.talkFrame ? "o" : "talk") : m.mouth;
     const on = new Set([...EYES[eyes](dx, dy), ...MOUTHS[mouth]].map(([x, y]) => y * W + x));
-    dots.forEach((d, i) => d.classList.toggle("on", on.has(i)));
+    const tail = new Map(st.busy ? [0, 1, 2, 3, 4].map((k) => [RIM[(st.spin - k + RIM.length) % RIM.length], k]) : []);
+    dots.forEach((d, i) => {
+      d.classList.toggle("on", on.has(i) || tail.get(i) === 0);
+      d.classList.toggle("trail", tail.has(i) && tail.get(i) > 0);
+    });
+  }
+
+  // ---------- working: a light runs round the rim while the model is busy ----------
+  let spinTimer = 0, busySince = 0;
+  function busy(delta) {
+    st.busy = Math.max(0, st.busy + delta);
+    root.classList.toggle("busy", st.busy > 0);
+    face.setAttribute("aria-label", st.busy ? "Reading buddy. The model is working." : "Reading buddy. Show the last tip.");
+    if (st.busy && !spinTimer) {
+      busySince = Date.now();
+      if (!reduced()) spinTimer = setInterval(() => { st.spin = (st.spin + 1) % (RIM.length * 4); draw(); }, 55);
+    } else if (!st.busy) {
+      clearInterval(spinTimer); spinTimer = 0;
+      if (!reduced() && Date.now() - busySince > 600) { root.classList.add("done"); setTimeout(() => root.classList.remove("done"), 700); }
+    }
+    draw();
   }
 
   // ---------- life: blinking, glancing, following the cursor ----------
@@ -78,6 +104,15 @@ const buddy = (() => {
       }
       scheduleGlance();
     }, 4000 + Math.random() * 4000);
+  }
+  function scheduleHop() {
+    setTimeout(() => {
+      if (!reduced() && !st.busy && st.mood !== "sleep" && document.visibilityState === "visible") {
+        root.classList.remove("hop"); void root.offsetWidth; root.classList.add("hop");
+        st.dx = -1; draw(); setTimeout(() => { st.dx = 1; draw(); }, 320); setTimeout(() => { st.dx = 0; draw(); }, 640);
+      }
+      scheduleHop();
+    }, 14000 + Math.random() * 12000);
   }
   let raf = 0;
   document.addEventListener("mousemove", (e) => {
@@ -176,6 +211,6 @@ const buddy = (() => {
   document.body.append(root);
   setMuted(st.muted);
   if (st.muted) st.mood = "sleep";
-  draw(); scheduleBlink(); scheduleGlance();
-  return { say, hide, status, mood };
+  draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
+  return { say, hide, status, mood, busy };
 })();

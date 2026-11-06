@@ -462,7 +462,7 @@ async function renderGraph() {
     tree?.remove();
     const data = await api(`/papers/${p.id}/outline`).catch(() => null);
     if (!data || !st.alive) return;
-    const CARD = 248, COL = 296, GAP = 12, PAD = 24;
+    const CARD = 300, COL = 352, GAP = 14, PAD = 24;
     const kind = data.source === "slides" ? ["Deck", "Sections", "Topics", "Slides"] : ["Paper", "Sections", "Subsections", "Parts and figures"];
     const back = h("button", { type: "button", class: "btn ghost", onclick: () => closeTree() }, "Back to the graph");
     const holder = h("div", { class: "t-scroll" });
@@ -486,7 +486,7 @@ async function renderGraph() {
     const byKey = new Map();
     (function index(n) { byKey.set(n.key, n); n.children.forEach(index); })(data.tree);
     const blurb = (n) => n.lead || (n.children.length ? `Inside: ${n.children.map((c) => c.title).join(", ")}` : "");
-    const tall = (n) => (blurb(n) ? 98 : 56);
+    const tall = (n) => (n.kind === "figure" ? 84 : !blurb(n) ? 72 : blurb(n).length < 70 ? 120 : 168);
 
     function layout() {
       let y = PAD;

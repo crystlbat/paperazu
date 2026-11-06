@@ -1,5 +1,6 @@
 """The paper library: add, guess details, list, edit, delete, search, progress."""
 import json
+from pathlib import Path
 import re
 import sqlite3
 import uuid
@@ -219,7 +220,7 @@ def _section_texts(pages: list[str], heads: list[tuple[int, str, int]]) -> list[
 
 def _node(title: str, page: int, level: int, body: str, kind: str = "section") -> dict[str, Any]:
     return {"title": title, "page": page, "level": level, "kind": kind, "children": [],
-            "lead": _lead(body, 220), "text": _lead(body, 1200), "words": len(body.split())}
+            "lead": _lead(body, 400), "text": _lead(body, 1200), "words": len(body.split())}
 
 
 _SLIDE = re.compile(r"^slide\s+(\d+)(?:\s*[:.\-]\s*(.*))?$", re.I)
@@ -240,9 +241,10 @@ def _deck_tree(root: dict[str, Any], heads: list[tuple[int, str, int]], texts: l
         if name and body.lower().startswith(name.lower()):
             body = body[len(name):]
         body = re.sub(r"^\s*\d{1,3}\b\s*", "", body).strip()  # the slide number printed under the title
+        body = re.sub(rf"\s+{pg}$", "", body)  # or in the corner, at the end
         slides.append((name, body, pg))
     if slides and not slides[0][0]:
-        root["lead"] = _lead(slides[0][1], 220)  # the title slide
+        root["lead"] = _lead(slides[0][1], 400)  # the title slide
         slides = slides[1:]
     has_dividers = any(not n and 0 < len(b.split()) <= 6 for n, b, _ in slides)
     section = root if not has_dividers else None
@@ -269,7 +271,7 @@ def _deck_tree(root: dict[str, Any], heads: list[tuple[int, str, int]], texts: l
                 same += 1
             leaf = _node(f"Slide {pg}", pg, lvl + 1, body)
             if same >= 8:
-                leaf["lead"] = _lead(" ".join(body.split()[same:]), 220) or "Same as the slide before"
+                leaf["lead"] = _lead(" ".join(body.split()[same:]), 400) or "Same as the slide before"
             run["node"]["children"].append(leaf)
             run["last"] = body
             run["node"]["words"] += len(body.split())
@@ -458,7 +460,21 @@ def delete(paper_id: str) -> bool:
         con.execute("DELETE FROM papers_fts WHERE paper_id = ?", (paper_id,))
     con.close()
     (db.PAPERS_DIR / f"{paper_id}.pdf").unlink(missing_ok=True)
+    (db.PAPERS_DIR / f"{paper_id}.png").unlink(missing_ok=True)
     return bool(found)
+
+
+def cover(paper_id: str) -> Path | None:
+    """A small picture of page 1 for the Library, made once and kept next to the PDF."""
+    pdf = db.PAPERS_DIR / f"{paper_id}.pdf"
+    if not paper_id.isalnum() or not pdf.exists():
+        return None
+    png = db.PAPERS_DIR / f"{paper_id}.png"
+    if not png.exists():
+        with pymupdf.open(pdf) as doc:
+            page = doc[0]
+            page.get_pixmap(matrix=pymupdf.Matrix(360 / page.rect.width, 360 / page.rect.width)).save(png)
+    return png
 
 
 def _text_of(value: Any) -> str:

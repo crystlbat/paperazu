@@ -167,6 +167,14 @@ def delete_paper(paper_id: str) -> None:
         raise HTTPException(404, detail="This paper is not in the library.")
 
 
+@app.get("/papers/{paper_id}/cover")
+def get_cover(paper_id: str) -> FileResponse:
+    path = library.cover(paper_id)
+    if path is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+
+
 @app.get("/papers/{paper_id}/pdf")
 def get_pdf(paper_id: str) -> FileResponse:
     path = db.PAPERS_DIR / f"{paper_id}.pdf"

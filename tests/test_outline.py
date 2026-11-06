@@ -86,3 +86,13 @@ def test_slide_decks_get_sections_topics_and_slides() -> None:
 
 def test_missing_paper() -> None:
     assert library.outline("abc123", "T") is None
+
+
+def test_cover_is_made_once_and_deleted_with_the_paper() -> None:
+    doc = _doc([[("Title", 20, "helv")]])
+    pid = library.create(doc.tobytes(), "c.pdf")
+    png = library.cover(pid)
+    assert png is not None and png.read_bytes()[:4] == b"\x89PNG"
+    assert library.cover("nope") is None
+    library.delete(pid)
+    assert not png.exists()
