@@ -326,7 +326,7 @@ function fieldView(st, f, value, set) {
   const control = FIELDS[f.type](f, value, (v) => { set(v); wrap.classList.toggle("is-filled", filled(v)); }, id);
   if (["text", "date", "long"].includes(f.type)) {
     if (helpId) control.setAttribute("aria-describedby", helpId);
-    wrap = h("div", { class: `nb-field is-${f.type}` }, h("label", { for: id }, f.label), help, control);
+    wrap = h("div", { class: `nb-field is-${f.type}${f.type !== "long" ? " is-inline" : ""}` }, h("label", { for: id }, f.label), help, control);
   } else {
     wrap = h("fieldset", { class: `nb-field is-${f.type}`, "aria-describedby": helpId }, h("legend", {}, f.label), help, control);
   }

@@ -274,8 +274,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .over-msg { color: var(--amber); font-size: var(--fs-ui); font-weight: var(--fw-ui); margin-top: 6px; }
 @media (prefers-reduced-motion: reduce) { .budget .bar i, .circle { transition: none; } }
 
-.nb-field { border: 0; margin: 0; padding: 14px 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.nb-field > label, .nb-field > legend { font-weight: var(--fw-strong); line-height: var(--lh-title); padding: 0; }
+.nb-field { margin: 0; min-width: 0; display: flex; flex-direction: column; }
 fieldset.nb-field > legend { margin-bottom: 6px; float: left; width: 100%; } /* float keeps the legend inside the flex flow */
 .help { color: var(--pencil); font-size: var(--fs-ui); font-weight: var(--fw-ui); }
 .nb-field input[type="text"], .nb-field textarea { width: 100%; }
@@ -331,29 +330,42 @@ body.resizing .pdf-stage, body.resizing .notebook { pointer-events: none; }
 .written.all .written-dots i { background: var(--green); border-color: var(--green); }
 
 /* fields: a notebook page, not a form. Writing sits on ruled lines; the field you are in gets a marker edge. */
-.nb-field { position: relative; transition: background .2s; }
-.nb-field::before {
-  content: ""; position: absolute; left: -32px; top: 14px; bottom: 14px; width: 4px; border-radius: 0 3px 3px 0;
-  background: var(--marker); transform: scaleY(0); transform-origin: top; transition: transform .22s cubic-bezier(.3,.7,.2,1);
+/* Fields are cards with the label inside: an outline, no fill. Short fields in a row join into one
+   grouped card with hairlines between them. The card you write in gets an ink edge and a marker tab. */
+.nb-field {
+  position: relative; margin: 0 0 14px; padding: 11px 16px 12px; gap: 4px;
+  border: 1px solid var(--rule); border-radius: 12px; background: var(--sheet);
+  transition: border-color .15s, box-shadow .15s;
+}
+.nb-field.is-inline + .nb-field.is-inline { margin-top: -15px; border-top-left-radius: 0; border-top-right-radius: 0; }
+.nb-field.is-inline:has(+ .nb-field.is-inline) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.nb-field:hover { border-color: var(--pencil); z-index: 1; }
+.nb-field:focus-within { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); z-index: 2; }
+.nb-field > label, .nb-field > legend { padding: 0; font-size: var(--fs-ui); font-weight: var(--fw-strong); color: var(--ink); line-height: 1.4; }
+fieldset.nb-field > legend { margin-bottom: 8px; }
+.nb-field::before { /* marker tab on the card you are writing in */
+  content: ""; position: absolute; left: -1px; top: 12px; bottom: 12px; width: 4px; border-radius: 0 3px 3px 0;
+  background: var(--marker); transform: scaleY(0); transition: transform .22s cubic-bezier(.3,.7,.2,1);
 }
 .nb-field:focus-within::before { transform: scaleY(1); }
 .nb-field > label::after, .nb-field > legend::after { /* written mark */
-  content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 9px; vertical-align: .15em; border-radius: 50%;
+  content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 8px; vertical-align: .1em; border-radius: 50%;
   background: var(--green); scale: 0; transition: scale .25s cubic-bezier(.3,1.6,.5,1);
 }
 .nb-field.is-filled > label::after, .nb-field.is-filled > legend::after { scale: 1; }
-/* Inputs are soft wells: no box lines, the page tint, an ink edge when you write in one. */
-.nb-field.is-text input, .nb-field.is-long textarea, .nb-field.is-date input, .rows td textarea {
-  background: var(--paper); border: 1.5px solid transparent; border-radius: 10px; box-shadow: none;
-  transition: background .15s, border-color .15s;
+.nb-field.is-text input, .nb-field.is-long textarea, .nb-field.is-date input {
+  width: 100%; border: 0; border-radius: 0; background: transparent; padding: 0; min-height: 28px; box-shadow: none;
+  font-size: var(--fs-body); line-height: var(--lh-body);
 }
-.nb-field.is-text input, .nb-field.is-long textarea { padding: 9px 14px; }
-.nb-field.is-long textarea { min-height: 76px; line-height: var(--lh-body); }
-.nb-field.is-text input:hover, .nb-field.is-long textarea:hover, .nb-field.is-date input:hover, .rows td textarea:hover { border-color: var(--rule); }
-.nb-field.is-text input:focus-visible, .nb-field.is-long textarea:focus-visible, .nb-field.is-date input:focus-visible, .rows td textarea:focus-visible {
-  outline: none; background: var(--sheet); border-color: var(--ink); box-shadow: none;
+.nb-field.is-date input { width: auto; }
+.nb-field.is-long textarea { min-height: calc(3 * var(--lh-body) * 1em); }
+.nb-field.is-text input:focus-visible, .nb-field.is-long textarea:focus-visible, .nb-field.is-date input:focus-visible {
+  outline: none; box-shadow: none; border: 0;
 }
-.rows td textarea { border-radius: 8px; }
+.nb-field .help { margin-top: -2px; }
+.rows td textarea { background: var(--paper); border: 1px solid transparent; border-radius: 8px; box-shadow: none; }
+.rows td textarea:hover { border-color: var(--rule); }
+.rows td textarea:focus-visible { outline: none; background: var(--sheet); border-color: var(--ink); box-shadow: none; }
 
 /* ----- circle to search ----- */
 .cs-btn { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; }
@@ -476,7 +488,6 @@ body.resizing .pdf-stage, body.resizing .notebook { pointer-events: none; }
   .notebook { min-height: auto; border-left: 0; border-top: 1px solid var(--rule); }
   .split { display: none; }
   .rail li.step::after { display: none; }
-  .nb-field::before { left: -20px; }
   .nb-body { flex: none; min-height: auto; overflow: visible; padding: 24px 20px 32px; }
   .nb-foot { position: sticky; bottom: 0; background: var(--sheet); padding: 10px 112px 10px 20px; }
   .step-title { font-size: 34px; }
