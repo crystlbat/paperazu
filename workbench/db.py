@@ -63,6 +63,29 @@ CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
     paper_id UNINDEXED, title, authors, tags, notes,
     tokenize = 'unicode61 remove_diacritics 2'
 );
+-- graph: paper text split into passages, each with a unit-length embedding (float32 bytes)
+CREATE TABLE IF NOT EXISTS chunks (
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    page INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    vec BLOB NOT NULL,
+    model TEXT NOT NULL,
+    PRIMARY KEY (paper_id, idx)
+);
+CREATE TABLE IF NOT EXISTS concepts (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS concept_links (
+    concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    page INTEGER NOT NULL,
+    snippet TEXT NOT NULL,
+    score REAL NOT NULL,
+    PRIMARY KEY (concept_id, paper_id)
+);
 CREATE TABLE IF NOT EXISTS checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,

@@ -1,5 +1,6 @@
 """FastAPI app: API routes plus the one-page frontend."""
 import os
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,7 +14,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import db, framework, library, llm, notes, settings
+from . import db, framework, graph, library, llm, notes, settings
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -163,6 +164,73 @@ def get_pdf(paper_id: str) -> FileResponse:
     if not paper_id.isalnum() or not path.exists():
         raise HTTPException(404, detail="This paper is not in the library.")
     return FileResponse(path, media_type="application/pdf")
+
+
+# ---------- graph ----------
+
+class SearchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    q: str = Field(min_length=1, max_length=300)
+
+
+class LinkIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    paper_id: str = Field(pattern=r"^[0-9a-f]{12}$")
+    page: int = Field(ge=0)
+    snippet: str = Field(max_length=2000)
+    score: float
+
+
+class ConceptIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str = Field(min_length=1, max_length=120)
+    links: list[LinkIn] = Field(min_length=1, max_length=50)
+
+
+def _graph_call(fn: Any, *args: Any) -> Any:
+    try:
+        return fn(*args)
+    except graph.GraphError as e:
+        raise HTTPException(503, detail=str(e))
+
+
+@app.get("/graph")
+def get_graph() -> dict[str, Any]:
+    return graph.read(settings.get_all())
+
+
+@app.post("/graph/index")
+def index_graph() -> dict[str, Any]:
+    """Embeds papers that have not been read by the embedding model yet."""
+    return _graph_call(graph.index_missing, settings.get_all())
+
+
+@app.post("/graph/search")
+def search_graph(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        req = SearchIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    return _graph_call(graph.search, settings.get_all(), req.q.strip())
+
+
+@app.post("/graph/concepts", status_code=201)
+def add_concept(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        req = ConceptIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    try:
+        cid = graph.add_concept(req.label.strip(), [l.model_dump() for l in req.links])
+    except sqlite3.IntegrityError:
+        raise HTTPException(422, detail={"errors": {"links": "One of these papers is no longer in the library."}})
+    return {"id": cid}
+
+
+@app.delete("/graph/concepts/{concept_id}", status_code=204)
+def delete_concept(concept_id: str) -> None:
+    if not graph.delete_concept(concept_id):
+        raise HTTPException(404, detail="This concept is not in the graph.")
 
 
 @app.get("/model/status")
