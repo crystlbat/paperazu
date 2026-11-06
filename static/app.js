@@ -120,7 +120,7 @@ async function renderLibrary() {
   // The agenda shows every dated paper, even when a filter or search narrows the list.
   const draw = async (data) => {
     const all = lib.q || lib.status !== "all" ? (await api("/papers")).papers : data.papers;
-    page.replaceChildren(libHead(data, s, all), data.total ? libBody(data, s, fw) : libEmpty(fw));
+    page.replaceChildren(libHead(data, s, all), data.total ? libBody(data, s, fw, nextTalk(all)?.id) : libEmpty(fw));
   };
   await draw(list);
   enablePageDrop(page);
@@ -220,7 +220,7 @@ function dropGlyph() {
     [...line].map((c) => h("i", { class: c === "#" ? (y < 7 ? "a" : "t") : "" }))));
 }
 
-function libBody(data, s, fw) {
+function libBody(data, s, fw, nextId) {
   const picker = filePicker();
   let timer;
   const search = h("input", { type: "search", placeholder: "Search titles, authors, tags and notes",
@@ -236,10 +236,10 @@ function libBody(data, s, fw) {
   const listEl = h("div", { class: "paper-list" });
 
   async function refreshList() {
-    const d = await loadPapers();
-    listEl.replaceChildren(paperTable(d.papers, s, fw));
+    const [d, all] = await Promise.all([loadPapers(), api("/papers")]);
+    listEl.replaceChildren(paperTable(d.papers, s, fw, nextTalk(all.papers)?.id));
   }
-  listEl.append(paperTable(data.papers, s, fw));
+  listEl.append(paperTable(data.papers, s, fw, nextId));
 
   return h("div", { class: "lib-main" },
     h("div", { class: "toolbar" }, search, sort,
@@ -254,19 +254,18 @@ function progressBar(progress) {
     progress.map((st, i) => h("i", { class: st, style: `--i:${i}` })));
 }
 
-function paperTable(papers, s, fw) {
+function paperTable(papers, s, fw, nextId) {
   if (!papers.length) {
     return h("p", { class: "none quiet" }, lib.q ? `No papers match "${lib.q}".` : "No papers with this status.");
   }
-  // "You are here" in the Library: the next presentation coming up.
-  const next = nextTalk(papers);
+  // "You are here" in the Library: the next presentation overall (nextId comes from the unfiltered list).
   return h("table", { class: "papers" },
     h("thead", {}, h("tr", {}, ["Paper", "Presentation", "Reflection", "Progress", "AI summary", "Time spent", "Last opened", "Done", ""]
       .map((t) => t === "AI summary"
         ? h("th", { scope: "col", title: AI_SUMMARY_TIP, "aria-describedby": "ai-summary-help" },
           t, h("span", { id: "ai-summary-help", hidden: true }, AI_SUMMARY_TIP))
         : h("th", { scope: "col" }, t)))),
-    h("tbody", {}, papers.map((p) => paperRow(p, s, fw, p === next))));
+    h("tbody", {}, papers.map((p) => paperRow(p, s, fw, p.id === nextId))));
 }
 
 function paperRow(p, s, fw, isNext) {

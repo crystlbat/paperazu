@@ -145,7 +145,7 @@ const buddy = (() => {
   root.addEventListener("mouseenter", () => clearTimeout(hideTimer));
 
   const TIPS = [
-    "Write it in your own words first. Open the primer after.",
+    "Write it in your own words first. Open the AI summary after.",
     "Wrong notes are fine. You fix them in the check. Copied notes teach you nothing.",
     "Stuck? Write down the exact sentence you do not understand, and move on.",
     "Read the figures before the text. They often tell the whole story.",

@@ -383,7 +383,7 @@ function pdfViewer(url, hideBtn) {
   if (!window.pdfjsLib) msg("The PDF viewer could not load. Check your internet connection, then reload the page.");
   else {
     msg("Opening the PDF");
-    pdfjsLib.getDocument(url).promise.then((doc) => {
+    pdfjsLib.getDocument({ url, isEvalSupported: false }).promise.then((doc) => {
       v.doc = doc; total.textContent = `of ${doc.numPages}`; pageIn.max = doc.numPages; draw();
     }, () => msg("This PDF could not be opened."));
   }

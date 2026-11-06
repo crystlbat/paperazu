@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Any
 
 import pymupdf
@@ -20,7 +21,7 @@ def _fill(f: Any) -> Any:
 
 
 @pytest.fixture
-def paper(tmp_path, monkeypatch) -> str:
+def paper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(db, "DATA_DIR", tmp_path)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
     monkeypatch.setattr(db, "PAPERS_DIR", tmp_path / "papers")
@@ -30,7 +31,7 @@ def paper(tmp_path, monkeypatch) -> str:
     return library.create(doc.tobytes(), "t.pdf")
 
 
-def test_round_trip(paper):
+def test_round_trip(paper: str) -> None:
     fid = STEP.fields[0].id
     notes.save(FW, paper, STEP.id, _body({fid: "hello"}, seconds=42))
     got = notes.load(FW, paper)
@@ -40,7 +41,7 @@ def test_round_trip(paper):
     assert list(got["steps"]) == [STEP.id]
 
 
-def test_merge_keeps_omitted_and_unknown_fields(paper):
+def test_merge_keeps_omitted_and_unknown_fields(paper: str) -> None:
     a, b = STEP.fields[0].id, STEP.fields[1].id
     notes.save(FW, paper, STEP.id, _body({a: "one", "old_field": "kept"}))
     notes.save(FW, paper, STEP.id, _body({b: "two"}))
@@ -59,19 +60,19 @@ def test_merge_keeps_omitted_and_unknown_fields(paper):
     (STEP.id, _body({"f": "x" * 210_000})),
     (STEP.id, b"not json"),
 ])
-def test_bad_input_rejected(paper, step_id, body):
+def test_bad_input_rejected(paper: str, step_id: str, body: bytes) -> None:
     with pytest.raises(notes.NoteError) as e:
         notes.save(FW, paper, step_id, body)
     assert e.value.errors
     assert notes.load(FW, paper)["steps"] == {}
 
 
-def test_unknown_paper(paper):
+def test_unknown_paper(paper: str) -> None:
     assert notes.save(FW, "missing", STEP.id, _body({})) is None
     assert notes.load(FW, "missing") is None
 
 
-def test_state_transitions_and_steps_done(paper):
+def test_state_transitions_and_steps_done(paper: str) -> None:
     assert notes.save(FW, paper, STEP.id, _body({}))["state"] == "empty"
     first = STEP.fields[0].id
     assert notes.save(FW, paper, STEP.id, _body({first: _fill(STEP.fields[0])}))["state"] == "partial"
@@ -82,7 +83,7 @@ def test_state_transitions_and_steps_done(paper):
     assert notes.load(FW, paper)["steps_done"] == 1
 
 
-def test_search_finds_saved_notes(paper):
+def test_search_finds_saved_notes(paper: str) -> None:
     assert library.list_papers(FW, q="zebrafish") == []
     notes.save(FW, paper, STEP.id, _body({STEP.fields[0].id: "the zebrafish result"}))
     assert [p["id"] for p in library.list_papers(FW, q="zebrafish")] == [paper]
