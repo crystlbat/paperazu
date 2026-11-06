@@ -84,3 +84,18 @@ Requirements (from the build prompt, Reader page):
 9. Footer: Back, save status, Next step. "Review" in the rail stays disabled (later phase).
 10. The reading buddy (`buddy.say`) keeps its step tip on step change. When a step becomes "done", the buddy says a short happy line.
 11. Uses the type roles from Task 1. Works in light and dark mode and in a narrow window (stack panes; the PDF pane above the notebook).
+
+## Task 5: Visual enrichment (Library, Settings, global, buddy)
+
+Runs in parallel with Task 2 in its own worktree, and before Task 4 so the Reader inherits the visual language. Files: `static/style.css`, `static/index.html`, `static/buddy.js`, and in `static/app.js` only the Library and Settings render code (`renderLibrary`, `libHead`, `libEmpty`, `libBody`, `paperTable`, `paperRow`, `progressBar`, `renderSettings`, `drawConnection`, dialogs). Do not touch `renderReader`, `drawNotebook`, `stepTip`, backend files, or any visible string that contains "Primer" or "AI summary" (Task 2 owns those).
+
+User request (2026-11-06): "enrich the UI visually". Earlier: "add more visual elements and effects", "Nothing style reading buddy / AI guide that is lively", "hope the UI design will be top notch and not some generic stuff".
+
+Requirements:
+1. Keep the established concept: dotted notebook paper, graphite and off-white, the single yellow `#ffe347` marker that means "you are here", the dot-matrix (Doto) language shared with the reading buddy "Dot". Extend this language; do not introduce a second visual idea.
+2. Add visual richness that carries information, chosen with restraint (pick the strongest 3 to 5, not all). Candidates: a dot-matrix "next 14 days" strip in the Library header that marks presentation dates (today and the next talk marked); a generated dot-matrix monogram or "cover" per paper derived from its title (deterministic, no images); a richer empty state (for example an animated dot-matrix illustration on the drop page); a dot-matrix connection meter or status display in Settings "Model connection"; buddy reactions to more events or new expressions; one orchestrated page-load moment. Decorative-only effects that carry no information are out.
+3. Readability rules from Task 1 stay binding: type roles defined at the top of `style.css`, no text under 13px, no weight under 400, dark-mode secondary text 7:1 or better on its background, every text pair 4.5:1 or better, selected states readable in both modes. New colors only if they keep these ratios; record any new pair's ratio in the token comment.
+4. Motion: only one load sequence plus motion that answers a user action; everything respects `prefers-reduced-motion`. No continuous animation except the buddy's existing idle life.
+5. Works in light and dark mode, desktop and a 375px wide window. No horizontal scroll.
+6. No new dependencies, no images or external assets beyond the already-loaded Google Fonts. No build step.
+7. Verify visually: screenshot the Library (with at least one paper and with zero papers if you can do so without deleting user data; do not delete or modify existing papers) and Settings in light and dark, desktop and mobile, and fix what looks wrong before committing.
