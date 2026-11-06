@@ -1,0 +1,144 @@
+"""FastAPI app: API routes plus the one-page frontend."""
+import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+import uvicorn
+from fastapi import Body, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from urllib.parse import unquote
+
+from pydantic import ValidationError
+
+from . import db, framework, library, llm, settings
+
+ROOT = Path(__file__).resolve().parent.parent
+STATIC = ROOT / "static"
+PORT = int(os.environ.get("PORT", "8765"))
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    db.init()
+    yield
+
+
+app = FastAPI(title="Paper Reading Workbench", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def no_stale_assets(request: Request, call_next: Any) -> Response:
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"  # revalidate, so UI edits show at once
+    return response
+
+
+@app.get("/framework")
+def get_framework() -> dict[str, Any]:
+    return framework.load().model_dump()
+
+
+@app.get("/settings")
+def get_settings() -> dict[str, Any]:
+    return settings.get_all().model_dump()
+
+
+@app.patch("/settings")
+def patch_settings(patch: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        return settings.update(patch).model_dump()
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+
+
+def _errors(e: ValidationError) -> dict[str, str]:
+    return {str(err["loc"][0]) if err["loc"] else "": err["msg"].removeprefix("Value error, ")
+            for err in e.errors()}
+
+
+@app.post("/settings/test-connection")
+def test_connection() -> dict[str, Any]:
+    return llm.test_connection(settings.get_all())
+
+
+@app.post("/papers", status_code=201)
+async def add_paper(request: Request) -> dict[str, Any]:
+    """Body is the raw PDF (Content-Type: application/pdf); X-Filename carries the name."""
+    if int(request.headers.get("content-length") or 0) > library.MAX_PDF_BYTES:
+        raise HTTPException(413, detail="This PDF is larger than 100 MB.")
+    try:
+        paper_id = library.create(await request.body(), unquote(request.headers.get("x-filename", "")))
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+    return _paper_or_404(paper_id)
+
+
+@app.get("/papers")
+def list_papers(q: str = "", status: library.Status = "all", sort: library.Sort = "date") -> dict[str, Any]:
+    papers = library.list_papers(framework.load(), q, status, sort)
+    con = db.connect()
+    total, done = con.execute("SELECT count(*), coalesce(sum(reflection_done), 0) FROM papers").fetchone()
+    con.close()
+    return {"papers": papers, "total": total, "reflections_done": done}
+
+
+def _paper_or_404(paper_id: str, touch: bool = False) -> dict[str, Any]:
+    paper = library.get(framework.load(), paper_id, touch)
+    if not paper:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return paper
+
+
+@app.get("/papers/{paper_id}")
+def get_paper(paper_id: str, open: bool = False) -> dict[str, Any]:
+    return _paper_or_404(paper_id, touch=open)
+
+
+@app.patch("/papers/{paper_id}")
+def patch_paper(paper_id: str, patch: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        parsed = library.PaperPatch(**patch)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    target = settings.get_all().reflections_target
+    if parsed.reflection_no is not None and not 1 <= parsed.reflection_no <= target:
+        raise HTTPException(422, detail={"errors": {"reflection_no": f"Pick a number from 1 to {target}."}})
+    if not library.update(paper_id, parsed):
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return _paper_or_404(paper_id)
+
+
+@app.delete("/papers/{paper_id}", status_code=204)
+def delete_paper(paper_id: str) -> None:
+    if not library.delete(paper_id):
+        raise HTTPException(404, detail="This paper is not in the library.")
+
+
+@app.get("/papers/{paper_id}/pdf")
+def get_pdf(paper_id: str) -> FileResponse:
+    path = db.PAPERS_DIR / f"{paper_id}.pdf"
+    if not paper_id.isalnum() or not path.exists():
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return FileResponse(path, media_type="application/pdf")
+
+
+@app.get("/model/status")
+def model_status() -> dict[str, Any]:
+    return llm.model_status(settings.get_all())
+
+
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(STATIC / "index.html")
+
+
+def run() -> None:
+    print(f"Paper Reading Workbench: http://127.0.0.1:{PORT}")
+    uvicorn.run("workbench.main:app", host="127.0.0.1", port=PORT)

@@ -1,0 +1,107 @@
+steps:
+  - id: card
+    n: 0
+    title: Paper card
+    minutes: 1
+    look_in: [title page]
+    fields:
+      - {id: title, type: text, label: Title}
+      - {id: authors, type: text, label: Authors}
+      - {id: venue, type: text, label: Venue and year}
+      - {id: presenters, type: text, label: "Presenter(s) in class"}
+      - {id: date, type: date, label: Date read}
+    gate: []
+  - id: first
+    n: 1
+    title: First look
+    minutes: 7
+    look_in: [abstract, figures, tables, conclusion]
+    fields:
+      - {id: abstract, type: long, label: "Abstract, in my words", help: "2 or 3 lines. What did they do, and what did they find?"}
+      - {id: figures, type: long, label: "Figures and tables I looked at", help: "One line for each: what does it show?"}
+      - {id: conclusion, type: long, label: "Conclusion, in my words", help: "Write the findings, not the hopes."}
+      - {id: oneliner, type: long, label: "One sentence: They did X to solve Y, and found Z"}
+    gate: ["I did not read the method yet.", "I wrote the one-sentence summary."]
+  - id: problem
+    n: 2
+    title: Problem
+    minutes: 7
+    look_in: [introduction]
+    fields:
+      - {id: wrong, type: long, label: "What is wrong now?"}
+      - {id: matters, type: long, label: "Why does it matter?"}
+      - {id: hurts, type: long, label: "Who does it hurt?"}
+      - {id: hard, type: long, label: "Why is it hard to solve?"}
+      - {id: contrib, type: long, label: "Contributions the authors claim"}
+    gate: ["Each answer is in my own words."]
+  - id: gap
+    n: 3
+    title: Gap
+    minutes: 5
+    look_in: [related work, background]
+    fields:
+      - {id: prior, type: rows, label: "Earlier work", cols: ["Earlier work", "What it did", "What it did not do"], start_rows: 3}
+      - {id: kind, type: choice, label: "New, extension, or build-on?", options: [New, Extension, Build-on]}
+      - {id: why, type: long, label: "Why I think so"}
+    gate: ["The 'did not do' column explains the gap this paper fills."]
+  - id: method
+    n: 4
+    title: Method
+    minutes: 15
+    look_in: [method, methodology, approach, experiments setup]
+    fields:
+      - {id: steps, type: rows, label: "Method steps, in order", cols: ["What goes in", "What happens", "What comes out"], start_rows: 5, numbered: true}
+      - {id: hand, type: long, label: "Formula or calculation done by hand"}
+      - {id: toy, type: long, label: "Toy example or code"}
+      - {id: unclear, type: long, label: "Parts I still do not understand"}
+    gate: ["Each step has an input and an output.", "I did one calculation or example myself."]
+  - id: results
+    n: 5
+    title: Results
+    minutes: 10
+    look_in: [results, findings, evaluation, figures, tables]
+    fields:
+      - {id: figs, type: rows, label: "Figures and tables", cols: ["Figure or table", "This shows that...", "Key number"], start_rows: 3}
+      - {id: proof, type: long, label: "2 or 3 numbers that prove the main claim"}
+      - {id: surprise, type: long, label: "What surprised me"}
+    gate: ["Each figure has a 'this shows that' line."]
+  - id: limits
+    n: 6
+    title: Limits
+    minutes: 5
+    look_in: [discussion, limitations, future work, ethics]
+    fields:
+      - {id: auth1, type: long, label: "Limitation the authors say (1)"}
+      - {id: auth2, type: long, label: "Limitation the authors say (2)"}
+      - {id: mine, type: long, label: "Limitation I found"}
+    gate: ["I found at least one limit the authors did not write."]
+  - id: impact
+    n: 7
+    title: Impact
+    minutes: 5
+    look_in: [discussion, conclusion, recommendations]
+    fields:
+      - {id: benefit, type: long, label: "Who benefits?"}
+      - {id: hurt, type: long, label: "Who is hurt or left out?"}
+      - {id: ethics, type: long, label: "Ethical concerns or trade-offs"}
+      - {id: classlink, type: long, label: "Link to a concept from class"}
+    gate: ["I named specific groups, not only 'people'."]
+  - id: selftest
+    n: 8
+    title: Self-test
+    minutes: 3
+    look_in: []
+    paper_hidden: true
+    fields:
+      - {id: said, type: checks, label: "Tick each part you explained without stopping.", options: [Problem, Gap, Method, Key result, Limitation]}
+      - {id: stuck, type: long, label: "Where I got stuck"}
+      - {id: reread, type: long, label: "What I read again"}
+    gate: []
+  - id: questions
+    n: 9
+    title: Open questions
+    minutes: 2
+    look_in: []
+    fields:
+      - {id: qs, type: rows, label: "Questions I still have", cols: ["My question", "Where I could find the answer"], start_rows: 2}
+    gate: []

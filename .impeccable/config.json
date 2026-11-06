@@ -1,0 +1,20 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "instrument serif",
+        "createdAt": "2026-11-06T08:10:45.574Z",
+        "reason": "user brief: build prompt specifies Instrument Serif for step titles"
+      },
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "createdAt": "2026-11-06T08:10:45.591Z",
+        "reason": "user brief: build prompt specifies Geist for body and Geist Mono for numbers"
+      }
+    ]
+  }
+}

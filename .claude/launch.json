@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "workbench", "runtimeExecutable": "uv", "runtimeArgs": ["run", "app.py"], "port": 8765 }
+  ]
+}

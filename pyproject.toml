@@ -1,0 +1,18 @@
+[project]
+name = "paper-workbench"
+version = "0.1.0"
+description = "Local paper reading workbench with a 10-step framework and a local LLM"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pymupdf>=1.24",
+    "openai>=1.40",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+]
+
+[tool.uv]
+# Not installed as a package: the Desktop is in iCloud, which marks files in .venv hidden,
+# and Python 3.13 skips hidden .pth files, so editable installs break. Run with: uv run app.py
+package = false
