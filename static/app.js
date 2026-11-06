@@ -65,7 +65,7 @@ setInterval(refreshChip, 30000);
 
 // ---------- router ----------
 const view = $("#view");
-const pages = { library: renderLibrary, read: renderReader, settings: renderSettings };
+const pages = { library: renderLibrary, read: renderReader, graph: renderGraph, settings: renderSettings };
 
 function route() {
   const [name, arg] = location.hash.replace(/^#/, "").split("/");
