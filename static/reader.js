@@ -98,31 +98,83 @@ function stepTip(st, pop) {
 }
 
 // ---------- rail ----------
+// Line icons, 24 grid, drawn by hand. Stroke and caps come from CSS (.ico svg).
+const ICONS = {
+  card: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 10h8M8 14h5"/>',
+  first: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.5"/>',
+  problem: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1.1.9-1.1 1.6v.3M12 16.7v.1"/>',
+  gap: '<path d="M3 12h4.5M16.5 12H21M7.5 7.5v9M16.5 7.5v9M12 12h.01"/>',
+  method: '<path d="M9 3.5h6M10 3.5V9l-5 9.3a1.5 1.5 0 0 0 1.3 2.2h11.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3.5M7.4 14.5h9.2"/>',
+  results: '<path d="M4 20h16M7.5 16.5v-4M12 16.5v-9M16.5 16.5v-6"/>',
+  limits: '<path d="M12 4.5 20.5 19.5h-17z"/><path d="M12 10.5v4M12 17v.01"/>',
+  impact: '<circle cx="12" cy="12" r="2.5"/><path d="M12 3.5V6M12 18v2.5M3.5 12H6M18 12h2.5M6 6l1.8 1.8M16.2 16.2 18 18M6 18l1.8-1.8M16.2 7.8 18 6"/>',
+  selftest: '<path d="M5 5h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 16h-8l-4.5 3.5V16H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 5z"/><path d="M8 9.5h8M8 12.5h5"/>',
+  questions: '<path d="M9.5 17.5h5M10.5 20.5h3M12 3.5a6 6 0 0 0-3.4 10.9c.4.3.6.7.6 1.2v.4h5.6v-.4c0-.5.2-.9.6-1.2A6 6 0 0 0 12 3.5z"/>',
+  review: '<path d="M4.5 12a7.5 7.5 0 0 1 13-5.1M19.5 12a7.5 7.5 0 0 1-13 5.1"/><path d="M17.5 3.5v3.4h-3.4M6.5 20.5v-3.4h3.4"/>',
+  check: '<path pathLength="1" d="M6.5 12.5l3.6 3.6L17.5 8.5"/>',
+  prev: '<path d="M14.5 6 8.5 12l6 6"/>',
+  next: '<path d="M9.5 6l6 6-6 6"/>',
+  minus: '<path d="M6 12h12"/>',
+  plus: '<path d="M12 6v12M6 12h12"/>',
+  fit: '<path d="M3.5 12h17M7 8.5 3.5 12 7 15.5M17 8.5l3.5 3.5-3.5 3.5"/>',
+};
+function icon(name, cls = "ico") {
+  const s = h("span", { class: cls, "aria-hidden": "true" });
+  s.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none">${ICONS[name] ?? '<circle cx="12" cy="12" r="3"/>'}</svg>`;
+  return s;
+}
+
 function stepRail(fw, notes, onPick) {
-  const el = h("ol", { class: "rail", "aria-label": "Reading steps" });
+  const total = fw.steps.length;
+  const planned = fw.steps.reduce((a, st) => a + st.minutes, 0);
+  const ringArc = h("span", { class: "rail-ring", "aria-hidden": "true" });
+  ringArc.innerHTML = '<svg viewBox="0 0 36 36" width="36" height="36"><circle cx="18" cy="18" r="15" pathLength="100"/><circle class="arc" cx="18" cy="18" r="15" pathLength="100"/></svg>';
+  const count = h("span", { class: "num" });
+  const head = h("div", { class: "rail-head" }, ringArc,
+    h("span", { class: "rail-sum" }, h("span", { class: "rail-count" }, count),
+      h("span", { class: "rail-plan num" }, `${planned} min planned`)));
+  const glide = h("li", { class: "rail-glide", "aria-hidden": "true" });
+  const list = h("ol", { class: "rail-steps", "aria-label": "Reading steps" }, glide);
+  const el = h("div", { class: "rail" }, head, list);
   const items = {};
-  for (const st of fw.steps) {
-    const circle = h("span", { class: "circle" }, String(st.n));
-    const btn = h("button", { type: "button", onclick: () => onPick(st) },
-      circle, h("span", { class: "label" }, st.title), h("span", { class: "num mins" }, `${st.minutes}m`));
-    items[st.id] = { st, btn, circle };
-    items[st.id].li = h("li", { class: "step" }, btn);
-    el.append(items[st.id].li);
-  }
-  el.append(h("li", { class: "divider", "aria-hidden": "true" }),
-    h("li", {}, h("button", { type: "button", disabled: true, title: "Comes in a later phase" },
-      h("span", { class: "circle" }, "R"), h("span", { class: "label" }, "Review"))));
+  fw.steps.forEach((st, i) => {
+    const circle = h("span", { class: "circle" }, icon(st.id), icon("check", "ico chk"));
+    const btn = h("button", { type: "button", onclick: () => onPick(st) }, circle,
+      h("span", { class: "txt" }, h("span", { class: "label" }, st.title),
+        h("span", { class: "sub num" }, `Step ${st.n}`, h("span", { class: "mins" }, ` · ${st.minutes} min`))));
+    items[st.id] = { st, btn, circle, li: h("li", { class: "step", style: `--i:${i}` }, btn) };
+    list.append(items[st.id].li);
+  });
+  list.append(h("li", { class: "divider", "aria-hidden": "true" }),
+    h("li", { class: "later", style: `--i:${total}` }, h("button", { type: "button", disabled: true, title: "Comes in a later phase" },
+      h("span", { class: "circle" }, icon("review")),
+      h("span", { class: "txt" }, h("span", { class: "label" }, "Review"), h("span", { class: "sub" }, "Comes later")))));
   const paint = (id) => {
     const { st, btn, circle, li } = items[id];
     circle.className = `circle ${notes[id].state}`;
     li.dataset.state = notes[id].state;
     btn.setAttribute("aria-label", `Step ${st.n}, ${st.title}, ${st.minutes} minutes, ${STATE_LABEL[notes[id].state]}`);
+    const n = fw.steps.filter((x) => notes[x.id].state === "done").length;
+    count.textContent = `${n} of ${total} done`;
+    ringArc.style.setProperty("--off", 100 - (n / total) * 100);
   };
-  const mark = (id) => Object.values(items).forEach(({ st, btn }) => {
-    btn.classList.toggle("active", st.id === id);
-    if (st.id === id) { btn.setAttribute("aria-current", "step"); btn.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }
-    else btn.removeAttribute("aria-current");
-  });
+  let activeBtn = null;
+  // the sheet behind the active step glides to it
+  const place = () => {
+    if (!activeBtn) return;
+    const li = activeBtn.parentElement; // offsets ignore the entrance slide, so the sheet lands where the step ends up
+    glide.style.cssText = `--x:${li.offsetLeft + activeBtn.offsetLeft}px;--y:${li.offsetTop + activeBtn.offsetTop}px;width:${activeBtn.offsetWidth}px;height:${activeBtn.offsetHeight}px`;
+  };
+  new ResizeObserver(place).observe(list);
+  const mark = (id) => {
+    Object.values(items).forEach(({ st, btn }) => {
+      btn.classList.toggle("active", st.id === id);
+      if (st.id === id) { activeBtn = btn; btn.setAttribute("aria-current", "step"); btn.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }
+      else btn.removeAttribute("aria-current");
+    });
+    place();
+    requestAnimationFrame(() => el.classList.add("ready")); // no glide on the first placement
+  };
   Object.keys(items).forEach(paint);
   return { el, paint, mark };
 }
@@ -218,6 +270,7 @@ function timerView(st, note, timer) {
     bar.classList.toggle("over", s > budget);
     over.hidden = s <= budget;
     btn.textContent = timer.running() ? "Pause" : s ? "Resume" : "Start";
+    time.classList.toggle("running", timer.running());
   };
   timer.onPaint(paint); paint();
   return h("div", { class: "budget" },
@@ -381,6 +434,7 @@ function oldFields(st, fields) {
 function pdfViewer(url, hideBtn, paperId) {
   const v = { doc: null, page: 1, scale: 1, fit: true, task: null, seq: 0, hidden: false, auto: false, vp: null };
   const sheet = h("div", { class: "pdf-sheet" });
+  let shown = 0; // the page on screen, so a page change can slide in
   const hits = h("div", { class: "pdf-hits", "aria-hidden": "true" });
   const ink = h("canvas", { class: "pdf-ink", "aria-hidden": "true" });
   const pageBox = h("div", { class: "pdf-page" });
@@ -391,8 +445,8 @@ function pdfViewer(url, hideBtn, paperId) {
       h("p", { class: "quiet" }, "Explain it out loud first, then check."),
       h("button", { type: "button", class: "btn", onclick: () => setHidden(false) }, "Show the paper anyway")));
   const tool = (label, name, fn) => h("button", { type: "button", class: "btn ghost tool", "aria-label": name, title: name, onclick: fn }, label);
-  const prev = tool("←", "Previous page", () => go(v.page - 1));
-  const next = tool("→", "Next page", () => go(v.page + 1));
+  const prev = tool(icon("prev"), "Previous page", () => go(v.page - 1));
+  const next = tool(icon("next"), "Next page", () => go(v.page + 1));
   const pageIn = h("input", { type: "number", class: "num", min: 1, value: 1, "aria-label": "Page number",
     onchange: () => go(Number(pageIn.value)) });
   const total = h("span", { class: "quiet num" }, "of 0");
@@ -401,8 +455,8 @@ function pdfViewer(url, hideBtn, paperId) {
   const search = circleSearch({ v, go, ink, hits, pane: el, paperId });
   el.append(
     h("div", { class: "pdf-tools" }, prev, pageIn, total, next, search.button, h("span", { class: "spacer" }),
-      tool("−", "Zoom out", () => zoom(1 / 1.2)), zoomLbl, tool("+", "Zoom in", () => zoom(1.2)),
-      h("button", { type: "button", class: "btn ghost tool", onclick: () => { v.fit = true; draw(); } }, "Fit width")),
+      tool(icon("minus"), "Zoom out", () => zoom(1 / 1.2)), zoomLbl, tool(icon("plus"), "Zoom in", () => zoom(1.2)),
+      h("button", { type: "button", class: "btn ghost tool", onclick: () => { v.fit = true; draw(); } }, icon("fit"), "Fit width")),
     h("div", { class: "pdf-view" }, stage, closed, search.panel));
 
   async function draw() {
@@ -426,6 +480,8 @@ function pdfViewer(url, hideBtn, paperId) {
     v.vp = vp;
     ink.width = canvas.width; ink.height = canvas.height;
     ink.style.width = canvas.style.width; ink.style.height = canvas.style.height;
+    if (shown && shown !== v.page) canvas.classList.add(v.page > shown ? "turn-next" : "turn-prev"); // zoom and resize redraws stay still
+    shown = v.page;
     pageBox.replaceChildren(canvas, hits, ink);
     sheet.replaceChildren(pageBox);
     search.paint();
