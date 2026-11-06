@@ -68,7 +68,7 @@ const view = $("#view");
 const pages = { library: renderLibrary, read: renderReader, graph: renderGraph, settings: renderSettings };
 
 function route() {
-  const [name, arg] = location.hash.replace(/^#/, "").split("/");
+  const [name, arg, extra] = location.hash.replace(/^#/, "").split("/");
   if (!pages[name]) { location.hash = "#library"; return; }
   document.querySelectorAll("[data-nav]").forEach((a) =>
     a.classList.toggle("active", a.dataset.nav === name));
@@ -76,7 +76,7 @@ function route() {
   view.replaceChildren();
   view.className = `page page-${name}`;
   buddy.hide();
-  pages[name](arg);
+  pages[name](arg, extra);
 }
 window.addEventListener("hashchange", route);
 

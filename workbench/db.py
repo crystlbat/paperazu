@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS concepts (
     label TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- papers the model has already picked key ideas from, so it does not repeat (or undo a dismiss)
+CREATE TABLE IF NOT EXISTS suggest_runs (
+    paper_id TEXT PRIMARY KEY REFERENCES papers(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS concept_links (
     concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
@@ -109,6 +113,9 @@ def init() -> None:
     con = connect()
     with con:
         con.executescript(SCHEMA)
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(concepts)")}
+        if "kind" not in cols:  # added with AI-suggested ideas: 'kept' or 'suggested'
+            con.execute("ALTER TABLE concepts ADD COLUMN kind TEXT NOT NULL DEFAULT 'kept'")
     con.close()
 
 

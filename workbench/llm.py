@@ -65,16 +65,80 @@ def _strip_thinking(text: str) -> str | None:
     return None if "<think>" in text else text.strip()
 
 
+def paper_text(s: Settings, pages: list[str], page: int, overhead: str) -> tuple[str, list[int]]:
+    """The paper as page-labelled text: every page if it fits the context budget, else the pages
+    nearest `page` (0-based). Returns the text and the page indexes used."""
+    budget = (s.max_context_tokens - s.max_output_tokens
+              - context.tokens(overhead) - 64 * len(pages) - 200)
+    keep = context.fit_pages(pages, budget, page) if pages else []
+    room = int(budget * context.CHARS_PER_TOKEN)
+    return "\n\n".join(f"--- Page {i + 1} ---\n{pages[i].strip()}" for i in keep)[:max(room, 0)], keep
+
+
+IDEAS_SYSTEM = (
+    "You read research papers and name their key ideas. Reply with exactly 5 lines. Each line is one "
+    "idea from this paper in 2 to 5 plain words, such as a method, a concept, a problem or a finding. "
+    "No numbering, no bullets, no explanations, no full sentences.\n"
+    "Example for a paper about image classifiers:\nResidual connections\nVanishing gradients\n"
+    "ImageNet benchmark\nData augmentation\nTop-1 accuracy"
+)
+
+_CUT = {"is", "are", "was", "were", "can", "could", "enable", "enables", "allow", "allows", "fail", "fails",
+        "help", "helps", "show", "shows", "needs", "need", "needed", "lead", "leads", "make", "makes", "reveal",
+        "reveals", "remain", "remains", "provide", "provides", "should", "must", "may", "will", "without", "despite",
+        "extend", "extends", "require", "requires", "identified", "across", "beyond", "like", "such", "including",
+        "using", "used", "based", "that", "which", "has", "have", "does", "do", "vary", "varies",
+        "differ", "differs", "reflect", "reflects", "fit", "fits", "systematically", "need", "into"}
+_TAIL = {"and", "or", "of", "the", "a", "an", "for", "to", "in", "on", "with", "by"}
+
+
+def _short_idea(line: str) -> str:
+    """Small models often answer with a sentence; keep its opening noun phrase (at most 5 words)."""
+    line = re.sub(r"\s*\([^)]*$", "", line)  # an unclosed bracket means the phrase was cut
+    words = line.split()
+    for i, w in enumerate(words[2:], 2):
+        if w.lower().strip(",;") in _CUT:
+            words = words[:i]
+            break
+    words = words[:5]
+    while words and words[-1].lower().strip(",;") in _TAIL:
+        words.pop()
+    return " ".join(words).strip(",;")
+
+
+def key_ideas(s: Settings, title: str, pages: list[str]) -> list[str]:
+    """Five short key ideas from the whole paper. Raises RuntimeError with a message for the user."""
+    paper, _ = paper_text(s, pages, 0, IDEAS_SYSTEM + title)
+    try:
+        r = client(s).chat.completions.create(
+            model=pick_model(s) or "default",
+            messages=[{"role": "system", "content": IDEAS_SYSTEM},
+                      {"role": "user", "content": f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\nThe 5 key ideas:"}],
+            max_tokens=s.max_output_tokens, temperature=s.temperature,
+        )
+    except AuthenticationError:
+        raise RuntimeError("Wrong API key. Check it in Settings.")
+    except APIConnectionError:
+        raise RuntimeError("Could not reach the model. Is Unsloth running?")
+    except APIError as e:
+        raise RuntimeError(e.message)
+    text = _strip_thinking(r.choices[0].message.content or "")
+    if text is None:
+        raise RuntimeError("The model ran out of room before it answered. Raise Max output tokens in Settings.")
+    ideas: list[str] = []
+    for line in text.splitlines():
+        line = _short_idea(re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip().strip("*\"'.:").strip())
+        if 2 <= len(line) <= 60 and line.lower() not in (i.lower() for i in ideas):
+            ideas.append(line)
+    return ideas[:5]
+
+
 def explain(s: Settings, words: str, title: str, pages: list[str], page: int) -> dict[str, Any]:
     """Explain marked words with the whole paper as context (or as much as fits the budget).
     `page` is the 0-based page the words were marked on."""
     page = min(max(page, 0), max(len(pages) - 1, 0))
     question = f'Words I marked on page {page + 1}: "{words}"\nWhat do they mean in this paper?'
-    budget = (s.max_context_tokens - s.max_output_tokens
-              - context.tokens(EXPLAIN_SYSTEM + question + title) - 64 * len(pages) - 200)
-    keep = context.fit_pages(pages, budget, page) if pages else []
-    room = int(budget * context.CHARS_PER_TOKEN)
-    paper = "\n\n".join(f"--- Page {i + 1} ---\n{pages[i].strip()}" for i in keep)[:max(room, 0)]
+    paper, keep = paper_text(s, pages, page, EXPLAIN_SYSTEM + question + title)
     start = time.perf_counter()
     try:
         r = client(s).chat.completions.create(

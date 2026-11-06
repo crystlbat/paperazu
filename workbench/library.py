@@ -121,6 +121,90 @@ def page_texts(paper_id: str) -> list[str] | None:
         return [page.get_text() for page in doc]
 
 
+# ---------- section tree ----------
+# L1 the paper, L2 sections, L3 subsections, L4 sub-subsections and the figures and tables.
+
+_NUMBERED = re.compile(r"^(\d+(?:\.\d+){0,3}|[A-Z](?:\.\d+){0,3})\.?\s+([A-Z].{1,90})$")
+_NAMED = {"abstract", "introduction", "related work", "background", "method", "methods", "methodology",
+          "results", "discussion", "conclusion", "conclusions", "limitations", "references",
+          "acknowledgments", "acknowledgements", "appendix", "evaluation", "experiments"}
+_CAPTION = re.compile(r"^((?:Figure|Fig\.|Table)\s+[A-Z]?\d+)\s*[:.]\s*(.*)", re.S)
+
+
+def _guess_headings(doc: pymupdf.Document) -> list[tuple[int, str, int]]:
+    """For PDFs without a built-in outline: numbered or well-known headings set bold or larger than body text."""
+    lines: list[tuple[int, str, float, bool]] = []
+    sizes: dict[float, int] = {}
+    for n, page in enumerate(doc, 1):
+        for block in page.get_text("dict")["blocks"]:
+            for line in block.get("lines", []):
+                spans = [sp for sp in line["spans"] if sp["text"].strip()]
+                if not spans:
+                    continue
+                text = " ".join(sp["text"].strip() for sp in spans)
+                size = round(max(sp["size"] for sp in spans), 1)
+                sizes[size] = sizes.get(size, 0) + len(text)
+                lines.append((n, text, size, all(sp["flags"] & 16 for sp in spans)))
+    body = max(sizes, key=sizes.get) if sizes else 0
+    out: list[tuple[int, str, int]] = []
+    seen: set[str] = set()
+    for n, text, size, bold in lines:
+        if len(text) > 95 or not (bold or size > body + 0.5) or text.lower() in seen:
+            continue
+        m = _NUMBERED.match(text)
+        if m:
+            out.append((m.group(1).count(".") + 1, text, n))
+        elif text.lower().rstrip(".:") in _NAMED:
+            out.append((1, text, n))
+        else:
+            continue
+        seen.add(text.lower())
+    return out
+
+
+def _captions(doc: pymupdf.Document) -> list[tuple[int, str]]:
+    out: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for n, page in enumerate(doc, 1):
+        for block in page.get_text("blocks"):
+            m = _CAPTION.match(block[4].strip())
+            if m and m.group(1) not in seen:
+                seen.add(m.group(1))
+                rest = re.sub(r"(\w)- (\w)", r"\1\2", re.sub(r"\s+", " ", m.group(2))).strip()
+                out.append((n, f"{m.group(1)}: {rest[:70]}{'…' if len(rest) > 70 else ''}"))
+    return out
+
+
+def outline(paper_id: str, title: str) -> dict[str, Any] | None:
+    """The paper as a tree. Uses the PDF's own outline when it has one, else guesses the headings."""
+    path = db.PAPERS_DIR / f"{paper_id}.pdf"
+    if not paper_id.isalnum() or not path.exists():
+        return None
+    with pymupdf.open(path) as doc:
+        toc = [(lvl, t.strip(), max(1, pg)) for lvl, t, pg in doc.get_toc(simple=True) if t.strip()]
+        source = "outline" if toc else "guessed"
+        heads = toc or _guess_headings(doc)
+        caps = _captions(doc)
+        pages = doc.page_count
+    root: dict[str, Any] = {"title": title, "page": 1, "level": 1, "kind": "paper", "children": []}
+    stack, flat, parent = [root], [], {}
+    for lvl, t, pg in heads:
+        node = {"title": t, "page": pg, "level": min(lvl, 3) + 1, "kind": "section", "children": []}
+        while stack[-1]["level"] >= node["level"]:
+            stack.pop()
+        stack[-1]["children"].append(node)
+        parent[id(node)] = stack[-1]
+        stack.append(node); flat.append(node)
+    # shortcut: a figure goes to the last heading that starts on or before its page, so on a page
+    # where two sections start it may sit one section late. Use heading positions if that matters.
+    for pg, cap in caps:
+        owner = next((s for s in reversed(flat) if s["page"] <= pg), root)
+        if owner["level"] >= 4:
+            owner = parent[id(owner)]
+        owner["children"].append({"title": cap, "page": pg, "level": owner["level"] + 1, "kind": "figure", "children": []})
+    return {"tree": root, "source": source, "pages": pages}
+
+
 # ---------- progress ----------
 
 def _filled(value: Any) -> bool:

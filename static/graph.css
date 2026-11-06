@@ -22,6 +22,11 @@
 .g-node.paper .glyph { fill: var(--ink); font: var(--fw-strong) 13px/1 var(--sans); font-variant-numeric: tabular-nums; }
 .g-node.idea .body { fill: var(--ink); }
 .g-node.idea .label { fill: var(--paper); stroke: none; }
+.g-node.sugg .body { fill: var(--sheet); stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 3 2.5; }
+.g-node.sugg .label { font-weight: var(--fw-ui); opacity: 0; transition: opacity .2s; }
+.zoomed .g-node.sugg .label, .g-node.sugg:hover .label, .g-node.sugg:focus-visible .label, .g-node.sugg.near .label { opacity: 1; }
+.g-node.sugg { opacity: .85; }
+.g-node.sugg { animation: g-pop .4s cubic-bezier(.3,1.5,.5,1) both; }
 .g-node.ghost .body { fill: var(--marker); stroke: var(--on-marker); stroke-width: 1.5; stroke-dasharray: 4 4; }
 .g-node.ghost .label { fill: var(--on-marker); stroke: none; }
 .g-node.ghost { animation: g-pop .35s cubic-bezier(.3,1.5,.5,1) both; }
@@ -88,12 +93,50 @@
 .g-row:not(.g-pick):has(> .g-meter) .g-row-title { padding-right: 48px; }
 .g-meter i { width: 6px; height: 6px; border-radius: 50%; background: var(--rule); }
 .g-meter i.on { background: var(--ink); }
+.g-tag { margin-left: 8px; font-size: var(--fs-ui); font-weight: var(--fw-ui); color: var(--pencil); border: 1px dashed var(--pencil); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
 .g-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .g-wait { animation: blink 1.4s ease-in-out infinite; }
 .danger-text { color: var(--redpen); }
 
+/* section tree: a chart over the graph. Level colours step from ink to pencil; figures are squares. */
+.g-tree { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--desk) radial-gradient(var(--dot) 1.1px, transparent 1.4px) 0 0 / 22px 22px; z-index: 3; }
+.tree-open .g-search, .tree-open .g-legend, .tree-open .g-zoom, .tree-open .g-note { visibility: hidden; }
+.t-head { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; padding: 14px 18px; background: var(--paper); border-bottom: 1px solid var(--rule); }
+.t-name { font-weight: var(--fw-title); font-size: var(--fs-title); flex: 1 1 240px; min-width: 0; }
+.t-levels { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--fs-ui); font-weight: var(--fw-ui); color: var(--pencil); }
+.t-lv { display: inline-flex; align-items: center; gap: 6px; }
+.t-lv i { width: 9px; height: 9px; border-radius: 50%; }
+.t-lv.l1 i { background: var(--ink); width: 12px; height: 12px; }
+.t-lv.l2 i { background: var(--ink); }
+.t-lv.l3 i { border: 2px solid var(--ink); background: var(--sheet); }
+.t-lv.l4 i { border: 1.5px solid var(--pencil); background: var(--sheet); width: 8px; height: 8px; }
+.t-note { padding: 8px 18px 0; }
+.t-scroll { flex: 1; min-height: 0; overflow: auto; }
+.t-svg { display: block; }
+.t-link { fill: none; stroke: var(--rule); stroke-width: 1.5; }
+.t-link.l2 { stroke: var(--pencil); stroke-width: 2; }
+.t-node { cursor: pointer; outline: none; animation: t-in .45s cubic-bezier(.3,.7,.2,1) both; animation-delay: var(--d); }
+.g-tree.settled .t-node { animation: none; }
+@keyframes t-in { from { opacity: 0; translate: -14px 0; } }
+.t-node .dot { fill: var(--sheet); stroke: var(--ink); stroke-width: 2; transition: r .15s, fill .15s; }
+.t-node.l1 .dot, .t-node.l2 .dot { fill: var(--ink); }
+.t-node.l4 .dot, .t-node.figure .dot { stroke: var(--pencil); stroke-width: 1.5; }
+.t-label { fill: var(--ink); font: var(--fw-ui) var(--fs-ui) var(--sans); paint-order: stroke; stroke: var(--desk); stroke-width: 5px; stroke-linejoin: round; }
+.t-node.l1 .t-label { fill: var(--pencil); }
+.t-node.l1 .dot { r: 10; }
+.t-node.l2 .t-label { font-weight: var(--fw-strong); font-size: var(--fs-action); }
+.t-node.figure .t-label { fill: var(--pencil); }
+.t-page { fill: var(--pencil); font-weight: var(--fw-ui); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.t-node:hover .dot, .t-node:focus-visible .dot { fill: var(--marker); stroke: var(--on-marker); }
+.t-node:hover .t-label, .t-node:focus-visible .t-label { text-decoration: underline; text-underline-offset: 3px; }
+.t-node:focus-visible .t-label { stroke: var(--marker); }
+.t-fold { cursor: pointer; outline: none; }
+.t-fold circle { fill: var(--sheet); stroke: var(--rule); stroke-width: 1.5; }
+.t-fold text { fill: var(--pencil); font: var(--fw-strong) 13px var(--sans); }
+.t-fold:hover circle, .t-fold:focus-visible circle { stroke: var(--ink); }
+
 @media (prefers-reduced-motion: reduce) {
-  .g-edge.suggest, .g-edge.ghost, .g-node.ghost, .g-side > *, .g-note.busy::before, .g-wait { animation: none; }
+  .g-edge.suggest, .g-edge.ghost, .g-node.ghost, .g-node.sugg, .t-node, .g-side > *, .g-note.busy::before, .g-wait { animation: none; }
   .g-node, .g-node .halo, .g-edge, .g-row { transition: none; }
 }
 @media (max-width: 860px) {

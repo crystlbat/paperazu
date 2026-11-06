@@ -113,6 +113,15 @@ def patch_paper(paper_id: str, patch: dict[str, Any] = Body(...)) -> dict[str, A
     return _paper_or_404(paper_id)
 
 
+@app.get("/papers/{paper_id}/outline")
+def get_outline(paper_id: str) -> dict[str, Any]:
+    paper = _paper_or_404(paper_id)
+    tree = library.outline(paper_id, paper["title"])
+    if tree is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return tree
+
+
 @app.get("/papers/{paper_id}/notes")
 def get_notes(paper_id: str) -> dict[str, Any]:
     result = notes.load(framework.load(), paper_id)
@@ -225,6 +234,19 @@ def add_concept(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     except sqlite3.IntegrityError:
         raise HTTPException(422, detail={"errors": {"links": "One of these papers is no longer in the library."}})
     return {"id": cid}
+
+
+@app.post("/graph/suggest")
+def suggest_ideas() -> dict[str, Any]:
+    """Asks the local model for key ideas in papers it has not looked at yet."""
+    return _graph_call(graph.suggest, settings.get_all())
+
+
+@app.post("/graph/concepts/{concept_id}/keep")
+def keep_concept(concept_id: str) -> dict[str, Any]:
+    if not graph.keep_concept(concept_id):
+        raise HTTPException(404, detail="This idea is not in the graph.")
+    return {"id": concept_id}
 
 
 @app.delete("/graph/concepts/{concept_id}", status_code=204)

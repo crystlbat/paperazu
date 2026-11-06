@@ -7,6 +7,7 @@ becomes a concept node linked to the papers you chose.
 import math
 import re
 import sqlite3
+import threading
 import uuid
 from array import array
 from typing import Any
@@ -21,7 +22,8 @@ OVERLAP = 150
 BATCH = 32
 SUGGEST_MIN = 0.62   # paper-to-paper cosine needed for a suggested link (nomic-embed-text scale)
 SUGGEST_TOP = 3      # at most this many suggested links per paper
-AUTO_PICK = 0.55     # search results at or above this are ticked for you
+AUTO_PICK = 0.62     # a search result is ticked for you at or above this score...
+PICK_MARGIN = 0.08   # ...and only if it is this close to the best result (unrelated papers sit at 0.55-0.66)
 DOC, QUERY = "search_document: ", "search_query: "  # nomic-embed-text task prefixes; harmless for others
 
 _working: dict[str, str] = {}  # base_url -> embed model that answered
@@ -168,7 +170,7 @@ def suggested_links(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
 def read(s: Settings) -> dict[str, Any]:
     con = db.connect()
     papers = [dict(r) for r in con.execute("SELECT id, title, tags FROM papers")]
-    concepts = [dict(r) for r in con.execute("SELECT id, label FROM concepts")]
+    concepts = [dict(r) for r in con.execute("SELECT id, label, kind FROM concepts")]
     links = [dict(r) for r in con.execute("SELECT concept_id, paper_id, page, snippet, score FROM concept_links")]
     model = s.embed_model or _working.get(s.base_url, "")
     rows = _chunks(con, model) if model else []
@@ -194,16 +196,17 @@ def search(s: Settings, q: str, limit: int = 8) -> dict[str, Any]:
         if sc > best.get(r["paper_id"], (-2.0, r))[0]:
             best[r["paper_id"]] = (sc, r)
     top = sorted(best.items(), key=lambda kv: -kv[1][0])[:limit]
+    bar = max(AUTO_PICK, top[0][1][0] - PICK_MARGIN) if top else AUTO_PICK
     return {"model": model, "results": [
         {"paper_id": pid, "title": titles.get(pid, ""), "page": r["page"], "snippet": r["text"][:320],
-         "score": round(sc, 3), "pick": sc >= AUTO_PICK} for pid, (sc, r) in top]}
+         "score": round(sc, 3), "pick": sc >= bar} for pid, (sc, r) in top]}
 
 
-def add_concept(label: str, links: list[dict[str, Any]]) -> str:
+def add_concept(label: str, links: list[dict[str, Any]], kind: str = "kept") -> str:
     cid = uuid.uuid4().hex[:12]
     con = db.connect()
     with con:
-        con.execute("INSERT INTO concepts (id, label) VALUES (?, ?)", (cid, label))
+        con.execute("INSERT INTO concepts (id, label, kind) VALUES (?, ?, ?)", (cid, label, kind))
         con.executemany("INSERT INTO concept_links (concept_id, paper_id, page, snippet, score) VALUES (?, ?, ?, ?, ?)",
                         [(cid, l["paper_id"], l["page"], l["snippet"], l["score"]) for l in links])
     con.close()
@@ -214,5 +217,52 @@ def delete_concept(cid: str) -> bool:
     con = db.connect()
     with con:
         found = con.execute("DELETE FROM concepts WHERE id = ?", (cid,)).rowcount
+    con.close()
+    return bool(found)
+
+
+# ---------- AI-suggested ideas ----------
+
+_suggesting = threading.Lock()
+
+
+def suggest(s: Settings) -> dict[str, Any]:
+    """For each paper not done yet: the chat model names its key ideas, then the embedding search
+    links each idea to every paper that talks about it. They stay suggestions until you keep them.
+    One run at a time: a second call waits, then finds nothing left to do."""
+    with _suggesting:
+        return _suggest(s)
+
+
+def _suggest(s: Settings) -> dict[str, Any]:
+    con = db.connect()
+    todo = [dict(r) for r in con.execute(
+        "SELECT id, title FROM papers WHERE id NOT IN (SELECT paper_id FROM suggest_runs)")]
+    have = {r["label"].lower() for r in con.execute("SELECT label FROM concepts")}
+    con.close()
+    made = 0
+    for p in todo:
+        try:
+            ideas = llm.key_ideas(s, p["title"], library.page_texts(p["id"]) or [])
+        except RuntimeError as e:
+            raise GraphError(str(e))
+        for idea in ideas:
+            if idea.lower() in have:
+                continue
+            hits = [r for r in search(s, idea)["results"] if r["pick"] or r["paper_id"] == p["id"]]
+            if hits:
+                add_concept(idea, hits, kind="suggested")
+                have.add(idea.lower()); made += 1
+        con = db.connect()
+        with con:
+            con.execute("INSERT OR IGNORE INTO suggest_runs (paper_id) VALUES (?)", (p["id"],))
+        con.close()
+    return {"papers": len(todo), "ideas": made}
+
+
+def keep_concept(cid: str) -> bool:
+    con = db.connect()
+    with con:
+        found = con.execute("UPDATE concepts SET kind = 'kept' WHERE id = ?", (cid,)).rowcount
     con.close()
     return bool(found)

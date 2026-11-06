@@ -17,7 +17,7 @@ window.addEventListener("pagehide", () => openReader?.flushOnExit());
 // Mobile browsers may close a hidden tab without pagehide, so send the notes when the tab hides.
 document.addEventListener("visibilitychange", () => { if (document.hidden) openReader?.flushOnExit(); });
 
-async function renderReader(paperId) {
+async function renderReader(paperId, startPage) {
   const [fw, paper, saved] = await Promise.all([api("/framework"),
     api(`/papers/${paperId}?open=true`).catch(() => null), api(`/papers/${paperId}/notes`).catch(() => null)]);
   if (!paper || !saved) {
@@ -48,7 +48,7 @@ async function renderReader(paperId) {
       buddy.say(`Step ${st.n}, ${st.title}, is done. Nice work.`, { mood: "happy" });
     }
   });
-  const pdf = pdfViewer(`/papers/${paperId}/pdf`, hideBtn, paperId);
+  const pdf = pdfViewer(`/papers/${paperId}/pdf`, hideBtn, paperId, Number(startPage) || 1);
   const rail = stepRail(fw, notes, (st) => open(st));
   const timer = stepTimer(() => notes[current.id], () => queue.touch(current.id));
   const body = h("div", { class: "nb-body" });
@@ -431,8 +431,8 @@ function oldFields(st, fields) {
 
 // ---------- PDF viewer ----------
 // Canvas only, no text layer, so the text cannot be selected or copied. Renders the current page only.
-function pdfViewer(url, hideBtn, paperId) {
-  const v = { doc: null, page: 1, scale: 1, fit: true, task: null, seq: 0, hidden: false, auto: false, vp: null };
+function pdfViewer(url, hideBtn, paperId, startPage = 1) {
+  const v = { doc: null, page: startPage, scale: 1, fit: true, task: null, seq: 0, hidden: false, auto: false, vp: null };
   const sheet = h("div", { class: "pdf-sheet" });
   let shown = 0; // the page on screen, so a page change can slide in
   const hits = h("div", { class: "pdf-hits", "aria-hidden": "true" });
@@ -518,7 +518,8 @@ function pdfViewer(url, hideBtn, paperId) {
   else {
     msg("Opening the PDF");
     pdfjsLib.getDocument({ url, isEvalSupported: false }).promise.then((doc) => {
-      v.doc = doc; total.textContent = `of ${doc.numPages}`; pageIn.max = doc.numPages; draw();
+      v.doc = doc; v.page = Math.min(Math.max(1, v.page), doc.numPages); // a link may ask for any page
+      total.textContent = `of ${doc.numPages}`; pageIn.max = doc.numPages; draw();
     }, () => msg("This PDF could not be opened."));
   }
 

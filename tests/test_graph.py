@@ -61,7 +61,32 @@ def test_search_ranks_by_meaning_and_auto_picks(lib: dict[str, str]) -> None:
 
 def test_concepts_link_and_cascade(lib: dict[str, str]) -> None:
     cid = graph.add_concept("street privacy", [{"paper_id": lib["a"], "page": 1, "snippet": "x", "score": 0.9}])
-    assert graph.read(S)["concepts"] == [{"id": cid, "label": "street privacy"}]
+    assert graph.read(S)["concepts"] == [{"id": cid, "label": "street privacy", "kind": "kept"}]
     library.delete(lib["a"])
     assert graph.read(S)["links"] == []  # deleting the paper drops its links
     assert graph.delete_concept(cid) and not graph.delete_concept(cid)
+
+
+def test_suggest_ideas_links_keep_and_no_repeat(lib: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    graph.index_missing(S)
+    monkeypatch.setattr(graph.llm, "key_ideas",
+                        lambda s, t, p: ["protein graph"] if "Protein" in p[0] else ["Street privacy"])
+    out = graph.suggest(S)
+    assert out["papers"] == 3 and out["ideas"] == 2  # "Street privacy" comes from two papers, added once
+    g = graph.read(S)
+    kinds = {c["label"]: c["kind"] for c in g["concepts"]}
+    assert kinds == {"protein graph": "suggested", "Street privacy": "suggested"}
+    linked = {l["paper_id"] for l in g["links"] if l["concept_id"] == next(c["id"] for c in g["concepts"] if c["label"] == "protein graph")}
+    assert lib["c"] in linked and lib["a"] not in linked
+    cid = g["concepts"][0]["id"]
+    assert graph.keep_concept(cid) and graph.read(S)["concepts"][0]["kind"] == "kept"
+    assert graph.suggest(S) == {"papers": 0, "ideas": 0}  # each paper is asked once
+
+
+def test_key_ideas_parses_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    reply = "<think>x</think>1. Group privacy\n- **Contextual integrity**\n\nTraditional anonymization methods fail to protect groups\nGroup privacy\nDashcam data"
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **k: SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=reply))]))))
+    monkeypatch.setattr(graph.llm, "client", lambda *a, **k: fake)
+    assert graph.llm.key_ideas(Settings(model_name="m"), "T", ["p"]) == ["Group privacy", "Contextual integrity", "Traditional anonymization methods", "Dashcam data"]
