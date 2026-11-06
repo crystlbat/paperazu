@@ -43,13 +43,18 @@ async function renderGraph() {
     h("button", { type: "button", class: "btn ghost", "aria-label": "Zoom in", onclick: () => zoomBy(1.25) }, "+"),
     h("button", { type: "button", class: "btn ghost", "aria-label": "Zoom out", onclick: () => zoomBy(0.8) }, "−"),
     h("button", { type: "button", class: "btn ghost", onclick: () => fit() }, "Fit"));
+  // AI ideas stay hidden until you pick a paper (then only its own appear) or turn them all on here
+  const aiToggle = h("button", { type: "button", class: "btn ghost g-ai", "aria-pressed": "false",
+    onclick: () => { st.showAI = !st.showAI; localStorage.setItem("graph-show-ai", st.showAI ? "1" : "0"); build(); heat(0.4); } });
+  zoomBtns.prepend(aiToggle);
   const stage = h("section", { class: "g-stage", "aria-label": "Graph" }, svg, form, note, legend, zoomBtns);
   const side = h("aside", { class: "g-side", "aria-label": "Details" });
   view.append(stage, side);
 
   // ---------- state ----------
   const st = { nodes: new Map(), edges: [], ghost: null, sel: null, hover: null, data: null, papers: [],
-    t: { x: 0, y: 0, k: 1 }, alpha: 0, raf: 0, alive: true };
+    t: { x: 0, y: 0, k: 1 }, alpha: 0, raf: 0, alive: true,
+    showAI: localStorage.getItem("graph-show-ai") === "1", focusPaper: null };
   const saved = JSON.parse(localStorage.getItem(POS_KEY) || "{}");
   const savePos = () => localStorage.setItem(POS_KEY, JSON.stringify(Object.fromEntries(
     [...st.nodes.values()].filter((n) => n.kind !== "ghost").map((n) => [n.id, [Math.round(n.x), Math.round(n.y)]]))));
@@ -123,7 +128,19 @@ async function renderGraph() {
     const { papers } = st, g = st.data;
     const next = new Map();
     for (const p of papers) next.set(p.id, node(p.id, "paper", p.title, { done: p.steps_done, total: p.progress.length, r: 16 + Math.min(10, p.steps_done) }));
-    for (const c of g.concepts) next.set(c.id, node(c.id, c.kind === "suggested" ? "sugg" : "idea", c.label));
+    const shown = (c) => c.kind !== "suggested" || st.showAI || st.sel === c.id
+      || g.links.some((l) => l.concept_id === c.id && l.paper_id === st.focusPaper);
+    for (const c of g.concepts.filter(shown)) {
+      const n = node(c.id, c.kind === "suggested" ? "sugg" : "idea", c.label);
+      if (n.kind === "sugg" && !st.nodes.has(c.id)) { // bloom out of its paper
+        const home = next.get(st.focusPaper) ?? next.get(g.links.find((l) => l.concept_id === c.id)?.paper_id);
+        if (home) { n.x = home.x + (Math.random() - 0.5) * 60; n.y = home.y + (Math.random() - 0.5) * 60; }
+      }
+      next.set(c.id, n);
+    }
+    const hidden = g.concepts.filter((c) => c.kind === "suggested").length;
+    aiToggle.textContent = st.showAI ? "Hide AI ideas" : `Show AI ideas (${hidden})`;
+    aiToggle.setAttribute("aria-pressed", String(st.showAI));
     if (st.ghost) next.set("ghost", node("ghost", "ghost", st.ghost.q));
     st.nodes = next;
     st.edges = [
@@ -265,7 +282,7 @@ async function renderGraph() {
     const up = (ev) => {
       svg.classList.remove("panning");
       window.removeEventListener("pointermove", move);
-      if (Math.hypot(ev.clientX - s0[0], ev.clientY - s0[1]) < 4 && st.sel) { st.sel = null; paintFocus(); paintSide(); }
+      if (Math.hypot(ev.clientX - s0[0], ev.clientY - s0[1]) < 4 && st.sel) { st.sel = null; st.focusPaper = null; build(); heat(0.2); paintSide(); }
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
@@ -297,7 +314,12 @@ async function renderGraph() {
   ro.observe(svg);
 
   // ---------- side panel ----------
-  function select(id) { st.sel = id; paintFocus(); paintSide(); }
+  function select(id) {
+    st.sel = id;
+    if (st.nodes.get(id)?.kind === "paper" || paperById(id)) st.focusPaper = id;
+    else if (st.nodes.get(id)?.kind !== "sugg") st.focusPaper = null; // a suggestion keeps its paper's ideas in view
+    build(); heat(0.25); paintSide();
+  }
   const paperById = (id) => st.papers.find((p) => p.id === id);
   const ideaLinks = (cid) => st.data.links.filter((l) => l.concept_id === cid);
 
@@ -440,72 +462,115 @@ async function renderGraph() {
     tree?.remove();
     const data = await api(`/papers/${p.id}/outline`).catch(() => null);
     if (!data || !st.alive) return;
-    const COL = 300, ROW = 34, PAD = 28;
+    const CARD = 248, COL = 296, GAP = 12, PAD = 24;
+    const kind = data.source === "slides" ? ["Deck", "Sections", "Topics", "Slides"] : ["Paper", "Sections", "Subsections", "Parts and figures"];
     const back = h("button", { type: "button", class: "btn ghost", onclick: () => closeTree() }, "Back to the graph");
     const holder = h("div", { class: "t-scroll" });
+    const panel = h("aside", { class: "t-panel", "aria-live": "polite" });
     tree = h("section", { class: "g-tree", "aria-label": `Section tree of ${p.title}` },
       h("div", { class: "t-head" }, back,
         h("span", { class: "t-name" }, p.title),
         h("span", { class: "t-levels", "aria-hidden": "true" },
-          ["Paper", "Sections", "Subsections", "Parts and figures"].map((t, i) => h("span", { class: `t-lv l${i + 1}` }, h("i"), `L${i + 1} ${t}`)))),
+          kind.map((t, i) => h("span", { class: `t-lv l${i + 1}` }, h("i"), `L${i + 1} ${t}`)))),
       data.source === "guessed" ? h("p", { class: "help t-note" }, "This PDF has no built-in outline, so the sections are guessed from its headings.") : null,
-      holder);
-    stage.classList.add("tree-open");
+      h("div", { class: "t-body" }, holder, panel));
+    stage.classList.add("tree-open"); side.hidden = true;
     stage.append(tree);
     back.focus();
-    const closed = new Set(); // nodes you folded
-    let seq = 0;
-    (function tag(n) { n.key = seq++; n.children.forEach(tag); })(data.tree);
+    let seq = 0, count = 0;
+    (function tag(n) { n.key = seq++; count++; n.children.forEach(tag); })(data.tree);
+    // big trees start with their deepest groups folded, so the first view is the outline, not 100 cards
+    const closed = new Set();
+    if (count > 40) (function fold(n) { if (n.level >= 3 && n.children.length) closed.add(n.key); n.children.forEach(fold); })(data.tree);
+    let sel = data.tree.key;
+    const byKey = new Map();
+    (function index(n) { byKey.set(n.key, n); n.children.forEach(index); })(data.tree);
+    const blurb = (n) => n.lead || (n.children.length ? `Inside: ${n.children.map((c) => c.title).join(", ")}` : "");
+    const tall = (n) => (blurb(n) ? 98 : 56);
 
     function layout() {
-      let row = 0;
+      let y = PAD;
       const out = [];
       (function place(n, parent) {
         const kids = closed.has(n.key) ? [] : n.children;
-        const me = { n, parent, x: PAD + (n.level - 1) * COL, y: 0 };
+        const me = { n, parent, x: PAD + (n.level - 1) * COL, y: 0, hgt: tall(n) };
         out.push(me);
-        if (!kids.length) me.y = PAD + row++ * ROW;
-        else { const ys = kids.map((c) => place(c, me).y); me.y = (ys[0] + ys[ys.length - 1]) / 2; }
+        if (!kids.length) { me.y = y; y += me.hgt + GAP; }
+        else {
+          const ys = kids.map((c) => place(c, me));
+          const mid = (ys[0].y + ys[ys.length - 1].y + ys[ys.length - 1].hgt) / 2;
+          me.y = n.level === 1 ? PAD : Math.max(ys[0].y, mid - me.hgt / 2); // the root stays in view at the top
+          y = Math.max(y, me.y + me.hgt + GAP);
+        }
         return me;
       })(data.tree, null);
-      return { items: out, h: PAD * 2 + row * ROW };
+      return { items: out, h: y + PAD };
+    }
+
+    function card(it) {
+      const n = it.n;
+      const title = n.level === 1 ? (data.source === "slides" ? "The whole deck" : "The whole paper") : n.title;
+      const meta = n.level === 1 ? `${data.pages} pages` : `Page ${n.page}${n.children.length ? `, ${n.children.length} parts` : ""}`;
+      const el = h("button", { type: "button", class: `t-card l${n.level} ${n.kind}${n.key === sel ? " on" : ""}`,
+        style: `left:${it.x}px;top:${it.y}px;width:${CARD}px;height:${it.hgt}px;--d:${n.level * 60}ms`,
+        "aria-pressed": String(n.key === sel), onclick: () => choose(n.key) },
+        h("span", { class: "t-title" }, title),
+        blurb(n) ? h("span", { class: "t-lead" }, blurb(n)) : null,
+        h("span", { class: "t-meta" }, meta));
+      return el;
     }
 
     function paint() {
       const { items, h: height } = layout();
       const maxLevel = Math.max(...items.map((i) => i.n.level));
-      const svg = sv("svg", { class: "t-svg", width: PAD * 2 + (maxLevel - 1) * COL + COL, height });
+      const width = PAD * 2 + (maxLevel - 1) * COL + CARD;
+      const svg = sv("svg", { class: "t-svg", width, height });
       for (const it of items) if (it.parent) {
-        const a = it.parent, mx = (a.x + it.x) / 2;
-        svg.append(sv("path", { class: `t-link l${it.n.level}`, d: `M${a.x} ${a.y} C${mx} ${a.y} ${mx} ${it.y} ${it.x} ${it.y}` }));
+        const a = it.parent, x1 = a.x + CARD, y1 = a.y + a.hgt / 2, y2 = it.y + it.hgt / 2, mx = (x1 + it.x) / 2;
+        svg.append(sv("path", { class: `t-link l${it.n.level}`, d: `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${it.x} ${y2}` }));
       }
+      const layer = h("div", { class: "t-layer", style: `width:${width}px;height:${height}px` }, svg);
       for (const it of items) {
-        const n = it.n, max = n.level === 1 ? 26 : 32;
-        const label = n.level === 1 ? `${data.pages} pages` // the title is in the header above
-          : n.title.length > max ? `${n.title.slice(0, max - 1)}…` : n.title;
-        const g = sv("g", { class: `t-node l${n.level} ${n.kind}`, transform: `translate(${it.x} ${it.y})`,
-          style: `--d:${n.level * 70}ms`, tabindex: 0, role: "link",
-          "aria-label": `${n.title}, page ${n.page}. Opens the paper at this page.`,
-          onclick: () => { location.hash = `#read/${p.id}/${n.page}`; },
-          onkeydown: (e) => { if (e.key === "Enter") location.hash = `#read/${p.id}/${n.page}`; } },
-          sv("title", {}, `${n.title} (page ${n.page})`),
-          n.kind === "figure" ? sv("rect", { class: "dot", x: -4.5, y: -4.5, width: 9, height: 9, rx: 2 }) : sv("circle", { class: "dot", r: [0, 8, 6, 5, 4][n.level] }),
-          sv("text", { class: "t-label", x: n.level === 1 ? -20 : 14, y: n.level === 1 ? 28 : 0, dy: "0.35em" }, label, n.level === 1 ? null : sv("tspan", { class: "t-page", dx: 8 }, `p${n.page}`)));
-        svg.append(g);
+        layer.append(card(it));
+        const n = it.n;
         if (n.children.length && n.level > 1) {
           const shut = closed.has(n.key);
-          svg.append(sv("g", { class: "t-fold", transform: `translate(${it.x - 22} ${it.y})`, tabindex: 0, role: "button",
+          layer.append(h("button", { type: "button", class: "t-fold", style: `left:${it.x + CARD - 11}px;top:${it.y + it.hgt / 2 - 11}px`,
             "aria-label": `${shut ? "Show" : "Hide"} the ${n.children.length} parts under ${n.title}`, "aria-expanded": String(!shut),
-            onclick: () => toggle(n.key), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(n.key); } } },
-            sv("circle", { r: 7 }), sv("text", { "text-anchor": "middle", dy: "0.35em" }, shut ? "+" : "−")));
+            onclick: () => toggle(n.key) }, shut ? String(n.children.length) : "−"));
         }
       }
-      holder.replaceChildren(svg);
+      holder.replaceChildren(layer);
+    }
+
+    function paintPanel() {
+      const n = byKey.get(sel);
+      const title = n.level === 1 ? p.title : n.title;
+      panel.replaceChildren(...[
+        h("p", { class: "t-lvl" }, `L${n.level} ${kind[n.level - 1].replace(/s$/, "").toLowerCase()}, page ${n.page}${n.words ? `, ${n.words} words` : ""}`),
+        h("h3", { class: "t-ptitle" }, title),
+        n.text || n.lead ? h("p", { class: "t-text" }, n.text || n.lead)
+          : h("p", { class: "help" }, n.kind === "figure" ? "A figure or table. Open the page to see it." : "This part has no text of its own. Its parts are listed below."),
+        h("button", { type: "button", class: "btn", onclick: () => { location.hash = `#read/${p.id}/${n.page}`; } }, `Open at page ${n.page}`),
+        n.children.length ? h("div", { class: "t-kids" }, h("p", { class: "t-lvl" }, `${n.children.length} parts inside`),
+          h("ol", {}, n.children.map((c) => h("li", {}, h("button", { type: "button", class: "t-kid", onclick: () => choose(c.key, true) },
+            h("span", {}, c.title), h("span", { class: "t-meta" }, `p${c.page}`)))))) : null].filter(Boolean));
+    }
+
+    function choose(key, reveal) {
+      sel = key;
+      if (reveal) for (let n = parentOf(key); n; n = parentOf(n.key)) closed.delete(n.key);
+      tree.classList.add("settled"); paint(); paintPanel();
+      if (reveal) holder.querySelector(".t-card.on")?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    }
+    function parentOf(key) {
+      for (const n of byKey.values()) if (n.children.some((c) => c.key === key)) return n;
+      return null;
     }
     function toggle(key) { closed.has(key) ? closed.delete(key) : closed.add(key); tree.classList.add("settled"); paint(); }
-    paint();
+    paint(); paintPanel();
   }
-  function closeTree() { tree?.remove(); tree = null; stage.classList.remove("tree-open"); }
+  function closeTree() { tree?.remove(); tree = null; stage.classList.remove("tree-open"); side.hidden = false; }
 
   openGraph = { leave() { st.alive = false; cancelAnimationFrame(st.raf); ro.disconnect(); savePos(); } };
   await boot();

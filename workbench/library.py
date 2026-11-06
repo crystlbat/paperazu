@@ -175,8 +175,120 @@ def _captions(doc: pymupdf.Document) -> list[tuple[int, str]]:
     return out
 
 
+def _flat_text(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"-\n(?=[a-z])", "", text)).strip()
+
+
+def _lead(text: str, limit: int) -> str:
+    """Whole sentences up to about `limit` characters."""
+    if len(text) <= limit:
+        return text
+    cut = text.rfind(". ", 0, limit)
+    return text[:cut + 1] if cut > limit // 3 else text[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def _section_texts(pages: list[str], heads: list[tuple[int, str, int]]) -> list[str]:
+    """The text under each heading: from the heading to the next one. Headings are found in the
+    page text by their words (case and spacing ignored); one that cannot be found starts at its page."""
+    doc, starts = "", []
+    for t in pages:
+        starts.append(len(doc))
+        doc += _flat_text(t) + " "
+    low = doc.lower()
+    pos: list[tuple[int, int]] = []  # (start of heading, end of heading)
+    cursor = 0
+    for _, title, pg in heads:
+        from_ = max(cursor, starts[min(pg, len(starts)) - 1])
+        words = re.findall(r"\w+", title.lower())
+        found = None
+        for ws in (words, words[1:] if len(words) > 1 and re.fullmatch(r"[\da-z]{1,2}", words[0]) else None):
+            if not ws:
+                continue
+            m = re.compile(r"\W*".join(map(re.escape, ws))).search(low, from_, from_ + 20000)
+            if m:
+                found = (m.start(), m.end()); break
+        found = found or (from_, from_)
+        pos.append(found)
+        cursor = found[1]
+    out = []
+    for i, (_, end) in enumerate(pos):
+        nxt = pos[i + 1][0] if i + 1 < len(pos) else len(doc)
+        out.append(doc[end:max(end, nxt)].strip(" .:"))
+    return out
+
+
+def _node(title: str, page: int, level: int, body: str, kind: str = "section") -> dict[str, Any]:
+    return {"title": title, "page": page, "level": level, "kind": kind, "children": [],
+            "lead": _lead(body, 220), "text": _lead(body, 1200), "words": len(body.split())}
+
+
+_SLIDE = re.compile(r"^slide\s+(\d+)(?:\s*[:.\-]\s*(.*))?$", re.I)
+
+
+def _is_deck(heads: list[tuple[int, str, int]]) -> bool:
+    return len(heads) >= 4 and sum(bool(_SLIDE.match(t)) for _, t, _ in heads) >= 0.6 * len(heads)
+
+
+def _deck_tree(root: dict[str, Any], heads: list[tuple[int, str, int]], texts: list[str]) -> None:
+    """Slide decks list every slide flat ("Slide 7: Title"). Give them shape: a slide with only a
+    short heading starts a section (L2), runs of slides with the same title make a topic (L3), and
+    each slide in a run is an L4 leaf."""
+    slides = []
+    for (_, t, pg), body in zip(heads, texts):
+        m = _SLIDE.match(t)
+        name = (m.group(2) or "").strip() if m else t
+        if name and body.lower().startswith(name.lower()):
+            body = body[len(name):]
+        body = re.sub(r"^\s*\d{1,3}\b\s*", "", body).strip()  # the slide number printed under the title
+        slides.append((name, body, pg))
+    if slides and not slides[0][0]:
+        root["lead"] = _lead(slides[0][1], 220)  # the title slide
+        slides = slides[1:]
+    has_dividers = any(not n and 0 < len(b.split()) <= 6 for n, b, _ in slides)
+    section = root if not has_dividers else None
+    run: dict[str, Any] | None = None
+    for name, body, pg in slides:
+        if not name and 0 < len(body.split()) <= 6:  # a divider slide: a new section
+            section = _node(body, pg, 2, "")
+            root["children"].append(section); run = None
+            continue
+        if section is None:
+            section = _node("Opening", pg, 2, "")
+            root["children"].append(section)
+        lvl = section["level"] + 1
+        label = name or f"Slide {pg}"
+        if run is not None and run["title"] == label and run["parent"] is section:
+            if not run["node"]["children"]:  # second slide of a run: the first becomes a leaf too
+                first = run["node"]
+                first["children"].append(_node(f"Slide {first['page']}", first["page"], lvl + 1, first.pop("_body")))
+            prev = run["last"]
+            same = 0  # build-up slides repeat the last one, so a leaf shows only what it adds
+            for a, b in zip(prev.split(), body.split()):
+                if a != b:
+                    break
+                same += 1
+            leaf = _node(f"Slide {pg}", pg, lvl + 1, body)
+            if same >= 8:
+                leaf["lead"] = _lead(" ".join(body.split()[same:]), 220) or "Same as the slide before"
+            run["node"]["children"].append(leaf)
+            run["last"] = body
+            run["node"]["words"] += len(body.split())
+            continue
+        node = _node(label, pg, lvl, body)
+        node["_body"] = body
+        section["children"].append(node)
+        run = {"title": label, "node": node, "parent": section, "last": body}
+
+    def tidy(n: dict[str, Any]) -> None:
+        n.pop("_body", None)
+        for c in n["children"]:
+            tidy(c)
+    tidy(root)
+
+
 def outline(paper_id: str, title: str) -> dict[str, Any] | None:
-    """The paper as a tree. Uses the PDF's own outline when it has one, else guesses the headings."""
+    """The paper as a tree, with the opening text of every part. Uses the PDF's own outline when it
+    has one (slide decks get grouped), else guesses the headings."""
     path = db.PAPERS_DIR / f"{paper_id}.pdf"
     if not paper_id.isalnum() or not path.exists():
         return None
@@ -186,22 +298,33 @@ def outline(paper_id: str, title: str) -> dict[str, Any] | None:
         heads = toc or _guess_headings(doc)
         caps = _captions(doc)
         pages = doc.page_count
+        texts = _section_texts([pg.get_text() for pg in doc], heads) if heads else []
     root: dict[str, Any] = {"title": title, "page": 1, "level": 1, "kind": "paper", "children": []}
-    stack, flat, parent = [root], [], {}
-    for lvl, t, pg in heads:
-        node = {"title": t, "page": pg, "level": min(lvl, 3) + 1, "kind": "section", "children": []}
-        while stack[-1]["level"] >= node["level"]:
-            stack.pop()
-        stack[-1]["children"].append(node)
-        parent[id(node)] = stack[-1]
-        stack.append(node); flat.append(node)
-    # shortcut: a figure goes to the last heading that starts on or before its page, so on a page
-    # where two sections start it may sit one section late. Use heading positions if that matters.
+    if _is_deck(heads):
+        source = "slides"
+        _deck_tree(root, heads, texts)
+    else:
+        stack = [root]
+        for (lvl, t, pg), body in zip(heads, texts):
+            node = _node(t, pg, min(lvl, 3) + 1, body)
+            while stack[-1]["level"] >= node["level"]:
+                stack.pop()
+            stack[-1]["children"].append(node)
+            stack.append(node)
+    # figures hang under the last part that starts on or before their page
+    # shortcut: by page only, so on a page where two parts start a figure may sit one part late.
+    flat: list[dict[str, Any]] = []
+    parent: dict[int, dict[str, Any]] = {}
+
+    def order(n: dict[str, Any]) -> None:
+        for c in n["children"]:
+            parent[id(c)] = n; flat.append(c); order(c)
+    order(root)
     for pg, cap in caps:
         owner = next((s for s in reversed(flat) if s["page"] <= pg), root)
         if owner["level"] >= 4:
             owner = parent[id(owner)]
-        owner["children"].append({"title": cap, "page": pg, "level": owner["level"] + 1, "kind": "figure", "children": []})
+        owner["children"].append(_node(cap, pg, owner["level"] + 1, "", kind="figure"))
     return {"tree": root, "source": source, "pages": pages}
 
 
