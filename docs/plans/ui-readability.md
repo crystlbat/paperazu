@@ -51,3 +51,36 @@ Requirements:
 4. Do not change internal identifiers (`PRIMER` constant name may stay, `primer_status`, `#settings/primer` route id, CSS class `primer`).
 
 Done when: `grep -ni primer static/app.js` shows no user-visible string containing "primer" (identifiers, routes and class names are fine), and the explanation is reachable by tooltip and by the buddy.
+
+## Task 3: Notes API (build-prompt phase 3, backend)
+
+Files: new `workbench/notes.py`; `workbench/main.py` (routes only); `workbench/library.py` (only if a helper must be shared); new `tests/test_notes.py`; `pyproject.toml` (pytest as a dev dependency group only).
+
+Runs in parallel with Tasks 1 and 2: it must not touch anything under `static/`.
+
+Data shape stored in the existing `notes` table (`paper_id`, `step_id`, `data` JSON, `seconds`, `updated_at`):
+`data = {"fields": {<field_id>: <value>}, "gate": [<bool>, ...]}`. Field values: `text`/`long`/`date`/`choice` are strings; `rows` is a list of lists of strings; `checks` is a list of strings. `library.step_state(step, data)` already defines empty/partial/done from this shape and must keep working unchanged.
+
+Requirements:
+1. `GET /papers/{paper_id}/notes` returns `{"steps": {<step_id>: {"fields": {...}, "gate": [...], "seconds": int, "state": "empty"|"partial"|"done", "updated_at": str}}, "steps_done": int, "total_steps": int}`. Steps with no saved row are omitted from `steps`. 404 with detail "This paper is not in the library." if the paper does not exist.
+2. `PUT /papers/{paper_id}/notes/{step_id}` with body `{"fields": {...}, "gate": [...], "seconds": int}` saves one step (upsert), sets `updated_at`, refreshes the paper's search row (`library.reindex`), and returns `{"state": ..., "steps_done": int, "total_steps": int, "updated_at": str}`. 404 for an unknown paper. 422 with `{"errors": {...}}` (same shape as the existing settings/paper PATCH errors) for: unknown `step_id` (not in the current framework), `seconds` not an integer from 0 to 86400, `gate` not a list of booleans, `fields` not an object, a field value that is not a string, list of strings, or list of lists of strings, or a request body larger than 200 KB.
+3. Field ids that are not in the current framework step are accepted and stored (the build prompt says notes for removed fields are kept and shown as "Old fields"). The API never deletes stored fields that the request omits: the request's `fields` object replaces stored fields key by key (merge), so an older client cannot wipe other fields.
+4. Validation with a Pydantic model in `notes.py`, consistent with `library.PaperPatch` style. Type hints everywhere, short functions.
+5. Tests in `tests/test_notes.py` with pytest, using a temporary database (point `db.DB_PATH`/`db.DATA_DIR` at `tmp_path` via monkeypatch and call `db.init()`), testing the `notes.py` functions directly (no HTTP client: `httpx` is not an allowed dependency). Cover: save then load round trip, merge keeps omitted fields, unknown field id kept, unknown step rejected, bad seconds rejected, state transitions empty -> partial -> done for one step using the real `framework.yaml`, steps_done count, and search finds a word from saved notes via `library.list_papers(fw, q=...)`. Add pytest with `uv add --dev pytest`. Run with `uv run pytest -q`.
+
+## Task 4: Reader frontend (build-prompt phase 3)
+
+Runs after Tasks 1, 2 and 3 are merged. Files: `static/app.js`, `static/style.css`, `static/index.html` (PDF.js script tag only).
+
+Requirements (from the build prompt, Reader page):
+1. Middle pane: PDF rendered with PDF.js 3.11.174 from cdnjs (`pdf.min.js` and its worker), loaded from `GET /papers/{id}/pdf`. Canvas rendering only, no text layer (the student must not copy text). Controls: page number input, previous, next, zoom in, zoom out, fit width. Render only the current page. Keyboard: left/right arrow keys change page when focus is not in a text field.
+2. "Hide paper" button in the top bar blurs the PDF and shows "Paper closed" with a "Show the paper anyway" button. Step 8 (`paper_hidden: true` in framework.yaml) does this automatically when the step opens.
+3. Right pane notebook for the current step, rendered from `framework.yaml` field types: `text` (input), `long` (auto-growing textarea), `date` (date input), `rows` (table with the step's `cols`, `start_rows` empty rows, an "Add row" button, numbered rows when `numbered: true`), `choice` (radio group), `checks` (checkbox group). Show `help` text under the label.
+4. Autosave every change with a 500 ms debounce to `PUT /papers/{id}/notes/{step_id}` (Task 3). A save status in the footer: "Saving", "Saved", or "Could not save. Retrying." with retry. Never lose typed text when switching steps (flush the pending save first).
+5. Notes for field ids that are no longer in the step are shown read-only in an "Old fields" box at the end of the step.
+6. "Before you move on" checklist from `gate`, saved with the notes.
+7. Timer: counts the time spent on the current step, starting when the step opens only if a setting says so (default off: show a Start button; the setting arrives in a later phase, so read a constant default off). Pause/resume. Shown in Geist Mono as `mm:ss / mm:00` with the thin budget bar. When over budget, show a gentle warning ("Over the time budget. Finish the thought, then move on.") and colour the bar amber. Seconds are saved with the notes.
+8. Left rail circles: empty, partial (dashed ring), done (filled) from the API `state`, updated after each save. Top bar progress "n / 10 steps done" updates after each save.
+9. Footer: Back, save status, Next step. "Review" in the rail stays disabled (later phase).
+10. The reading buddy (`buddy.say`) keeps its step tip on step change. When a step becomes "done", the buddy says a short happy line.
+11. Uses the type roles from Task 1. Works in light and dark mode and in a narrow window (stack panes; the PDF pane above the notebook).
