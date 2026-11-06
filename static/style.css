@@ -274,7 +274,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .over-msg { color: var(--amber); font-size: var(--fs-ui); font-weight: var(--fw-ui); margin-top: 6px; }
 @media (prefers-reduced-motion: reduce) { .budget .bar i, .circle { transition: none; } }
 
-.nb-field { border: 0; margin: 0; padding: 18px 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--rule-soft); }
+.nb-field { border: 0; margin: 0; padding: 14px 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .nb-field > label, .nb-field > legend { font-weight: var(--fw-strong); line-height: var(--lh-title); padding: 0; }
 fieldset.nb-field > legend { margin-bottom: 6px; float: left; width: 100%; } /* float keeps the legend inside the flex flow */
 .help { color: var(--pencil); font-size: var(--fs-ui); font-weight: var(--fw-ui); }
@@ -342,21 +342,58 @@ body.resizing .pdf-stage, body.resizing .notebook { pointer-events: none; }
   background: var(--green); scale: 0; transition: scale .25s cubic-bezier(.3,1.6,.5,1);
 }
 .nb-field.is-filled > label::after, .nb-field.is-filled > legend::after { scale: 1; }
-.nb-field.is-text input, .nb-field.is-long textarea {
-  border: 0; border-radius: 0; padding: 0 2px; min-height: 0; background-color: transparent;
-  border-bottom: 1.5px solid var(--rule); box-shadow: none;
+/* Inputs are soft wells: no box lines, the page tint, an ink edge when you write in one. */
+.nb-field.is-text input, .nb-field.is-long textarea, .nb-field.is-date input, .rows td textarea {
+  background: var(--paper); border: 1.5px solid transparent; border-radius: 10px; box-shadow: none;
+  transition: background .15s, border-color .15s;
 }
-.nb-field.is-text input { height: 36px; }
-.nb-field.is-long textarea {
-  --line: 26px; line-height: var(--line); padding-top: 2px; min-height: calc(var(--line) * 2 + 4px); border-bottom: 0;
-  background: linear-gradient(transparent calc(var(--line) - 1px), var(--rule) calc(var(--line) - 1px)) 0 2px / 100% var(--line) local;
+.nb-field.is-text input, .nb-field.is-long textarea { padding: 9px 14px; }
+.nb-field.is-long textarea { min-height: 76px; line-height: var(--lh-body); }
+.nb-field.is-text input:hover, .nb-field.is-long textarea:hover, .nb-field.is-date input:hover, .rows td textarea:hover { border-color: var(--rule); }
+.nb-field.is-text input:focus-visible, .nb-field.is-long textarea:focus-visible, .nb-field.is-date input:focus-visible, .rows td textarea:focus-visible {
+  outline: none; background: var(--sheet); border-color: var(--ink); box-shadow: none;
 }
-.nb-field.is-text input:hover { border-bottom-color: var(--pencil); }
-.nb-field.is-text input:focus-visible { box-shadow: none; border-bottom: 2px solid var(--ink); }
-.nb-field.is-long textarea:focus-visible { box-shadow: none; outline: none; }
-.nb-field.is-long:focus-within textarea { /* ink the lines while you write: the focus cue */
-  background-image: linear-gradient(transparent calc(var(--line) - 1.5px), var(--pencil) calc(var(--line) - 1.5px));
+.rows td textarea { border-radius: 8px; }
+
+/* ----- circle to search ----- */
+.cs-btn { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; }
+.cs-ring { width: 14px; height: 12px; border: 2px solid currentColor; border-radius: 50%; rotate: -14deg; }
+.cs-btn[aria-pressed="true"] { background: var(--marker); border-color: var(--marker); color: var(--on-marker); }
+.pdf-page { position: relative; }
+.pdf-hits, .pdf-ink { position: absolute; left: 0; top: 0; pointer-events: none; }
+.pdf-hits i { position: absolute; background: rgb(255 227 71 / .55); mix-blend-mode: multiply; border-radius: 2px; animation: pop .25s cubic-bezier(.3,.7,.2,1) both; }
+.pdf-sheet canvas.pdf-ink { background: none; box-shadow: none; transition: opacity .45s; }
+.pdf-sheet .pdf-ink.fade { opacity: 0; }
+.is-circling .pdf-ink { pointer-events: auto; cursor: crosshair; touch-action: none; }
+.cs-panel {
+  position: absolute; top: 14px; right: 26px; width: min(340px, calc(100% - 40px)); max-height: calc(100% - 28px);
+  display: flex; flex-direction: column; gap: 8px; overflow: auto;
+  background: var(--sheet); border: 1px solid var(--rule); border-radius: 14px; padding: 14px 16px 16px;
+  box-shadow: 0 22px 44px -24px rgb(20 22 25 / .55); animation: pop .2s cubic-bezier(.3,.7,.2,1) both;
 }
+.cs-panel[hidden] { display: none; }
+.cs-head { display: flex; align-items: center; justify-content: space-between; }
+.cs-title { font-weight: var(--fw-strong); }
+.cs-x { border: 0; background: none; color: var(--pencil); cursor: pointer; font-size: 20px; line-height: 1; padding: 2px 8px; border-radius: 6px; }
+.cs-x:hover { color: var(--ink); background: var(--paper); }
+.cs-input { width: 100%; background: var(--paper); border: 1.5px solid transparent; border-radius: 10px; }
+.cs-input:focus-visible { background: var(--sheet); border-color: var(--ink); box-shadow: none; }
+.cs-results { display: flex; flex-direction: column; gap: 8px; user-select: none; }
+.cs-sum { font-size: var(--fs-ui); font-weight: var(--fw-ui); color: var(--pencil); margin-top: 4px; }
+.cs-pages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.cs-hit {
+  width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; cursor: pointer;
+  background: none; border: 1.5px solid transparent; border-radius: 9px; padding: 7px 10px;
+}
+.cs-hit:hover { background: var(--paper); }
+.cs-hit[aria-current] { border-color: var(--ink); }
+.cs-pg { font-size: var(--fs-ui); font-weight: var(--fw-strong); }
+.cs-snip { font-size: var(--fs-ui); color: var(--pencil); line-height: 1.45; }
+.cs-snip mark { color: var(--on-marker); background: var(--marker); border-radius: 3px; padding: 0 2px; }
+.cs-lib { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--rule-soft); padding-top: 6px; }
+.cs-paper { font-size: var(--fs-ui); font-weight: var(--fw-ui); text-decoration: none; padding: 5px 10px; border-radius: 8px; }
+.cs-paper:hover { background: var(--paper); }
+@media (prefers-reduced-motion: reduce) { .pdf-hits i, .cs-panel { animation: none; } .pdf-ink { transition: none; } }
 
 /* switching steps: the page settles in, piece by piece */
 .nb-body > * { animation: settle .38s cubic-bezier(.3,.7,.2,1) both; animation-delay: calc(min(var(--i, 0), 8) * 35ms); }

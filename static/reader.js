@@ -48,7 +48,7 @@ async function renderReader(paperId) {
       buddy.say(`Step ${st.n}, ${st.title}, is done. Nice work.`, { mood: "happy" });
     }
   });
-  const pdf = pdfViewer(`/papers/${paperId}/pdf`, hideBtn);
+  const pdf = pdfViewer(`/papers/${paperId}/pdf`, hideBtn, paperId);
   const rail = stepRail(fw, notes, (st) => open(st));
   const timer = stepTimer(() => notes[current.id], () => queue.touch(current.id));
   const body = h("div", { class: "nb-body" });
@@ -378,9 +378,12 @@ function oldFields(st, fields) {
 
 // ---------- PDF viewer ----------
 // Canvas only, no text layer, so the text cannot be selected or copied. Renders the current page only.
-function pdfViewer(url, hideBtn) {
-  const v = { doc: null, page: 1, scale: 1, fit: true, task: null, seq: 0, hidden: false, auto: false };
+function pdfViewer(url, hideBtn, paperId) {
+  const v = { doc: null, page: 1, scale: 1, fit: true, task: null, seq: 0, hidden: false, auto: false, vp: null };
   const sheet = h("div", { class: "pdf-sheet" });
+  const hits = h("div", { class: "pdf-hits", "aria-hidden": "true" });
+  const ink = h("canvas", { class: "pdf-ink", "aria-hidden": "true" });
+  const pageBox = h("div", { class: "pdf-page" });
   const stage = h("div", { class: "pdf-stage" }, sheet);
   const closed = h("div", { class: "pdf-closed", hidden: true },
     h("div", { class: "closed-card" },
@@ -394,11 +397,13 @@ function pdfViewer(url, hideBtn) {
     onchange: () => go(Number(pageIn.value)) });
   const total = h("span", { class: "quiet num" }, "of 0");
   const zoomLbl = h("span", { class: "num quiet zoom" });
-  const el = h("section", { class: "pdf-pane", "aria-label": "Paper" },
-    h("div", { class: "pdf-tools" }, prev, pageIn, total, next, h("span", { class: "spacer" }),
+  const el = h("section", { class: "pdf-pane", "aria-label": "Paper" });
+  const search = circleSearch({ v, go, ink, hits, pane: el, paperId });
+  el.append(
+    h("div", { class: "pdf-tools" }, prev, pageIn, total, next, search.button, h("span", { class: "spacer" }),
       tool("−", "Zoom out", () => zoom(1 / 1.2)), zoomLbl, tool("+", "Zoom in", () => zoom(1.2)),
       h("button", { type: "button", class: "btn ghost tool", onclick: () => { v.fit = true; draw(); } }, "Fit width")),
-    h("div", { class: "pdf-view" }, stage, closed));
+    h("div", { class: "pdf-view" }, stage, closed, search.panel));
 
   async function draw() {
     if (!v.doc) return;
@@ -418,7 +423,12 @@ function pdfViewer(url, hideBtn) {
     prev.disabled = v.page <= 1; next.disabled = v.page >= v.doc.numPages;
     zoomLbl.textContent = `${Math.round(v.scale * 100)}%`;
     try { await v.task.promise; } catch { return; } // cancelled by a newer draw
-    sheet.replaceChildren(canvas);
+    v.vp = vp;
+    ink.width = canvas.width; ink.height = canvas.height;
+    ink.style.width = canvas.style.width; ink.style.height = canvas.style.height;
+    pageBox.replaceChildren(canvas, hits, ink);
+    sheet.replaceChildren(pageBox);
+    search.paint();
   }
   function go(n) {
     if (!v.doc) return;
@@ -432,10 +442,13 @@ function pdfViewer(url, hideBtn) {
     closed.hidden = !on;
     hideBtn.textContent = on ? "Show paper" : "Hide paper";
     hideBtn.setAttribute("aria-pressed", String(on));
+    if (on) search.close(); // no peeking at the words while the paper is closed
+    search.button.disabled = on;
   }
   const msg = (text) => sheet.replaceChildren(h("p", { class: "pdf-msg" }, text));
 
   const onKey = (e) => {
+    if (e.key === "Escape" && search.isOpen()) return search.close();
     if (e.altKey || e.ctrlKey || e.metaKey || e.target.closest?.("input, textarea, select, [contenteditable], dialog, [role=separator]")) return;
     if (e.key === "ArrowLeft") go(v.page - 1);
     else if (e.key === "ArrowRight") go(v.page + 1);
@@ -459,4 +472,171 @@ function pdfViewer(url, hideBtn) {
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
     destroy() { document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
   };
+}
+
+// ---------- circle to search ----------
+// Circle (or tap) words on the page. The words come from the PDF's own text, read in the browser.
+// Finds them in this paper and in your other papers. Nothing leaves this computer.
+const flat = (s) => s.replace(/-\s+(?=[a-z])/g, "").replace(/\s+/g, " ").trim(); // also joins words split at line ends
+
+function itemBox(it, vp) {
+  const t = pdfjsLib.Util.transform(vp.transform, it.transform);
+  const hgt = Math.hypot(t[2], t[3]);
+  return { x: t[4], y: t[5] - hgt, w: it.width * vp.scale, h: hgt * 1.15 };
+}
+
+// shortcut: letters are placed by even spacing across each text run, so a circle edge can be off by a letter
+// in wide fonts; the cut is widened to whole words, which hides it. Upgrade to per-glyph boxes if it misses.
+function wordsIn(items, vp, r) {
+  const parts = [];
+  for (const it of items) {
+    const b = itemBox(it, vp);
+    const mid = b.y + b.h / 2;
+    // a line counts when its middle is inside the circle; a tap counts when it lands on the line
+    const inLine = r.line != null ? r.line >= b.y && r.line <= b.y + b.h : mid >= r.y0 && mid <= r.y1;
+    if (!inLine || b.x + b.w < r.x0 || b.x > r.x1) continue;
+    const s = it.str, n = s.length;
+    let a = 0, z = n;
+    while (a < n && b.x + (b.w * (a + 0.5)) / n < r.x0) a++;
+    while (z > a && b.x + (b.w * (z - 0.5)) / n > r.x1) z--;
+    while (a < z && /\s/.test(s[a])) a++; // an edge on a space does not reach into the next word
+    while (z > a && /\s/.test(s[z - 1])) z--;
+    if (a === z && !r.tap) continue;
+    while (a > 0 && /\w/.test(s[a - 1])) a--;
+    while (z < n && /\w/.test(s[z])) z++;
+    parts.push(s.slice(a, z));
+  }
+  return flat(parts.join(" ")).replace(/^\W+|\W+$/g, "").split(" ").slice(0, 12).join(" ");
+}
+
+function circleSearch({ v, go, ink, hits, pane, paperId }) {
+  const texts = new Map();
+  const pageItems = (n) => {
+    if (!texts.has(n)) texts.set(n, v.doc.getPage(n).then((p) => p.getTextContent())
+      .then((tc) => tc.items.filter((i) => i.str?.trim())));
+    return texts.get(n);
+  };
+  let on = false, query = "", run = 0, jump = false, pts = null;
+
+  const input = h("input", { type: "search", class: "cs-input", placeholder: "Words to find", "aria-label": "Words to find",
+    onkeydown: (e) => { if (e.key === "Enter") find(input.value); } });
+  const results = h("div", { class: "cs-results", role: "status", "aria-live": "polite" });
+  const panel = h("div", { class: "cs-panel", hidden: true, role: "dialog", "aria-label": "Circle to search" },
+    h("div", { class: "cs-head" }, h("span", { class: "cs-title" }, "Circle to search"),
+      h("button", { type: "button", class: "cs-x", "aria-label": "Close search", onclick: () => close() }, "×")),
+    input,
+    h("p", { class: "help" }, "Circle or tap words on the page. Or type, then press Enter."),
+    results);
+  const button = h("button", { type: "button", class: "btn ghost tool cs-btn", "aria-pressed": "false",
+    onclick: () => (on ? close() : open()) }, h("span", { class: "cs-ring", "aria-hidden": "true" }), "Circle to search");
+
+  function open() {
+    on = true; panel.hidden = false; pane.classList.add("is-circling");
+    button.setAttribute("aria-pressed", "true"); input.focus();
+  }
+  function close() {
+    if (!on) return;
+    on = false; panel.hidden = true; pane.classList.remove("is-circling");
+    button.setAttribute("aria-pressed", "false");
+    query = ""; input.value = ""; results.replaceChildren(); clearInk(); paint();
+  }
+
+  // ----- drawing the circle -----
+  const pt = (e) => { const r = ink.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  function clearInk() { ink.getContext("2d").clearRect(0, 0, ink.width, ink.height); ink.classList.remove("fade"); }
+  function stroke() {
+    const c = ink.getContext("2d"), k = ink.width / (ink.clientWidth || 1);
+    c.clearRect(0, 0, ink.width, ink.height);
+    c.lineCap = c.lineJoin = "round";
+    c.beginPath(); pts.forEach(([x, y], i) => (i ? c.lineTo(x * k, y * k) : c.moveTo(x * k, y * k)));
+    c.lineWidth = 8 * k; c.strokeStyle = "rgba(31,32,35,.25)"; c.stroke(); // soft edge so yellow shows on white
+    c.lineWidth = 5 * k; c.strokeStyle = "#ffe347"; c.stroke();
+  }
+  ink.addEventListener("pointerdown", (e) => {
+    if (!on || !v.vp) return;
+    e.preventDefault(); ink.setPointerCapture(e.pointerId); clearInk();
+    pts = [pt(e)]; stroke();
+  });
+  ink.addEventListener("pointermove", (e) => { if (pts) { pts.push(pt(e)); stroke(); } });
+  ink.addEventListener("pointerup", () => {
+    if (!pts) return;
+    const p = pts; pts = null;
+    ink.classList.add("fade"); setTimeout(() => { if (!pts) clearInk(); }, 450);
+    pick(p);
+  });
+  ink.addEventListener("pointercancel", () => { pts = null; clearInk(); });
+
+  async function pick(p) {
+    const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
+    let r = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+    if (r.x1 - r.x0 < 6 && r.y1 - r.y0 < 6) r = { ...r, x1: r.x0, line: r.y0, tap: true }; // a tap picks one word
+    else if (r.y1 - r.y0 < 14) r = { ...r, line: (r.y0 + r.y1) / 2 }; // a flat swipe picks the line it runs along
+    const words = wordsIn(await pageItems(v.page), v.vp, r);
+    if (!words) {
+      results.replaceChildren(h("p", { class: "help" }, "No words there. Pictures and scanned pages have no text to find."));
+      return;
+    }
+    input.value = words;
+    find(words);
+  }
+
+  // ----- finding -----
+  async function find(q) {
+    query = flat(q);
+    const my = ++run;
+    paint();
+    if (query.length < 2) { results.replaceChildren(); return; }
+    results.replaceChildren(h("p", { class: "help" }, "Searching"));
+    const lower = query.toLowerCase();
+    const pages = [];
+    for (let n = 1; n <= v.doc.numPages; n++) {
+      const text = flat((await pageItems(n)).map((i) => i.str).join(" "));
+      const low = text.toLowerCase();
+      const first = low.indexOf(lower);
+      let count = 0;
+      for (let at = first; at !== -1; at = low.indexOf(lower, at + lower.length)) count++;
+      if (count) pages.push({ n, count, before: text.slice(Math.max(0, first - 40), first),
+        hit: text.slice(first, first + query.length), after: text.slice(first + query.length, first + query.length + 40) });
+    }
+    const lib = (await api(`/papers?q=${encodeURIComponent(query)}`).catch(() => ({ papers: [] })))
+      .papers.filter((p) => p.id !== paperId);
+    if (my !== run) return; // a newer search started meanwhile
+    const total = pages.reduce((s, p) => s + p.count, 0);
+    const plural = (n, w) => `${n} ${w}${n === 1 ? "" : w.endsWith("h") ? "es" : "s"}`;
+    results.replaceChildren(...[
+      h("p", { class: "cs-sum" }, total ? `${plural(total, "match")} on ${plural(pages.length, "page")}` : "Not in this paper."),
+      pages.length ? h("ol", { class: "cs-pages" }, pages.map((p) => h("li", {},
+        h("button", { type: "button", class: "cs-hit", "data-page": p.n, onclick: () => { jump = true; go(p.n); } },
+          h("span", { class: "cs-pg num" }, `Page ${p.n}`, p.count > 1 ? h("span", { class: "quiet" }, ` ${p.count} times`) : null),
+          h("span", { class: "cs-snip" }, p.before && `…${p.before}`, h("mark", {}, p.hit), p.after && `${p.after}…`))))) : null,
+      lib.length ? h("div", { class: "cs-lib" }, h("p", { class: "cs-sum" }, "Also in your papers"),
+        lib.slice(0, 5).map((p) => h("a", { href: `#read/${p.id}`, class: "cs-paper" }, p.title))) : null,
+    ].filter(Boolean));
+    paint();
+  }
+
+  // Marks every match on the page you are looking at.
+  async function paint() {
+    hits.replaceChildren();
+    results.querySelectorAll(".cs-hit").forEach((b) => b.toggleAttribute("aria-current", Number(b.dataset.page) === v.page));
+    if (!query || !v.vp || !v.doc) return;
+    const n = v.page, vp = v.vp, lower = query.toLowerCase();
+    const items = await pageItems(n);
+    if (n !== v.page || vp !== v.vp) return; // the page changed while the text loaded
+    const mark = (b, x, w) => hits.append(h("i", { style: `left:${x}px;top:${b.y}px;width:${w}px;height:${b.h}px` }));
+    for (const it of items) {
+      const s = it.str.toLowerCase(), b = itemBox(it, vp);
+      let at = s.indexOf(lower);
+      if (at === -1) {
+        // a phrase broken across lines: mark the pieces
+        if (it.str.trim().length >= 4 && lower.includes(flat(s))) mark(b, b.x, b.w);
+        continue;
+      }
+      for (; at !== -1; at = s.indexOf(lower, at + lower.length)) mark(b, b.x + (b.w * at) / s.length, (b.w * lower.length) / s.length);
+    }
+    if (jump && hits.firstChild) { hits.firstChild.scrollIntoView({ block: "center", behavior: "smooth" }); }
+    jump = false;
+  }
+
+  return { button, panel, paint, close, isOpen: () => on };
 }
