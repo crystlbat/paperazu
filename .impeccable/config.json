@@ -14,6 +14,15 @@
         "value": "geist",
         "createdAt": "2026-11-06T08:10:45.591Z",
         "reason": "user brief: build prompt specifies Geist for body and Geist Mono for numbers"
+      },
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "static/index.html"
+        ],
+        "createdAt": "2026-11-06T08:45:21.744Z",
+        "reason": "controller: the only zero-offset glows are the lit LED dots of the dot-matrix buddy/device display (literal lit pixels, domain-appropriate), not decorative accents"
       }
     ]
   }

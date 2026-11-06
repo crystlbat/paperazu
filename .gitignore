@@ -6,3 +6,5 @@ __pycache__/
 .DS_Store
 .claude/worktrees/
 .impeccable/hook.cache.json
+.playwright-mcp/
+**/.DS_Store
