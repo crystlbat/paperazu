@@ -42,7 +42,7 @@ async function refreshChip() {
 function buddyOnStatus(now, before) {
   const toSettings = { label: "Open Settings", href: "#settings/connection" };
   if (now === "not_running") {
-    buddy.say("I cannot reach the model. Start Unsloth on your Mac, then I can help with primers and checks.",
+    buddy.say("I cannot reach the model. Start Unsloth on your Mac, then I can help with AI summaries and checks.",
       { mood: "worried", actions: [toSettings] });
   } else if (now === "wrong_key") {
     buddy.say("The model is running, but the API key is wrong. Paste the key that Unsloth shows.",
@@ -84,6 +84,7 @@ const STATUSES = [["all", "All"], ["not_started", "Not started"], ["in_progress"
   ["notes_done", "Notes done"], ["reflection_done", "Reflection done"]];
 const SORTS = [["date", "Presentation date"], ["opened", "Last opened"], ["title", "Title"], ["progress", "Progress"]];
 const PRIMER = { not_made: "Not made", making: "Making", ready: "Ready", failed: "Failed" };
+const AI_SUMMARY_TIP = "A short summary of the paper, written by the AI model on your Mac. It is split into the reading steps and stays closed until you write your own notes.";
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const daysFromToday = (iso) => Math.round((new Date(`${iso}T00:00`) - new Date(new Date().toDateString())) / 864e5);
@@ -220,8 +221,11 @@ function paperTable(papers, s, fw) {
   const next = papers.filter((p) => p.presentation_date && daysFromToday(p.presentation_date) >= 0)
     .sort((a, b) => a.presentation_date.localeCompare(b.presentation_date))[0];
   return h("table", { class: "papers" },
-    h("thead", {}, h("tr", {}, ["Paper", "Presentation", "Reflection", "Progress", "Primer", "Time spent", "Last opened", "Done", ""]
-      .map((t) => h("th", { scope: "col" }, t)))),
+    h("thead", {}, h("tr", {}, ["Paper", "Presentation", "Reflection", "Progress", "AI summary", "Time spent", "Last opened", "Done", ""]
+      .map((t) => t === "AI summary"
+        ? h("th", { scope: "col", title: AI_SUMMARY_TIP, "aria-describedby": "ai-summary-help" },
+          t, h("span", { id: "ai-summary-help", hidden: true }, AI_SUMMARY_TIP))
+        : h("th", { scope: "col" }, t)))),
     h("tbody", {}, papers.map((p) => paperRow(p, s, fw, p === next))));
 }
 
@@ -244,7 +248,7 @@ function paperRow(p, s, fw, isNext) {
     h("td", { "data-label": "Reflection", class: "num" }, p.reflection_no ? `${p.reflection_no} / ${s.reflections_target}` : h("span", { class: "quiet" }, "None")),
     h("td", { "data-label": "Progress" }, h("span", { class: "prog" }, progressBar(p.progress),
       h("span", { class: "num" }, `${p.steps_done} / ${p.progress.length}`))),
-    h("td", { "data-label": "Primer" }, h("span", { class: `primer ${p.primer_status}` }, PRIMER[p.primer_status])),
+    h("td", { "data-label": "AI summary" }, h("span", { class: `primer ${p.primer_status}` }, PRIMER[p.primer_status])),
     h("td", { "data-label": "Time spent", class: "num" }, fmtSpent(p.seconds)),
     h("td", { "data-label": "Last opened" }, ago(p.last_opened)),
     h("td", { "data-label": "Reflection done", class: "c-done" }, done),
@@ -259,7 +263,7 @@ function rowMenu(p, s) {
     h("summary", { "aria-label": `More actions for ${p.title}` }, "More"),
     h("div", { class: "menu-list" },
       h("button", { type: "button", onclick: () => detailsDialog(p, s, false) }, "Edit details"),
-      later("Make primer again", 5), later("Export Markdown", 7), later("Export reflection outline", 7),
+      later("Make AI summary again", 5), later("Export Markdown", 7), later("Export reflection outline", 7),
       h("hr", {}),
       h("button", { type: "button", class: "danger", onclick: () => deleteDialog(p) }, "Delete")));
 }
@@ -363,7 +367,7 @@ function deleteDialog(p) {
   const dlg = h("dialog", { class: "dialog narrow" },
     h("h2", {}, "Delete this paper?"),
     h("p", {}, h("strong", {}, p.title)),
-    h("p", { class: "quiet" }, "This deletes the PDF, your notes, the primer and the checks. You cannot undo it."),
+    h("p", { class: "quiet" }, "This deletes the PDF, your notes, the AI summary and the checks. You cannot undo it."),
     h("div", { class: "dactions" },
       h("button", { type: "button", class: "btn ghost", autofocus: true, onclick: () => dlg.close() }, "Keep it"),
       h("button", { type: "button", class: "btn danger", onclick: async () => {
@@ -444,7 +448,7 @@ function stepTip(st, pop) {
 
 // ---------- Settings ----------
 const SETTINGS_SECTIONS = [
-  ["connection", "Model connection"], ["generation", "Generation"], ["primer", "Primer"],
+  ["connection", "Model connection"], ["generation", "Generation"], ["primer", "AI summary"],
   ["checker", "Checker"], ["copy", "Copy detector"], ["framework", "Framework"],
   ["course", "Course and reflections"], ["timer", "Timer"], ["appearance", "Appearance"], ["data", "Data"],
 ];
@@ -464,6 +468,7 @@ async function renderSettings(section = "connection") {
   else body.append(
     h("h2", {}, SETTINGS_SECTIONS.find(([id]) => id === section)?.[1] ?? "Settings"),
     h("p", { class: "lede" }, "You can change these settings from phase 8."));
+  if (section === "primer") buddy.say(AI_SUMMARY_TIP, { mood: "idle", pop: false });
 }
 
 // Save one setting at once; show "Saved" or the error next to the control.
