@@ -419,7 +419,7 @@ async function renderReader(paperId) {
         h("h2", { class: "step-title" }, h("span", { class: "hl swipe" }, st.title))),
       h("div", { class: "budget" },
         h("div", { class: "row" }, h("span", {}, "Time budget"),
-          h("span", { class: "num" }, `00:00 / ${String(st.minutes).padStart(2, "0")}:00`)),
+          h("span", { class: "timer" }, `00:00 / ${String(st.minutes).padStart(2, "0")}:00`)),
         h("div", { class: "bar" }, h("i", {}))),
       h("ul", { class: "field-preview" }, st.fields.map((f) => h("li", {}, f.label,
         f.help ? h("span", { class: "help" }, f.help) : null))),
