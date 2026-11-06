@@ -200,7 +200,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .path li .title { font-size: var(--fs-title); font-weight: var(--fw-title); line-height: var(--lh-title); }
 
 /* ---------- reader ---------- */
-.page-read { display: grid; grid-template-columns: 232px minmax(0, 1fr) minmax(360px, 36%); grid-template-rows: minmax(0, 1fr); }
+.page-read { display: grid; grid-template-columns: 232px minmax(0, 1fr) 9px var(--nb-w, minmax(360px, 36%)); grid-template-rows: minmax(0, 1fr); }
 .rail { list-style: none; margin: 0; padding: 16px 12px; border-right: 1px solid var(--rule); overflow: auto; }
 .rail button {
   display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 10px;
@@ -252,7 +252,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .closed-title { font-family: var(--serif); font-size: 36px; line-height: 1.05; }
 
 /* Notebook: scrolling page of fields, fixed footer. */
-.notebook { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--rule); background: var(--sheet); }
+.notebook { display: flex; flex-direction: column; min-height: 0; background: var(--sheet); }
 .nb-body { flex: 1; min-height: 0; overflow: auto; padding: 28px 32px 40px; }
 .nb-foot {
   display: flex; align-items: center; gap: 12px; padding: 12px 32px; border-top: 1px solid var(--rule);
@@ -297,6 +297,74 @@ table.rows { width: 100%; border-collapse: collapse; }
 .old-fields dl { margin: 12px 0 0; }
 .old-fields dt { font-size: var(--fs-ui); font-weight: var(--fw-ui); color: var(--pencil); }
 .old-fields dd { margin: 2px 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ----- Reader, alive: the split, the step path, ruled lines, the written meter ----- */
+.split { position: relative; cursor: col-resize; background: var(--paper); touch-action: none; }
+.split::before { content: ""; position: absolute; inset: 0 4px; background: var(--rule); transition: background .15s, inset .15s; }
+.split::after { /* grip: three dots, centred */
+  content: ""; position: absolute; left: 50%; top: 50%; width: 5px; height: 25px; translate: -50% -50%; border-radius: 3px;
+  background: radial-gradient(circle, var(--pencil) 1.4px, transparent 1.8px) 0 0 / 5px 10px var(--paper);
+}
+.split:hover::before, .split:focus-visible::before, body.resizing .split::before { inset: 0 3px; background: var(--ink); }
+.split:focus-visible { outline: none; }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing .pdf-stage, body.resizing .notebook { pointer-events: none; }
+
+/* the rail is a path: a line joins each step to the next, inked once the step is done */
+.rail li.step { position: relative; }
+.rail li.step:has(+ li.step)::after {
+  content: ""; position: absolute; left: 19.25px; top: calc(50% + 13px); height: calc(100% - 26px); width: 1.5px;
+  background: var(--rule); transition: background .3s;
+}
+.rail li.step[data-state="done"]:has(+ li.step)::after { background: var(--ink); }
+.rail button.active { background: var(--sheet); box-shadow: 0 0 0 1px var(--rule), 0 6px 14px -10px rgb(20 22 25 / .45); }
+.rail button.active .circle:not(.done) { border-color: var(--ink); color: var(--ink); }
+
+.step-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; margin-top: 12px; }
+.look { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--pencil); font-size: var(--fs-ui); font-weight: var(--fw-ui); }
+.look-tag { color: var(--ink); background: var(--paper); border-radius: 999px; padding: 1px 10px; }
+.written { display: inline-flex; align-items: center; gap: 10px; color: var(--pencil); font-size: var(--fs-ui); font-weight: var(--fw-ui); }
+.written-dots { display: inline-flex; gap: 4px; }
+.written-dots i { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--pencil); transition: background .2s, border-color .2s, transform .2s; }
+.written-dots i.on { background: var(--ink); border-color: var(--ink); animation: pop .25s cubic-bezier(.3,.7,.2,1); }
+.written.all { color: var(--green); }
+.written.all .written-dots i { background: var(--green); border-color: var(--green); }
+
+/* fields: a notebook page, not a form. Writing sits on ruled lines; the field you are in gets a marker edge. */
+.nb-field { position: relative; transition: background .2s; }
+.nb-field::before {
+  content: ""; position: absolute; left: -32px; top: 14px; bottom: 14px; width: 4px; border-radius: 0 3px 3px 0;
+  background: var(--marker); transform: scaleY(0); transform-origin: top; transition: transform .22s cubic-bezier(.3,.7,.2,1);
+}
+.nb-field:focus-within::before { transform: scaleY(1); }
+.nb-field > label::after, .nb-field > legend::after { /* written mark */
+  content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 9px; vertical-align: .15em; border-radius: 50%;
+  background: var(--green); scale: 0; transition: scale .25s cubic-bezier(.3,1.6,.5,1);
+}
+.nb-field.is-filled > label::after, .nb-field.is-filled > legend::after { scale: 1; }
+.nb-field.is-text input, .nb-field.is-long textarea {
+  border: 0; border-radius: 0; padding: 0 2px; min-height: 0; background-color: transparent;
+  border-bottom: 1.5px solid var(--rule); box-shadow: none;
+}
+.nb-field.is-text input { height: 36px; }
+.nb-field.is-long textarea {
+  --line: 26px; line-height: var(--line); padding-top: 2px; min-height: calc(var(--line) * 2 + 4px); border-bottom: 0;
+  background: linear-gradient(transparent calc(var(--line) - 1px), var(--rule) calc(var(--line) - 1px)) 0 2px / 100% var(--line) local;
+}
+.nb-field.is-text input:hover { border-bottom-color: var(--pencil); }
+.nb-field.is-text input:focus-visible { box-shadow: none; border-bottom: 2px solid var(--ink); }
+.nb-field.is-long textarea:focus-visible { box-shadow: none; outline: none; }
+.nb-field.is-long:focus-within textarea { /* ink the lines while you write: the focus cue */
+  background-image: linear-gradient(transparent calc(var(--line) - 1.5px), var(--pencil) calc(var(--line) - 1.5px));
+}
+
+/* switching steps: the page settles in, piece by piece */
+.nb-body > * { animation: settle .38s cubic-bezier(.3,.7,.2,1) both; animation-delay: calc(min(var(--i, 0), 8) * 35ms); }
+@keyframes settle { from { opacity: 0; translate: 0 8px; } }
+@media (prefers-reduced-motion: reduce) {
+  .nb-body > *, .written-dots i.on { animation: none; }
+  .nb-field::before, .nb-field > label::after, .nb-field > legend::after, .split::before { transition: none; }
+}
 
 /* ---------- settings ---------- */
 .page-settings { display: grid; grid-template-columns: 248px minmax(0, 1fr); overflow: auto; }
@@ -363,6 +431,9 @@ table.rows { width: 100%; border-collapse: collapse; }
   .rail .active .label { white-space: nowrap; }
   .rail .divider { width: 1px; height: auto; margin: 6px 4px; }
   .notebook { min-height: auto; border-left: 0; border-top: 1px solid var(--rule); }
+  .split { display: none; }
+  .rail li.step::after { display: none; }
+  .nb-field::before { left: -20px; }
   .nb-body { flex: none; min-height: auto; overflow: visible; padding: 24px 20px 32px; }
   .nb-foot { position: sticky; bottom: 0; background: var(--sheet); padding: 10px 112px 10px 20px; }
   .step-title { font-size: 34px; }

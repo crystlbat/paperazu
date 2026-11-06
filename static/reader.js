@@ -65,13 +65,14 @@ async function renderReader(paperId) {
     body.replaceChildren(...notebook(st, notes[st.id], timer, () => queue.touch(st.id)));
     body.querySelectorAll("textarea").forEach(grow);
     body.scrollTop = 0;
+    [...body.children].forEach((el, i) => el.style.setProperty("--i", i)); // staggered entrance
     back.disabled = idx() === 0;
     next.disabled = idx() === fw.steps.length - 1;
     if (TIMER_AUTOSTART) timer.start();
     stepTip(st, pop);
   }
 
-  view.append(rail.el, pdf.el,
+  view.append(rail.el, pdf.el, splitter(view),
     h("section", { class: "notebook", "aria-label": "Notebook" }, body,
       h("footer", { class: "nb-foot" }, back, status, next)));
   open(current, !greeted.has("reader")); greeted.add("reader");
@@ -105,14 +106,16 @@ function stepRail(fw, notes, onPick) {
     const btn = h("button", { type: "button", onclick: () => onPick(st) },
       circle, h("span", { class: "label" }, st.title), h("span", { class: "num mins" }, `${st.minutes}m`));
     items[st.id] = { st, btn, circle };
-    el.append(h("li", {}, btn));
+    items[st.id].li = h("li", { class: "step" }, btn);
+    el.append(items[st.id].li);
   }
   el.append(h("li", { class: "divider", "aria-hidden": "true" }),
     h("li", {}, h("button", { type: "button", disabled: true, title: "Comes in a later phase" },
       h("span", { class: "circle" }, "R"), h("span", { class: "label" }, "Review"))));
   const paint = (id) => {
-    const { st, btn, circle } = items[id];
+    const { st, btn, circle, li } = items[id];
     circle.className = `circle ${notes[id].state}`;
+    li.dataset.state = notes[id].state;
     btn.setAttribute("aria-label", `Step ${st.n}, ${st.title}, ${st.minutes} minutes, ${STATE_LABEL[notes[id].state]}`);
   };
   const mark = (id) => Object.values(items).forEach(({ st, btn }) => {
@@ -224,16 +227,74 @@ function timerView(st, note, timer) {
 
 // ---------- notebook ----------
 function notebook(st, note, timer, changed) {
-  const set = (fid) => (value) => { note.fields[fid] = value; changed(); };
+  const meter = writtenMeter(st, note);
+  const set = (fid) => (value) => { note.fields[fid] = value; changed(); meter.paint(); };
+  const where = st.paper_hidden
+    ? h("span", { class: "look" }, "The paper stays closed for this step.")
+    : st.look_in.length ? h("span", { class: "look" }, "Look in", st.look_in.map((x) => h("span", { class: "look-tag" }, x)))
+    : h("span");
   return [
     h("div", { class: "step-head" },
       h("span", { class: "num n" }, `Step ${st.n}`),
       h("h2", { class: "step-title" }, h("span", { class: "hl swipe" }, st.title))),
+    h("div", { class: "step-meta" }, where, meter.el),
     timerView(st, note, timer),
     ...st.fields.map((f) => fieldView(st, f, note.fields[f.id], set(f.id))),
     gateView(st, note, changed),
     oldFields(st, note.fields),
   ].filter(Boolean);
+}
+
+const filled = (v) => (typeof v === "string" ? !!v.trim() : Array.isArray(v) ? v.some(filled) : !!v);
+
+// "2 of 5 written", with one dot per field.
+function writtenMeter(st, note) {
+  const dots = st.fields.map(() => h("i"));
+  const label = h("span", { class: "num" });
+  const el = h("span", { class: "written" }, h("span", { class: "written-dots", "aria-hidden": "true" }, dots), label);
+  const paint = () => {
+    const n = st.fields.filter((f) => filled(note.fields[f.id])).length;
+    dots.forEach((d, i) => d.classList.toggle("on", i < n));
+    label.textContent = `${n} of ${st.fields.length} written`;
+    el.classList.toggle("all", n === st.fields.length);
+  };
+  paint();
+  return { el, paint };
+}
+
+// Drag (or arrow keys) to trade width between the paper and the notes. Double-click resets.
+const NB_KEY = "reader-notes-width";
+function splitter(page) {
+  const el = h("div", { class: "split", role: "separator", tabindex: 0, "aria-orientation": "vertical",
+    "aria-label": "Notes width. Use the left and right arrow keys.", title: "Drag to resize. Double-click to reset." });
+  const notesWidth = () => page.lastElementChild.getBoundingClientRect().width;
+  const set = (w) => {
+    if (w == null) { page.style.removeProperty("--nb-w"); localStorage.removeItem(NB_KEY); return; }
+    const max = page.clientWidth - 232 - 320; // keep the rail and a usable paper
+    w = Math.round(Math.max(340, Math.min(max, w)));
+    page.style.setProperty("--nb-w", `${w}px`);
+    el.setAttribute("aria-valuenow", w);
+    localStorage.setItem(NB_KEY, w);
+  };
+  const saved = Number(localStorage.getItem(NB_KEY));
+  if (saved) set(saved);
+  el.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    document.body.classList.add("resizing");
+    const right = page.getBoundingClientRect().right;
+    const move = (ev) => set(right - ev.clientX);
+    const up = () => { el.removeEventListener("pointermove", move); document.body.classList.remove("resizing"); };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up, { once: true });
+    el.addEventListener("pointercancel", up, { once: true });
+  });
+  el.addEventListener("keydown", (e) => {
+    const d = { ArrowLeft: 32, ArrowRight: -32 }[e.key];
+    if (d) { e.preventDefault(); set(notesWidth() + d); }
+  });
+  el.addEventListener("dblclick", () => set(null));
+  return el;
 }
 
 function grow(t) {
@@ -261,12 +322,16 @@ function fieldView(st, f, value, set) {
   const id = `f-${st.id}-${f.id}`;
   const helpId = f.help ? `${id}-help` : null;
   const help = f.help ? h("p", { class: "help", id: helpId }, f.help) : null;
-  const control = FIELDS[f.type](f, value, set, id);
+  let wrap = null;
+  const control = FIELDS[f.type](f, value, (v) => { set(v); wrap.classList.toggle("is-filled", filled(v)); }, id);
   if (["text", "date", "long"].includes(f.type)) {
     if (helpId) control.setAttribute("aria-describedby", helpId);
-    return h("div", { class: "nb-field" }, h("label", { for: id }, f.label), help, control);
+    wrap = h("div", { class: `nb-field is-${f.type}` }, h("label", { for: id }, f.label), help, control);
+  } else {
+    wrap = h("fieldset", { class: `nb-field is-${f.type}`, "aria-describedby": helpId }, h("legend", {}, f.label), help, control);
   }
-  return h("fieldset", { class: "nb-field", "aria-describedby": helpId }, h("legend", {}, f.label), help, control);
+  wrap.classList.toggle("is-filled", filled(value));
+  return wrap;
 }
 
 function rowsField(f, v, set) {
@@ -371,7 +436,7 @@ function pdfViewer(url, hideBtn) {
   const msg = (text) => sheet.replaceChildren(h("p", { class: "pdf-msg" }, text));
 
   const onKey = (e) => {
-    if (e.altKey || e.ctrlKey || e.metaKey || e.target.closest?.("input, textarea, select, [contenteditable], dialog")) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.target.closest?.("input, textarea, select, [contenteditable], dialog, [role=separator]")) return;
     if (e.key === "ArrowLeft") go(v.page - 1);
     else if (e.key === "ArrowRight") go(v.page + 1);
   };
