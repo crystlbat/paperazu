@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 from pydantic import ValidationError
 
-from . import db, framework, library, llm, settings
+from . import db, framework, library, llm, notes, settings
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -110,6 +110,25 @@ def patch_paper(paper_id: str, patch: dict[str, Any] = Body(...)) -> dict[str, A
     if not library.update(paper_id, parsed):
         raise HTTPException(404, detail="This paper is not in the library.")
     return _paper_or_404(paper_id)
+
+
+@app.get("/papers/{paper_id}/notes")
+def get_notes(paper_id: str) -> dict[str, Any]:
+    result = notes.load(framework.load(), paper_id)
+    if result is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return result
+
+
+@app.put("/papers/{paper_id}/notes/{step_id}")
+async def put_notes(paper_id: str, step_id: str, request: Request) -> dict[str, Any]:
+    try:
+        result = notes.save(framework.load(), paper_id, step_id, await request.body())
+    except notes.NoteError as e:
+        raise HTTPException(422, detail={"errors": e.errors})
+    if result is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return result
 
 
 @app.delete("/papers/{paper_id}", status_code=204)
