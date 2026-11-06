@@ -14,6 +14,8 @@ const STATE_LABEL = { empty: "not started", partial: "started", done: "done" };
 let openReader = null;
 window.addEventListener("hashchange", () => { openReader?.leave(); openReader = null; });
 window.addEventListener("pagehide", () => openReader?.flushOnExit());
+// Mobile browsers may close a hidden tab without pagehide, so send the notes when the tab hides.
+document.addEventListener("visibilitychange", () => { if (document.hidden) openReader?.flushOnExit(); });
 
 async function renderReader(paperId) {
   const [fw, paper, saved] = await Promise.all([api("/framework"),
@@ -41,7 +43,7 @@ async function renderReader(paperId) {
     notes[id].state = r.state;
     done.textContent = `${r.steps_done} / ${r.total_steps}`;
     rail.paint(id);
-    if (r.state === "done" && was !== "done") {
+    if (r.state === "done" && was !== "done" && openReader === me) {
       const st = fw.steps.find((x) => x.id === id);
       buddy.say(`Step ${st.n}, ${st.title}, is done. Nice work.`, { mood: "happy" });
     }
@@ -74,9 +76,10 @@ async function renderReader(paperId) {
       h("footer", { class: "nb-foot" }, back, status, next)));
   open(current, !greeted.has("reader")); greeted.add("reader");
 
-  openReader = {
+  // Saves (and retries) can finish after you leave; Dot only speaks while this Reader is open.
+  const me = openReader = {
     leave() { timer.stop(); queue.flush(); pdf.destroy(); },
-    flushOnExit() { timer.stop(); queue.flushKeepalive(); },
+    flushOnExit() { queue.flushKeepalive(); },
   };
 }
 
@@ -140,12 +143,14 @@ function saveQueue(paperId, notes, statusEl, onSaved) {
     busy = true;
     try {
       while (dirty.size) {
+        // The step stays dirty until its PUT succeeds, so a keepalive send on exit still includes it.
         const id = dirty.values().next().value;
-        dirty.delete(id);
+        const sent = body(id);
         try {
-          onSaved(id, await api(url(id), { method: "PUT", body: body(id) }));
+          const r = await api(url(id), { method: "PUT", body: sent });
+          if (body(id) === sent) dirty.delete(id); // edited meanwhile: the loop sends it again
+          onSaved(id, r);
         } catch (e) {
-          dirty.add(id);
           if (e.status >= 400 && e.status < 500) {
             // retrying the same notes would fail again; the next edit tries again
             const msg = Object.values(e.body?.detail?.errors ?? {})[0];
@@ -159,12 +164,15 @@ function saveQueue(paperId, notes, statusEl, onSaved) {
       show("Saved", "ok");
     } finally { busy = false; }
   }
+  // Exit send: keepalive survives the page closing. The steps stay dirty and a normal save follows
+  // (the same notes twice is harmless), so a failed keepalive or a tab that comes back still saves.
   function flushKeepalive() {
+    if (!dirty.size) return;
     clearTimeout(wait);
     for (const id of dirty) {
-      fetch(url(id), { method: "PUT", keepalive: true, headers: { "Content-Type": "application/json" }, body: body(id) });
+      fetch(url(id), { method: "PUT", keepalive: true, headers: { "Content-Type": "application/json" }, body: body(id) }).catch(() => {});
     }
-    dirty.clear();
+    wait = setTimeout(flush, 1000);
   }
   return { touch, flush, flushKeepalive };
 }
