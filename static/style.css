@@ -393,7 +393,13 @@ body.resizing .pdf-stage, body.resizing .notebook { pointer-events: none; }
 .cs-lib { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--rule-soft); padding-top: 6px; }
 .cs-paper { font-size: var(--fs-ui); font-weight: var(--fw-ui); text-decoration: none; padding: 5px 10px; border-radius: 8px; }
 .cs-paper:hover { background: var(--paper); }
-@media (prefers-reduced-motion: reduce) { .pdf-hits i, .cs-panel { animation: none; } .pdf-ink { transition: none; } }
+.cs-explain { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.cs-answer:empty { display: none; }
+.cs-answer { display: flex; flex-direction: column; gap: 6px; width: 100%; background: var(--paper); border-radius: 10px; padding: 10px 12px; }
+.cs-ai-label { font-size: var(--fs-ui); font-weight: var(--fw-strong); color: var(--pencil); }
+.cs-ai-text { line-height: var(--lh-body); }
+.cs-wait { animation: blink 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pdf-hits i, .cs-panel, .cs-wait { animation: none; } .pdf-ink { transition: none; } }
 
 /* switching steps: the page settles in, piece by piece */
 .nb-body > * { animation: settle .38s cubic-bezier(.3,.7,.2,1) both; animation-delay: calc(min(var(--i, 0), 8) * 35ms); }

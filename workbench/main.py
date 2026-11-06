@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import unquote
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import db, framework, library, llm, notes, settings
 
@@ -129,6 +129,26 @@ async def put_notes(paper_id: str, step_id: str, request: Request) -> dict[str, 
     if result is None:
         raise HTTPException(404, detail="This paper is not in the library.")
     return result
+
+
+class ExplainIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    words: str = Field(min_length=1, max_length=300)
+    page: int = Field(1, ge=1)  # the page the words were marked on, 1-based
+
+
+@app.post("/papers/{paper_id}/explain")
+def explain(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Explains marked words with the whole paper as context. Runs on the local model only."""
+    try:
+        req = ExplainIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    paper = _paper_or_404(paper_id)
+    pages = library.page_texts(paper_id)
+    if pages is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return llm.explain(settings.get_all(), req.words.strip(), paper["title"], pages, req.page - 1)
 
 
 @app.delete("/papers/{paper_id}", status_code=204)

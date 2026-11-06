@@ -112,6 +112,15 @@ def create(pdf: bytes, filename: str) -> str:
     return paper_id
 
 
+def page_texts(paper_id: str) -> list[str] | None:
+    """The text of every page, read from the stored PDF. None if the paper is not there."""
+    path = db.PAPERS_DIR / f"{paper_id}.pdf"
+    if not paper_id.isalnum() or not path.exists():
+        return None
+    with pymupdf.open(path) as doc:
+        return [page.get_text() for page in doc]
+
+
 # ---------- progress ----------
 
 def _filled(value: Any) -> bool:

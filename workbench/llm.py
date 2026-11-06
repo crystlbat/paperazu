@@ -1,9 +1,11 @@
 """Talk to the Unsloth (llama-server) OpenAI-compatible endpoint."""
+import re
 import time
 from typing import Any
 
 from openai import APIConnectionError, APIError, APIStatusError, AuthenticationError, OpenAI
 
+from . import context
 from .settings import Settings
 
 
@@ -47,3 +49,48 @@ def test_connection(s: Settings) -> dict[str, Any]:
         return {"ok": False, "error": e.message}
     return {"ok": True, "model": r.model, "reply": (r.choices[0].message.content or "").strip(),
             "seconds": round(time.perf_counter() - start, 2)}
+
+
+EXPLAIN_SYSTEM = (
+    "You help a student read a research paper. The student marked some words. Explain what they mean "
+    "as they are used in this paper, in simple English, in 3 to 5 short sentences. Say what the words "
+    "mean and why they matter here. Do not summarize the paper's results. If the paper does not define "
+    "them, say so and give the usual meaning. No headings, no lists."
+)
+
+
+def _strip_thinking(text: str) -> str | None:
+    """Drop <think> blocks some models print. None if the model never finished thinking."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    return None if "<think>" in text else text.strip()
+
+
+def explain(s: Settings, words: str, title: str, pages: list[str], page: int) -> dict[str, Any]:
+    """Explain marked words with the whole paper as context (or as much as fits the budget).
+    `page` is the 0-based page the words were marked on."""
+    page = min(max(page, 0), max(len(pages) - 1, 0))
+    question = f'Words I marked on page {page + 1}: "{words}"\nWhat do they mean in this paper?'
+    budget = (s.max_context_tokens - s.max_output_tokens
+              - context.tokens(EXPLAIN_SYSTEM + question + title) - 64 * len(pages) - 200)
+    keep = context.fit_pages(pages, budget, page) if pages else []
+    room = int(budget * context.CHARS_PER_TOKEN)
+    paper = "\n\n".join(f"--- Page {i + 1} ---\n{pages[i].strip()}" for i in keep)[:max(room, 0)]
+    start = time.perf_counter()
+    try:
+        r = client(s).chat.completions.create(
+            model=pick_model(s) or "default",
+            messages=[{"role": "system", "content": EXPLAIN_SYSTEM},
+                      {"role": "user", "content": f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\n{question}"}],
+            max_tokens=s.max_output_tokens, temperature=s.temperature,
+        )
+    except AuthenticationError:
+        return {"ok": False, "error": "Wrong API key. Check it in Settings."}
+    except APIConnectionError:
+        return {"ok": False, "error": "Could not reach the model. Is Unsloth running?"}
+    except APIError as e:
+        return {"ok": False, "error": e.message}
+    text = _strip_thinking(r.choices[0].message.content or "")
+    if not text:
+        return {"ok": False, "error": "The model ran out of room before it answered. Raise Max output tokens in Settings."}
+    return {"ok": True, "text": text, "pages": [keep[0] + 1, keep[-1] + 1] if keep else [],
+            "whole": len(keep) == len(pages), "total": len(pages), "seconds": round(time.perf_counter() - start, 1)}

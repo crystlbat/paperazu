@@ -602,8 +602,14 @@ function circleSearch({ v, go, ink, hits, pane, paperId }) {
       .papers.filter((p) => p.id !== paperId);
     if (my !== run) return; // a newer search started meanwhile
     const total = pages.reduce((s, p) => s + p.count, 0);
+    // the page the words are on: the one you are looking at if it has them, else the first match
+    const onPage = pages.find((p) => p.n === v.page)?.n ?? pages[0]?.n ?? v.page;
+    const answer = h("div", { class: "cs-answer" });
+    const ask = h("button", { type: "button", class: "btn small-btn cs-ask",
+      onclick: () => explainIt(query, onPage, answer, ask) }, "Explain this");
     const plural = (n, w) => `${n} ${w}${n === 1 ? "" : w.endsWith("h") ? "es" : "s"}`;
     results.replaceChildren(...[
+      h("div", { class: "cs-explain" }, ask, answer),
       h("p", { class: "cs-sum" }, total ? `${plural(total, "match")} on ${plural(pages.length, "page")}` : "Not in this paper."),
       pages.length ? h("ol", { class: "cs-pages" }, pages.map((p) => h("li", {},
         h("button", { type: "button", class: "cs-hit", "data-page": p.n, onclick: () => { jump = true; go(p.n); } },
@@ -613,6 +619,27 @@ function circleSearch({ v, go, ink, hits, pane, paperId }) {
         lib.slice(0, 5).map((p) => h("a", { href: `#read/${p.id}`, class: "cs-paper" }, p.title))) : null,
     ].filter(Boolean));
     paint();
+  }
+
+  // Asks the local model what the words mean. The server sends it the whole paper (or what fits).
+  async function explainIt(words, page, box, btn) {
+    btn.disabled = true;
+    box.replaceChildren(h("p", { class: "help cs-wait" }, "Reading the whole paper. This can take a minute."));
+    buddy.mood("think");
+    try {
+      const r = await api(`/papers/${paperId}/explain`, { method: "POST", body: JSON.stringify({ words, page }) });
+      box.replaceChildren(...(r.ok ? [
+        h("p", { class: "cs-ai-label" }, "AI explanation"),
+        h("p", { class: "cs-ai-text" }, r.text),
+        h("p", { class: "help" }, r.whole
+          ? `Your model read the whole paper (${r.total} pages) in ${r.seconds} seconds.`
+          : `The paper is too long for your model's context, so it read pages ${r.pages[0]} to ${r.pages[1]} of ${r.total}.`),
+      ] : [h("p", { class: "status err" }, r.error)]));
+    } catch {
+      box.replaceChildren(h("p", { class: "status err" }, "Could not ask the model. Is the app still running?"));
+    } finally {
+      btn.disabled = false; buddy.mood("idle");
+    }
   }
 
   // Marks every match on the page you are looking at.
