@@ -420,71 +420,7 @@ function deleteDialog(p) {
   dlg.showModal();
 }
 
-// ---------- Reader ----------
-async function renderReader(paperId) {
-  const [fw, paper] = await Promise.all([api("/framework"),
-    api(`/papers/${paperId}?open=true`).catch(() => null)]);
-  if (!paper) {
-    view.className = "page page-library";
-    view.append(h("div", { class: "library" }, h("h1", {}, "Paper not found"),
-      h("p", { class: "quiet" }, "This paper is not in the library. It may have been deleted. ",
-        h("a", { href: "#library" }, "Go to the Library"), ".")));
-    return;
-  }
-  let current = fw.steps[0].id;
-
-  $("#page-extra").append(
-    h("a", { href: "#library", class: "paper-title", title: "Back to the Library" }, paper.title),
-    h("span", { class: "quiet nowrap" }, h("span", { class: "num" }, `${paper.steps_done} / ${fw.steps.length}`), " steps done"),
-    h("button", { class: "btn ghost", type: "button", disabled: true }, "Hide paper"));
-
-  const rail = h("ol", { class: "rail", "aria-label": "Reading steps" });
-  const notebook = h("section", { class: "notebook" });
-
-  function drawRail() {
-    rail.replaceChildren(
-      ...fw.steps.map((st, i) => h("li", {},
-        h("button", { type: "button", class: st.id === current ? "active" : "",
-          "aria-current": st.id === current ? "step" : false,
-          onclick: () => { current = st.id; drawRail(); drawNotebook(); stepTip(st, true); } },
-          h("span", { class: `circle ${paper.progress[i] ?? ""}` }, String(st.n)),
-          h("span", { class: "label" }, st.title),
-          h("span", { class: "num mins" }, `${st.minutes}m`)))),
-      h("li", { class: "divider", "aria-hidden": "true" }),
-      h("li", {}, h("button", { type: "button", disabled: true },
-        h("span", { class: "circle" }, "R"), h("span", { class: "label" }, "Review"))));
-  }
-
-  function drawNotebook() {
-    const st = fw.steps.find((x) => x.id === current);
-    notebook.replaceChildren(
-      h("div", { class: "step-head" },
-        h("span", { class: "num n" }, `Step ${st.n}`),
-        h("h2", { class: "step-title" }, h("span", { class: "hl swipe" }, st.title))),
-      h("div", { class: "budget" },
-        h("div", { class: "row" }, h("span", {}, "Time budget"),
-          h("span", { class: "timer" }, `00:00 / ${String(st.minutes).padStart(2, "0")}:00`)),
-        h("div", { class: "bar" }, h("i", {}))),
-      h("ul", { class: "field-preview" }, st.fields.map((f) => h("li", {}, f.label,
-        f.help ? h("span", { class: "help" }, f.help) : null))),
-      h("p", { class: "quiet small" }, "You can write in these fields from phase 3."));
-  }
-
-  drawRail(); drawNotebook();
-  stepTip(fw.steps[0], !greeted.has("reader")); greeted.add("reader");
-  view.append(rail,
-    h("section", { class: "pdf-pane" },
-      h("div", { class: "ghost-page" }, h("p", {}, "The PDF shows here from phase 3."))),
-    notebook);
-}
-
-function stepTip(st, pop) {
-  const parts = [`Step ${st.n}, ${st.title}. You have ${st.minutes} ${st.minutes === 1 ? "minute" : "minutes"}.`];
-  if (st.paper_hidden) parts.push("Close the paper and explain it out loud, as if to a friend.");
-  else if (st.look_in.length) parts.push(`Look in the ${st.look_in.join(", ")}.`);
-  if (st.gate.length) parts.push(`Before you move on: ${st.gate[0]}`);
-  buddy.say(parts.join(" "), { mood: st.paper_hidden ? "think" : "idle", pop });
-}
+// The Reader lives in reader.js.
 
 // ---------- Settings ----------
 const SETTINGS_SECTIONS = [
