@@ -23,6 +23,15 @@
         ],
         "createdAt": "2026-11-06T08:45:21.744Z",
         "reason": "controller: the only zero-offset glows are the lit LED dots of the dot-matrix buddy/device display (literal lit pixels, domain-appropriate), not decorative accents"
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "static/index.html"
+        ],
+        "createdAt": "2026-11-06T09:36:03.731Z",
+        "reason": "every blink is tied to a live state: model check in progress, papers being embedded, or the model server down / wrong key. None loop while idle."
       }
     ]
   }
