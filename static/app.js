@@ -29,12 +29,14 @@ let lastStatus = { status: "unknown", models: [] };
 async function refreshChip() {
   chip.dataset.status = "checking";
   chipLabel.textContent = "Checking model";
+  paintConn();
   try { lastStatus = await api("/model/status"); }
   catch { lastStatus = { status: "error", label: "App error", models: [] }; }
   const before = chip.dataset.prev;
   chip.dataset.status = chip.dataset.prev = lastStatus.status;
   chipLabel.textContent = chip.title = lastStatus.label;
   buddy.status(lastStatus.status);
+  paintConn();
   if (lastStatus.status !== before) buddyOnStatus(lastStatus.status, before);
   return lastStatus;
 }
@@ -115,9 +117,12 @@ async function renderLibrary() {
   const [s, fw, list] = await Promise.all([api("/settings"), api("/framework"), loadPapers()]);
   const page = h("div", { class: "library" });
   view.append(page);
-  const draw = (data) => page.replaceChildren(libHead(data, s),
-    data.total ? libBody(data, s, fw) : libEmpty(fw));
-  draw(list);
+  // The agenda shows every dated paper, even when a filter or search narrows the list.
+  const draw = async (data) => {
+    const all = lib.q || lib.status !== "all" ? (await api("/papers")).papers : data.papers;
+    page.replaceChildren(libHead(data, s, all), data.total ? libBody(data, s, fw) : libEmpty(fw));
+  };
+  await draw(list);
   enablePageDrop(page);
   libraryGreeting(list);
   libRedraw = async () => draw(await loadPapers());
@@ -128,8 +133,7 @@ function libraryGreeting(data) {
   if (!data.total) {
     return greet("lib-empty", "Hi, I am Dot. Drop your first PDF anywhere on this page. I will read the title and authors for you.", { mood: "happy" });
   }
-  const next = data.papers.filter((p) => p.presentation_date && daysFromToday(p.presentation_date) >= 0)
-    .sort((a, b) => a.presentation_date.localeCompare(b.presentation_date))[0];
+  const next = nextTalk(data.papers);
   if (next) {
     const left = next.progress.length - next.steps_done;
     greet("lib", `Your next talk is "${next.title}", ${relDays(next.presentation_date)}. ` +
@@ -141,15 +145,43 @@ function libraryGreeting(data) {
   }
 }
 
+const nextTalk = (papers) => papers.filter((p) => p.presentation_date && daysFromToday(p.presentation_date) >= 0)
+  .sort((a, b) => a.presentation_date.localeCompare(b.presentation_date))[0];
+
 function loadPapers() {
   return api(`/papers?${new URLSearchParams(lib)}`);
 }
 
-function libHead(data, s) {
+function libHead(data, s, all) {
   return h("header", { class: "lib-head" },
     h("h1", {}, "Library"),
     h("span", { class: "stat" }, h("span", { class: "dotnum" }, String(data.total)), data.total === 1 ? "paper" : "papers"),
-    h("span", { class: "stat" }, h("span", { class: "dotnum" }, `${data.reflections_done}/${s.reflections_target}`), "reflections done"));
+    h("span", { class: "stat" }, h("span", { class: "dotnum" }, `${data.reflections_done}/${s.reflections_target}`), "reflections done"),
+    data.total ? agenda(all) : null);
+}
+
+// The next 14 days as a dot-matrix strip: a lit column is a talk, the next talk wears the marker.
+let agendaPlayed = false;
+function agenda(papers) {
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const byDay = Object.groupBy(papers.filter((p) => p.presentation_date), (p) => p.presentation_date);
+  const next = nextTalk(papers);
+  const days = Array.from({ length: 14 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() + i); return d; });
+  const inRange = days.reduce((n, d) => n + (byDay[iso(d)]?.length ?? 0), 0);
+  const summary = !next ? "No talks with a date coming up."
+    : `${inRange ? plural(inRange, "talk") : "No talks"} in this window. Next talk ${fmtDate(next.presentation_date)}, ${relDays(next.presentation_date)}.`;
+  const intro = !agendaPlayed; agendaPlayed = true;
+  return h("div", { class: `agenda${intro ? " intro" : ""}` },
+    h("ol", { class: "agenda-days", "aria-hidden": "true" }, days.map((d, i) => {
+      const talks = byDay[iso(d)] ?? [];
+      const isNext = next && next.presentation_date === iso(d);
+      return h("li", { class: [i === 0 && "today", talks.length && "talk", isNext && "next"].filter(Boolean).join(" "),
+        style: `--i:${i}`, title: [fmtDate(iso(d)), ...talks.map((p) => p.title)].join("\n") },
+        h("span", { class: "wd" }, d.toLocaleDateString("en-GB", { weekday: "narrow" })),
+        h("span", { class: "col" }, h("i"), h("i"), h("i"), h("i")),
+        h("span", { class: "dn" }, h("span", { class: isNext ? "hl" : "" }, String(d.getDate()))));
+    })),
+    h("p", { class: "agenda-cap" }, h("span", { class: "agenda-label" }, "Next 14 days"), h("span", { class: "quiet" }, summary)));
 }
 
 function filePicker() {
@@ -165,6 +197,7 @@ function libEmpty(fw) {
     h("div", { class: "sheet-drop", "data-drop": "" },
       h("h2", {}, "Add the first paper you need to read."),
       h("p", { class: "quiet" }, "Drop a PDF on this page, or choose one from your Mac."),
+      dropGlyph(),
       h("div", { class: "actions" },
         h("button", { class: "btn", type: "button", onclick: () => picker.click() }, "Choose PDF"),
         h("span", { class: "quiet small upload-msg", "aria-live": "polite" }), picker)),
@@ -177,6 +210,14 @@ function libEmpty(fw) {
         h("span", {}, h("span", { class: "title" }, st.title),
           st.look_in.length ? h("span", { class: "look" }, `  in ${st.look_in.join(", ")}`) : null),
         h("span", { class: "num quiet" }, `${st.minutes} min`))))));
+}
+
+// A dot-matrix arrow into a tray. It drops one row while you hover or drag a file over the page.
+const DROP = [".....#.....", ".....#.....", ".....#.....", "..#..#..#..", "...#.#.#...", "....###....", ".....#.....",
+  "...........", "#.........#", "###########"];
+function dropGlyph() {
+  return h("span", { class: "dm", "aria-hidden": "true" }, DROP.flatMap((line, y) =>
+    [...line].map((c) => h("i", { class: c === "#" ? (y < 7 ? "a" : "t") : "" }))));
 }
 
 function libBody(data, s, fw) {
@@ -218,8 +259,7 @@ function paperTable(papers, s, fw) {
     return h("p", { class: "none quiet" }, lib.q ? `No papers match "${lib.q}".` : "No papers with this status.");
   }
   // "You are here" in the Library: the next presentation coming up.
-  const next = papers.filter((p) => p.presentation_date && daysFromToday(p.presentation_date) >= 0)
-    .sort((a, b) => a.presentation_date.localeCompare(b.presentation_date))[0];
+  const next = nextTalk(papers);
   return h("table", { class: "papers" },
     h("thead", {}, h("tr", {}, ["Paper", "Presentation", "Reflection", "Progress", "AI summary", "Time spent", "Last opened", "Done", ""]
       .map((t) => t === "AI summary"
@@ -495,7 +535,33 @@ function row(label, control, status, extra) {
     h("div", { class: "control" }, control, extra), status);
 }
 
+// The connection display: a small graphite device, like Dot. It answers "can the app talk to the model, and how fast?"
+const conn = { seconds: null, failed: false, model: "" };
+const CONN_HINT = { not_running: "Start Unsloth on your Mac.", wrong_key: "Paste the key that Unsloth shows.",
+  error: "The server sent an error.", checking: "Asking the server", unknown: "Asking the server" };
+function paintConn(animate = false) {
+  const panel = $("#conn-panel");
+  if (!panel) return;
+  const status = chip.dataset.status || "unknown";
+  const ready = status === "ready";
+  const sec = ready ? conn.seconds : null;
+  const bars = sec == null ? 0 : sec < 1 ? 5 : sec < 2 ? 4 : sec < 4 ? 3 : sec < 8 ? 2 : 1;
+  panel.dataset.status = status;
+  panel.classList.toggle("lit", animate);
+  panel.replaceChildren(
+    h("span", { class: "conn-led", "aria-hidden": "true" }),
+    h("div", { class: "conn-text" },
+      h("p", { class: "conn-label" }, status === "checking" ? "Checking model" : lastStatus.label || "Checking model"),
+      h("p", { class: "conn-sub" }, ready ? (conn.model || lastStatus.models[0] || "First model the server lists") : CONN_HINT[status] ?? "")),
+    h("div", { class: "conn-meter" },
+      h("span", { class: "conn-bars", "aria-hidden": "true" }, [1, 2, 3, 4, 5].map((n) =>
+        h("span", { class: n <= bars ? "on" : "", style: `--i:${n}` }, Array.from({ length: n }, () => h("i"))))),
+      h("span", { class: "conn-num" }, h("span", { class: "dotnum" }, sec == null ? "--" : `${sec.toFixed(1)}s`),
+        h("span", { class: "conn-sub" }, sec != null ? "Answer time" : conn.failed ? "Test failed" : ready ? "Not tested yet" : "No answer"))));
+}
+
 function drawConnection(body, s) {
+  conn.model = s.model_name;
   const urlStatus = h("span", { class: "status" });
   const keyStatus = h("span", { class: "status" });
   const modelStatus = h("span", { class: "status" });
@@ -522,7 +588,7 @@ function drawConnection(body, s) {
   onConn(url, "base_url", urlStatus);
   onConn(key, "api_key", keyStatus);
   model.addEventListener("change", async () => {
-    if (await saveSetting("model_name", model.value, modelStatus)) s.model_name = model.value;
+    if (await saveSetting("model_name", model.value, modelStatus)) { s.model_name = conn.model = model.value; paintConn(); }
   });
 
   const result = h("div", { class: "test-result", "aria-live": "polite" });
@@ -533,6 +599,8 @@ function drawConnection(body, s) {
     try {
       const r = await api("/settings/test-connection", { method: "POST" });
       result.classList.add(r.ok ? "ok" : "err");
+      Object.assign(conn, { seconds: r.ok ? r.seconds : null, failed: !r.ok });
+      paintConn(r.ok);
       result.replaceChildren(...(r.ok
         ? [`Connected to ${r.model}. It answered in `, h("span", { class: "num" }, `${r.seconds} s`), "."]
         : [r.error]));
@@ -545,10 +613,12 @@ function drawConnection(body, s) {
   body.append(
     h("h2", {}, "Model connection"),
     h("p", { class: "lede" }, "Unsloth shows the URL and API key when it starts. Paste them here. The key stays in the database on this Mac."),
+    h("div", { id: "conn-panel", class: "conn-panel", role: "group", "aria-label": "Connection status" }),
     row("Base URL", url, urlStatus),
     row("API key", key, keyStatus, showKey),
     row("Model", model, modelStatus, refresh),
     h("div", { class: "test-row" }, test, result));
+  paintConn();
   fillModels();
 }
 

@@ -14,6 +14,9 @@
   --redpen: #b4432f;
   --green: #2f7a57;
   --amber: #8a5f00;
+  /* the graphite device (Dot, the connection display). Text on it is fixed hex.
+     device-ink #f4f4ef on #1c1d20 15.28, on dark #17181b 16.09; device-dim #b9bcc2 8.86 / 9.33 */
+  --device: #1c1d20; --device-ink: #f4f4ef; --device-dim: #b9bcc2; --device-off: rgb(255 255 255 / .1);
   --serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
   --sans: "Geist", ui-sans-serif, system-ui, sans-serif;
   --mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
@@ -46,7 +49,7 @@
     --paper: #2a2d31; --sheet: #33363b; --ink: #f2f2ee; --pencil: #c3c6cc;
     --rule: #50545b; --rule-soft: #41444a; --desk: #222428; --select: #3f4248;
     --redpen: #ff9c87; --green: #8ad6ac; --amber: #f0c25e;
-    --dot: rgb(255 255 255 / .07);
+    --dot: rgb(255 255 255 / .07); --device: #17181b;
     color-scheme: dark;
   }
 }
@@ -141,6 +144,24 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .lib-head .stat { color: var(--pencil); display: inline-flex; align-items: baseline; gap: 8px; }
 .dotnum { font-family: "Doto", var(--mono); font-weight: 800; font-size: 40px; line-height: 1; color: var(--ink); letter-spacing: .02em; }
 
+/* Next 14 days. Faint dot = free day, lit column = talk, marker = next talk, ringed dots = today. */
+.agenda { flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 12px 32px; margin-top: 22px; }
+.agenda-cap { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-ui); font-weight: var(--fw-ui); flex: 1 1 220px; max-width: 46ch; }
+.agenda-label { font-weight: var(--fw-strong); }
+.agenda-days { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(14, minmax(0, 26px)); gap: 4px; }
+.agenda-days li { display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--pencil); }
+.agenda-days .col { display: flex; flex-direction: column; gap: 3px; padding: 3px 0; }
+.agenda-days .col i { width: 6px; height: 6px; border-radius: 50%; background: var(--rule); }
+.agenda-days .today .col i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--pencil); }
+.agenda-days .talk .col i { background: var(--ink); box-shadow: none; }
+.agenda-days .dn { font-size: var(--fs-ui); font-weight: var(--fw-ui); }
+.agenda-days .today .dn, .agenda-days .talk .dn { color: var(--ink); font-weight: var(--fw-strong); }
+.agenda-days .next .dn .hl { color: var(--on-marker); background-size: 100% 100%; padding: 1px .32em; margin: 0; }
+.agenda.intro .col i { animation: dot-on .3s cubic-bezier(.3,.7,.2,1) both; animation-delay: calc(var(--i) * 40ms); }
+.agenda.intro .next .hl { animation: swipe .38s cubic-bezier(.3,.7,.2,1) .6s both; }
+@keyframes dot-on { from { opacity: 0; transform: scale(.3); } }
+@media (prefers-reduced-motion: reduce) { .agenda.intro .col i, .agenda.intro .next .hl { animation: none; } }
+
 .lib-empty { display: grid; grid-template-columns: minmax(280px, 400px) 1fr; gap: 64px; padding-top: 40px; align-items: start; }
 
 /* A blank page with a folded corner. Drop the PDF on it. */
@@ -157,6 +178,14 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   background: linear-gradient(225deg, var(--paper) 50%, var(--rule) 50%, var(--rule-soft));
 }
 .sheet-drop h2 { font-size: 34px; max-width: 12ch; }
+/* dot-matrix drop glyph: the arrow drops a row and turns ink while a file is over the page */
+.dm { display: grid; grid-template-columns: repeat(11, 6px); gap: 3px; margin: auto 0; padding: 14px 0; align-self: center; }
+.dm i { width: 6px; height: 6px; border-radius: 50%; background: var(--rule-soft); }
+.dm i.a, .dm i.t { background: var(--pencil); }
+.dm i.a { transition: transform .22s cubic-bezier(.3,.7,.2,1), background .22s; }
+.sheet-drop:hover .dm i.a, .library.dragging .dm i.a { background: var(--ink); transform: translateY(9px); }
+.library.dragging .dm i.t { background: var(--ink); }
+@media (prefers-reduced-motion: reduce) { .dm i.a { transition: none; } .sheet-drop:hover .dm i.a, .library.dragging .dm i.a { transform: none; } }
 .sheet-drop .actions { margin-top: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .sheet-drop.over { border-color: var(--ink); transform: rotate(-.6deg); }
 
@@ -222,6 +251,29 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .field .status { grid-column: 2; font-size: var(--fs-ui); min-height: 0; }
 .status.ok { color: var(--green); }
 .status.err { color: var(--redpen); }
+/* Connection display: LED + status, then a dot signal meter for the last test's answer time. */
+.conn-panel {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 0 0 28px; padding: 18px 22px;
+  background: var(--device); color: var(--device-ink); border-radius: 18px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / .06) inset, 0 14px 30px -18px rgb(10 10 12 / .6);
+}
+.conn-led { width: 9px; height: 9px; border-radius: 50%; background: var(--device-off); flex: none; align-self: flex-start; margin-top: 7px; }
+.conn-panel[data-status="ready"] .conn-led { background: #6fd39b; box-shadow: 0 0 8px #6fd39b; }
+.conn-panel[data-status="not_running"] .conn-led, .conn-panel[data-status="error"] .conn-led { background: #ff5a4a; box-shadow: 0 0 8px #ff5a4a; }
+.conn-panel[data-status="wrong_key"] .conn-led { background: #f0c25e; box-shadow: 0 0 8px #f0c25e; }
+.conn-text { flex: 1 1 200px; min-width: 0; }
+.conn-label { font-size: var(--fs-title); font-weight: var(--fw-title); line-height: var(--lh-title); }
+.conn-sub { display: block; color: var(--device-dim); font-size: var(--fs-ui); font-weight: var(--fw-ui); overflow-wrap: anywhere; }
+.conn-meter { display: flex; align-items: flex-end; gap: 16px; }
+.conn-bars { display: flex; align-items: flex-end; gap: 4px; }
+.conn-bars > span { display: flex; flex-direction: column-reverse; gap: 3px; }
+.conn-bars i { width: 6px; height: 6px; border-radius: 50%; background: var(--device-off); }
+.conn-bars .on i { background: var(--device-ink); box-shadow: 0 0 4px rgb(255 255 255 / .35); }
+.conn-panel.lit .conn-bars .on i { animation: dot-on .3s cubic-bezier(.3,.7,.2,1) both; animation-delay: calc(var(--i) * 70ms); }
+@media (prefers-reduced-motion: reduce) { .conn-panel.lit .conn-bars .on i { animation: none; } }
+.conn-num { display: flex; flex-direction: column; min-width: 96px; }
+.conn-num .dotnum { color: var(--device-ink); font-size: 32px; }
+
 .test-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 24px; padding-left: 160px; }
 .test-result { font-size: var(--fs-ui); font-weight: var(--fw-ui); }
 .test-result.ok { color: var(--green); }
@@ -238,12 +290,14 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .lib-empty { grid-template-columns: 1fr; gap: 40px; }
   .sheet-drop { aspect-ratio: auto; min-height: 320px; }
   .page-read, .page-settings { grid-template-columns: minmax(0, 1fr); }
+  .page-settings { grid-template-rows: max-content; align-content: start; } /* keep the scrolling submenu from being squashed */
   .submenu { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--rule); padding: 12px 16px; scrollbar-width: none; }
   .submenu a { white-space: nowrap; }
   .settings-body { padding: 28px 20px; }
   .field { grid-template-columns: minmax(0, 1fr); }
   .field .status { grid-column: 1; }
   .test-row { padding-left: 0; }
+  .conn-meter { padding-left: 25px; }
 }
 @media (max-width: 480px) {
   .topbar nav { gap: 12px; }
@@ -359,7 +413,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .buddy > * { pointer-events: auto; }
 .buddy-face {
   position: relative; border: 0; cursor: pointer; padding: 11px 12px;
-  background: #1c1d20; border-radius: 22px;
+  background: var(--device); border-radius: 22px;
   box-shadow: 0 0 0 1px rgb(255 255 255 / .06) inset, 0 14px 30px -14px rgb(10 10 12 / .6);
   animation: float 5s ease-in-out infinite;
 }
@@ -392,7 +446,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .buddy-actions:empty { display: none; }
 .small-btn { padding: 4px 10px; font-size: var(--fs-ui); text-decoration: none; }
 @media (prefers-color-scheme: dark) {
-  .buddy-face { background: #17181b; box-shadow: 0 0 0 1px rgb(255 255 255 / .12) inset, 0 14px 30px -14px rgb(0 0 0 / .7); }
+  .buddy-face { box-shadow: 0 0 0 1px rgb(255 255 255 / .12) inset, 0 14px 30px -14px rgb(0 0 0 / .7); }
 }
 @media (prefers-reduced-motion: reduce) { .buddy-face, .buddy-bubble { animation: none; } }
 @media (max-width: 480px) { .buddy { right: 12px; bottom: 12px; } }
