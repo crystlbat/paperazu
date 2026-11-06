@@ -14,7 +14,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import db, framework, graph, library, llm, notes, settings
+from . import db, framework, graph, library, llm, notes, settings, themes
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -24,6 +24,7 @@ PORT = int(os.environ.get("PORT", "8765"))
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     db.init()
+    library.pick_missing_templates()
     yield
 
 
@@ -39,8 +40,21 @@ async def no_stale_assets(request: Request, call_next: Any) -> Response:
 
 
 @app.get("/framework")
-def get_framework() -> dict[str, Any]:
-    return framework.load().model_dump()
+def get_framework(template: framework.Template = "paper") -> dict[str, Any]:
+    return framework.load_template(template).model_dump()
+
+
+@app.get("/frameworks")
+def get_frameworks() -> dict[str, Any]:
+    return {name: fw.model_dump() for name, fw in framework.load_all().items()}
+
+
+def _fw_of(paper_id: str) -> framework.Framework:
+    """The step list this paper is read with."""
+    con = db.connect()
+    row = con.execute("SELECT template FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    con.close()
+    return framework.load_template(row["template"] if row else "paper")
 
 
 @app.get("/settings")
@@ -79,8 +93,9 @@ async def add_paper(request: Request) -> dict[str, Any]:
 
 
 @app.get("/papers")
-def list_papers(q: str = "", status: library.Status = "all", sort: library.Sort = "date") -> dict[str, Any]:
-    papers = library.list_papers(framework.load(), q, status, sort)
+def list_papers(q: str = "", status: library.Status = "all", sort: library.Sort = "date",
+                theme: str = "") -> dict[str, Any]:
+    papers = library.list_papers(framework.load_all(), q, status, sort, theme)
     con = db.connect()
     total, done = con.execute("SELECT count(*), coalesce(sum(reflection_done), 0) FROM papers").fetchone()
     con.close()
@@ -88,7 +103,7 @@ def list_papers(q: str = "", status: library.Status = "all", sort: library.Sort 
 
 
 def _paper_or_404(paper_id: str, touch: bool = False) -> dict[str, Any]:
-    paper = library.get(framework.load(), paper_id, touch)
+    paper = library.get(framework.load_all(), paper_id, touch)
     if not paper:
         raise HTTPException(404, detail="This paper is not in the library.")
     return paper
@@ -113,6 +128,44 @@ def patch_paper(paper_id: str, patch: dict[str, Any] = Body(...)) -> dict[str, A
     return _paper_or_404(paper_id)
 
 
+# ---------- themes ----------
+
+class ThemeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(max_length=200)
+
+
+class PaperThemesIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(max_length=50)
+
+
+@app.get("/themes")
+def list_themes() -> dict[str, Any]:
+    return {"themes": themes.list_all()}
+
+
+@app.post("/themes")
+def create_theme(body: ThemeIn) -> dict[str, Any]:
+    try:
+        return themes.create(body.name)
+    except ValueError as e:
+        raise HTTPException(422, detail={"errors": {"name": str(e)}})
+
+
+@app.delete("/themes/{theme_id}", status_code=204)
+def delete_theme(theme_id: str) -> None:
+    if not themes.delete(theme_id):
+        raise HTTPException(404, detail="This theme does not exist.")
+
+
+@app.put("/papers/{paper_id}/themes")
+def put_paper_themes(paper_id: str, body: PaperThemesIn) -> dict[str, Any]:
+    if not themes.set_for_paper(paper_id, body.ids):
+        raise HTTPException(404, detail="This paper or one of the themes does not exist.")
+    return _paper_or_404(paper_id)
+
+
 @app.get("/papers/{paper_id}/outline")
 def get_outline(paper_id: str) -> dict[str, Any]:
     paper = _paper_or_404(paper_id)
@@ -124,7 +177,7 @@ def get_outline(paper_id: str) -> dict[str, Any]:
 
 @app.get("/papers/{paper_id}/notes")
 def get_notes(paper_id: str) -> dict[str, Any]:
-    result = notes.load(framework.load(), paper_id)
+    result = notes.load(_fw_of(paper_id), paper_id)
     if result is None:
         raise HTTPException(404, detail="This paper is not in the library.")
     return result
@@ -133,7 +186,7 @@ def get_notes(paper_id: str) -> dict[str, Any]:
 @app.put("/papers/{paper_id}/notes/{step_id}")
 async def put_notes(paper_id: str, step_id: str, request: Request) -> dict[str, Any]:
     try:
-        result = notes.save(framework.load(), paper_id, step_id, await request.body())
+        result = notes.save(_fw_of(paper_id), paper_id, step_id, await request.body())
     except notes.NoteError as e:
         raise HTTPException(422, detail={"errors": e.errors})
     if result is None:

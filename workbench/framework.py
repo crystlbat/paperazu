@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PATH = ROOT / "framework.yaml"
+# reading templates: a research paper (the default) and lecture slides
+TEMPLATES = {"paper": DEFAULT_PATH, "slides": ROOT / "framework_slides.yaml"}
+Template = Literal["paper", "slides"]
 
 FieldType = Literal["text", "long", "date", "rows", "choice", "checks"]
 
@@ -68,3 +71,11 @@ def parse(text: str) -> Framework:
 
 def load(path: Path = DEFAULT_PATH) -> Framework:
     return parse(path.read_text(encoding="utf-8"))
+
+
+def load_template(template: str) -> Framework:
+    return load(TEMPLATES.get(template, DEFAULT_PATH))
+
+
+def load_all() -> dict[str, Framework]:
+    return {name: load(path) for name, path in TEMPLATES.items()}

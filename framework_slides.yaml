@@ -1,0 +1,73 @@
+# The reading path for lecture slides. Same field types as framework.yaml.
+steps:
+  - id: deck
+    n: 0
+    title: Deck card
+    minutes: 1
+    look_in: [title slide]
+    fields:
+      - {id: title, type: text, label: Title}
+      - {id: lecturer, type: text, label: Lecturer}
+      - {id: course, type: text, label: Course and lecture number}
+      - {id: date, type: date, label: Date studied}
+    gate: []
+  - id: map
+    n: 1
+    title: Map the deck
+    minutes: 5
+    look_in: [content slide, section slides]
+    fields:
+      - {id: about, type: long, label: "What this lecture is about, in one sentence"}
+      - {id: sections, type: rows, label: "The sections, in order", cols: ["Section", "Slides"], start_rows: 4, numbered: true}
+    gate: ["I looked at every section title before reading the details."]
+  - id: ideas
+    n: 2
+    title: Key ideas
+    minutes: 15
+    look_in: [each section]
+    fields:
+      - {id: ideas, type: rows, label: "One key idea for each section", cols: ["Section", "The idea, in my words", "Slide"], start_rows: 4}
+    gate: ["Each idea is in my own words, not copied from a slide."]
+  - id: terms
+    n: 3
+    title: Terms
+    minutes: 8
+    look_in: [definition slides]
+    fields:
+      - {id: terms, type: rows, label: "New terms", cols: ["Term", "What it means", "A small example"], start_rows: 4}
+    gate: []
+  - id: examples
+    n: 4
+    title: Worked example
+    minutes: 10
+    look_in: [example slides, figures, tables]
+    fields:
+      - {id: walk, type: long, label: "Pick one example and walk through it, step by step"}
+      - {id: change, type: long, label: "What would change if one input were different?"}
+    gate: []
+  - id: links
+    n: 5
+    title: Connections
+    minutes: 5
+    look_in: [summary slide]
+    fields:
+      - {id: before, type: long, label: "How this builds on earlier lectures or papers"}
+      - {id: use, type: long, label: "Where I would use this"}
+    gate: []
+  - id: quiz
+    n: 6
+    title: Self-test
+    minutes: 5
+    paper_hidden: true
+    fields:
+      - {id: qa, type: rows, label: "Questions I could be asked", cols: ["Question", "My answer, from memory"], start_rows: 3}
+    gate: ["I answered without looking at the slides."]
+  - id: unclear
+    n: 7
+    title: Open questions
+    minutes: 2
+    look_in: []
+    fields:
+      - {id: unclear, type: long, label: "What is still unclear?"}
+      - {id: ask, type: long, label: "What I will ask in class"}
+    gate: []

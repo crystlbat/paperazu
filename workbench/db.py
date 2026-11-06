@@ -82,6 +82,18 @@ CREATE TABLE IF NOT EXISTS concepts (
 CREATE TABLE IF NOT EXISTS suggest_runs (
     paper_id TEXT PRIMARY KEY REFERENCES papers(id) ON DELETE CASCADE
 );
+-- themes: your own topic groups; a paper can be in several
+CREATE TABLE IF NOT EXISTS themes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    color INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS paper_themes (
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    theme_id TEXT NOT NULL REFERENCES themes(id) ON DELETE CASCADE,
+    PRIMARY KEY (paper_id, theme_id)
+);
 CREATE TABLE IF NOT EXISTS concept_links (
     concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
@@ -116,6 +128,9 @@ def init() -> None:
         cols = {r["name"] for r in con.execute("PRAGMA table_info(concepts)")}
         if "kind" not in cols:  # added with AI-suggested ideas: 'kept' or 'suggested'
             con.execute("ALTER TABLE concepts ADD COLUMN kind TEXT NOT NULL DEFAULT 'kept'")
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(papers)")}
+        if "template" not in cols:  # '' = not picked yet; library.pick_missing_templates() fills it in
+            con.execute("ALTER TABLE papers ADD COLUMN template TEXT NOT NULL DEFAULT ''")
     con.close()
 
 

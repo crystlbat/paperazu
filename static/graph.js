@@ -35,10 +35,12 @@ async function renderGraph() {
   const findBtn = h("button", { type: "submit", class: "btn" }, "Find");
   const form = h("form", { class: "g-search", onsubmit: (e) => { e.preventDefault(); find(input.value.trim()); } }, input, findBtn);
   const legend = h("div", { class: "g-legend", "aria-hidden": "true" },
+    h("span", {}, h("i", { class: "lg-theme" }), "Theme"),
     h("span", {}, h("i", { class: "lg-paper" }), "Paper"),
     h("span", {}, h("i", { class: "lg-idea" }), "Idea you kept"),
     h("span", {}, h("i", { class: "lg-solid" }), "You linked"),
-    h("span", {}, h("i", { class: "lg-dash" }), "AI suggests"));
+    h("span", {}, h("i", { class: "lg-dash" }), "AI suggests"),
+    h("span", { class: "lg-crossing" }, h("i", { class: "lg-cross" }), "Crosses themes"));
   const zoomBtns = h("div", { class: "g-zoom" },
     h("button", { type: "button", class: "btn ghost", "aria-label": "Zoom in", onclick: () => zoomBy(1.25) }, "+"),
     h("button", { type: "button", class: "btn ghost", "aria-label": "Zoom out", onclick: () => zoomBy(0.8) }, "−"),
@@ -46,7 +48,10 @@ async function renderGraph() {
   // AI ideas stay hidden until you pick a paper (then only its own appear) or turn them all on here
   const aiToggle = h("button", { type: "button", class: "btn ghost g-ai", "aria-pressed": "false",
     onclick: () => { st.showAI = !st.showAI; localStorage.setItem("graph-show-ai", st.showAI ? "1" : "0"); build(); heat(0.4); } });
-  zoomBtns.prepend(aiToggle);
+  // themes: each one is a hub its papers gather round. Off = links that cross from one theme to another are hidden.
+  const linkToggle = h("button", { type: "button", class: "btn ghost g-ai", "aria-pressed": "true", hidden: true,
+    onclick: () => { st.interlink = !st.interlink; localStorage.setItem("graph-interlink", st.interlink ? "1" : "0"); build(); heat(0.5); paintSide(); } });
+  zoomBtns.prepend(linkToggle, aiToggle);
   const stage = h("section", { class: "g-stage", "aria-label": "Graph" }, svg, form, note, legend, zoomBtns);
   const side = h("aside", { class: "g-side", "aria-label": "Details" });
   view.append(stage, side);
@@ -54,15 +59,16 @@ async function renderGraph() {
   // ---------- state ----------
   const st = { nodes: new Map(), edges: [], ghost: null, sel: null, hover: null, data: null, papers: [],
     t: { x: 0, y: 0, k: 1 }, alpha: 0, raf: 0, alive: true,
-    showAI: localStorage.getItem("graph-show-ai") === "1", focusPaper: null };
+    showAI: localStorage.getItem("graph-show-ai") === "1", focusPaper: null,
+    themes: [], interlink: localStorage.getItem("graph-interlink") !== "0" };
   const saved = JSON.parse(localStorage.getItem(POS_KEY) || "{}");
   const savePos = () => localStorage.setItem(POS_KEY, JSON.stringify(Object.fromEntries(
     [...st.nodes.values()].filter((n) => n.kind !== "ghost").map((n) => [n.id, [Math.round(n.x), Math.round(n.y)]]))));
 
   // ---------- load ----------
   async function load(select) {
-    const [g, lib] = await Promise.all([api("/graph"), api("/papers")]);
-    st.data = g; st.papers = lib.papers;
+    const [g, lib, th] = await Promise.all([api("/graph"), api("/papers"), api("/themes")]);
+    st.data = g; st.papers = lib.papers; st.themes = th.themes;
     if (select) st.sel = select;
     build();
     paintSide(); heat(0.6);
@@ -124,10 +130,33 @@ async function renderGraph() {
     const [x, y] = old ? [old.x, old.y] : saved[id] ?? [(Math.random() - 0.5) * 300, (Math.random() - 0.5) * 300];
     return { id, kind, label, x, y, vx: 0, vy: 0, fx: null, ...extra };
   }
+  // two papers are in the same place if they share a theme; papers with no theme count as one group
+  const groups = (pid) => { const t = paperById(pid)?.themes ?? []; return t.length ? t : ["none"]; };
+  const shares = (a, b) => { const gb = groups(b); return groups(a).some((t) => gb.includes(t)); };
+  const themeOf = (id) => st.themes.find((t) => t.id === id);
+
   function build() {
     const { papers } = st, g = st.data;
     const next = new Map();
-    for (const p of papers) next.set(p.id, node(p.id, "paper", p.title, { done: p.steps_done, total: p.progress.length, r: 16 + Math.min(10, p.steps_done) }));
+    for (const p of papers) {
+      const t = themeOf(p.themes[0]);
+      next.set(p.id, node(p.id, "paper", p.title, { done: p.steps_done, total: p.progress.length, r: 16 + Math.min(10, p.steps_done), color: t?.color }));
+    }
+    const used = st.themes.filter((t) => papers.some((p) => p.themes.includes(t.id)));
+    for (const t of used) {
+      const n = node(`t:${t.id}`, "theme", t.name, { color: t.color, r: 46, theme: t.id });
+      if (!st.nodes.has(n.id) && !saved[n.id]) { // start in the middle of its papers
+        const ps = papers.filter((p) => p.themes.includes(t.id)).map((p) => next.get(p.id));
+        n.x = ps.reduce((a, q) => a + q.x, 0) / ps.length; n.y = ps.reduce((a, q) => a + q.y, 0) / ps.length;
+      }
+      next.set(n.id, n);
+    }
+    linkToggle.hidden = !used.length;
+    if (used.length && !st.themed) st.alpha = 1; // themes just appeared: let everything find its cluster
+    st.themed = used.length > 0;
+    stage.classList.toggle("themed", st.themed && st.interlink);
+    linkToggle.textContent = st.interlink ? "Links across themes: on" : "Links across themes: off";
+    linkToggle.setAttribute("aria-pressed", String(st.interlink));
     const shown = (c) => c.kind !== "suggested" || st.showAI || st.sel === c.id
       || g.links.some((l) => l.concept_id === c.id && l.paper_id === st.focusPaper);
     for (const c of g.concepts.filter(shown)) {
@@ -143,9 +172,17 @@ async function renderGraph() {
     aiToggle.setAttribute("aria-pressed", String(st.showAI));
     if (st.ghost) next.set("ghost", node("ghost", "ghost", st.ghost.q));
     st.nodes = next;
+    // an idea lives in the themes of the paper it matches best; with links across themes off, it only reaches papers there
+    const home = {};
+    for (const l of g.links) if (!home[l.concept_id] || l.score > home[l.concept_id].score) home[l.concept_id] = l;
+    const cross = (a, b) => used.length > 0 && !shares(a, b);
+    const ideaLinks = g.links.filter((l) => next.has(l.concept_id) && next.has(l.paper_id))
+      .filter((l) => st.interlink || !cross(home[l.concept_id].paper_id, l.paper_id));
+    const paperLinks = g.suggested.filter((e) => next.has(e.a) && next.has(e.b)).filter((e) => st.interlink || !cross(e.a, e.b));
     st.edges = [
-      ...g.suggested.filter((e) => next.has(e.a) && next.has(e.b)).map((e) => ({ a: e.a, b: e.b, kind: "suggest", score: e.score })),
-      ...g.links.filter((l) => next.has(l.concept_id) && next.has(l.paper_id)).map((l) => ({ a: l.concept_id, b: l.paper_id, kind: next.get(l.concept_id).kind === "sugg" ? "suggest" : "link", score: l.score })),
+      ...used.flatMap((t) => papers.filter((p) => p.themes.includes(t.id)).map((p) => ({ a: `t:${t.id}`, b: p.id, kind: "theme", score: 1, color: t.color }))),
+      ...paperLinks.map((e) => ({ a: e.a, b: e.b, kind: `suggest${cross(e.a, e.b) ? " cross" : ""}`, score: e.score })),
+      ...ideaLinks.map((l) => ({ a: l.concept_id, b: l.paper_id, kind: `${next.get(l.concept_id).kind === "sugg" ? "suggest" : "link"}${cross(home[l.concept_id].paper_id, l.paper_id) ? " cross" : ""}`, score: l.score })),
       ...(st.ghost ? st.ghost.results.filter((r) => r.on && next.has(r.paper_id)).map((r) => ({ a: "ghost", b: r.paper_id, kind: "ghost", score: r.score })) : []),
     ];
     draw();
@@ -154,18 +191,24 @@ async function renderGraph() {
   // ---------- drawing ----------
   function draw() {
     edgeLayer.replaceChildren(...st.edges.map((e) => {
-      e.el = sv("line", { class: `g-edge ${e.kind}`, "stroke-width": e.kind === "suggest" ? 1 + (e.score - 0.5) * 6 : 1.75 });
+      e.el = sv("line", { class: `g-edge ${e.kind}`, "stroke-width": e.kind.startsWith("suggest") ? 1 + (e.score - 0.5) * 6 : e.kind === "theme" ? 2 : 1.75,
+        style: e.kind === "theme" ? `--tc:var(--theme-${e.color})` : null });
       return e.el;
     }));
     nodeLayer.replaceChildren(...[...st.nodes.values()].map((n) => {
       const label = n.kind === "paper" ? shortTitle(n.label) : n.label;
       const g = sv("g", { class: `g-node ${n.kind}`, tabindex: 0, role: "button",
-        "aria-label": n.kind === "paper" ? `Paper: ${n.label}. ${n.done} of ${n.total} steps done.` : n.kind === "idea" ? `Idea: ${n.label}`
+        style: n.color != null ? `--tc:var(--theme-${n.color})` : null,
+        "aria-label": n.kind === "theme" ? `Theme: ${n.label}` : n.kind === "paper" ? `Paper: ${n.label}. ${n.done} of ${n.total} steps done.` : n.kind === "idea" ? `Idea: ${n.label}`
           : n.kind === "sugg" ? `AI suggested idea: ${n.label}` : `Search preview: ${n.label}` });
-      if (n.kind === "paper") {
+      if (n.kind === "theme") {
+        // a soft territory with the theme's name; its papers are tied to it
+        g.append(sv("circle", { class: "terr", r: 74 }), sv("circle", { class: "halo", r: 18 }), sv("circle", { class: "body", r: 10 }),
+          sv("text", { class: "tlabel", "text-anchor": "middle", y: -20 }, label.length > 28 ? `${label.slice(0, 27)}…` : label));
+      } else if (n.kind === "paper") {
         const r = n.r, c = 2 * Math.PI * (r + 4);
         g.append(sv("circle", { class: "halo", r: r + 9 }), sv("circle", { class: "body", r }),
-          sv("circle", { class: "track", r: r + 4 }),
+          sv("circle", { class: `track${n.color != null ? " themed" : ""}`, r: r + 4 }),
           sv("circle", { class: "prog", r: r + 4, "stroke-dasharray": `${(c * n.done) / Math.max(1, n.total)} ${c}`, transform: "rotate(-90)" }),
           sv("text", { class: "glyph", "text-anchor": "middle", dy: "0.35em" }, String(n.done)),
           sv("text", { class: "label", "text-anchor": "middle", y: r + 22 }, label));
@@ -219,8 +262,12 @@ async function renderGraph() {
       const p = ns[i], q = ns[j];
       let dx = q.x - p.x, dy = q.y - p.y, d2 = dx * dx + dy * dy || 1;
       const min = (p.r ?? 20) + (q.r ?? 20) + 30;
-      const both = p.kind === "paper" && q.kind === "paper";
-      const f = ((both ? 14000 : 2600) / d2 + (d2 < min * min ? 0.4 : 0)) * a; // papers keep well apart
+      const big = (k) => k === "paper" || k === "theme";
+      const both = big(p.kind) && big(q.kind);
+      // papers keep well apart; with themes, papers of one theme sit closer and theme territories push hard
+      const push = p.kind === "theme" && q.kind === "theme" ? 90000
+        : !both ? 2600 : !st.themed || p.kind !== "paper" || q.kind !== "paper" ? 14000 : shares(p.id, q.id) ? 6000 : 26000;
+      const f = (push / d2 + (d2 < min * min ? 0.4 : 0)) * a;
       const d = Math.sqrt(d2); dx /= d; dy /= d;
       p.vx -= dx * f; p.vy -= dy * f; q.vx += dx * f; q.vy += dy * f;
     }
@@ -228,8 +275,8 @@ async function renderGraph() {
       const p = st.nodes.get(e.a), q = st.nodes.get(e.b);
       const dx = q.x - p.x, dy = q.y - p.y, d = Math.hypot(dx, dy) || 1;
       const pp = st.nodes.get(e.a).kind === "paper" && st.nodes.get(e.b).kind === "paper";
-      const len = pp ? 320 - e.score * 120 : e.kind === "suggest" ? 170 : 150;
-      const f = ((d - len) / d) * 0.05 * a;
+      const len = e.kind === "theme" ? 120 : e.kind.includes("cross") ? 460 : pp ? 320 - e.score * 120 : e.kind.startsWith("suggest") ? 170 : 150;
+      const f = ((d - len) / d) * (e.kind === "theme" ? 0.09 : e.kind.includes("cross") ? 0.02 : 0.05) * a;
       p.vx += dx * f; p.vy += dy * f; q.vx -= dx * f; q.vy -= dy * f;
     }
     for (const n of ns) {
@@ -304,10 +351,10 @@ async function renderGraph() {
     if (!ns.length || !r.width) return;
     const xs = ns.map((n) => n.x), ys = ns.map((n) => n.y), pad = 110;
     const w = Math.max(...xs) - Math.min(...xs) + pad * 2, hgt = Math.max(...ys) - Math.min(...ys) + pad * 2;
-    const top = 76; // keep clear of the search bar
-    st.t.k = Math.min(1.3, r.width / w, (r.height - top) / hgt);
+    const top = 76, bottom = 96; // keep clear of the search bar, and of the legend and buttons
+    st.t.k = Math.min(1.3, r.width / w, (r.height - top - bottom) / hgt);
     st.t.x = r.width / 2 - ((Math.min(...xs) + Math.max(...xs)) / 2) * st.t.k;
-    st.t.y = top + (r.height - top) / 2 - ((Math.min(...ys) + Math.max(...ys)) / 2) * st.t.k;
+    st.t.y = top + (r.height - top - bottom) / 2 - ((Math.min(...ys) + Math.max(...ys)) / 2) * st.t.k;
     place();
   }
   const ro = new ResizeObserver(() => fit());
@@ -327,6 +374,7 @@ async function renderGraph() {
     if (st.ghost) return paintSearch();
     const n = st.sel && st.nodes.get(st.sel);
     if (n?.kind === "paper") return paintPaper(n);
+    if (n?.kind === "theme") return paintTheme(n);
     if (n?.kind === "idea") return paintIdea(n);
     if (n?.kind === "sugg") return paintSuggestion(n);
     const g = st.data;
@@ -339,6 +387,22 @@ async function renderGraph() {
         h("div", {}, h("dt", {}, "AI suggestions"), h("dd", { class: "num" }, String(g.concepts.filter((c) => c.kind === "suggested").length + g.suggested.length)))),
       h("p", { class: "help" }, "Drag dots to arrange them. Click one for details. Double-click a paper to open it."),
       g.model ? h("p", { class: "help" }, `Embedding model: ${g.model}`) : null);
+  }
+
+  function paintTheme(n) {
+    const members = st.papers.filter((p) => p.themes.includes(n.theme));
+    const ids = new Set(members.map((p) => p.id));
+    const out = st.edges.filter((e) => e.kind.includes("cross") && (ids.has(e.a) || ids.has(e.b))).length;
+    side.replaceChildren(
+      h("p", { class: "g-kind" }, "Theme"),
+      h("h3", { class: "g-title" }, h("i", { class: "tdot", style: `--tc:var(--theme-${n.color})` }), " ", n.label),
+      h("p", { class: "help" }, st.interlink
+        ? `${plural(members.length, "paper")}. ${out ? `${plural(out, "link")} reach other themes.` : "No links to other themes yet."}`
+        : `${plural(members.length, "paper")}. Links across themes are off, so this theme is shown on its own.`),
+      h("div", { class: "g-actions" },
+        h("button", { type: "button", class: "btn ghost", onclick: () => { lib.theme = n.theme; location.hash = "#library"; } }, "Show in the Library")),
+      section("Papers in this theme", members.map((p) => h("button", { type: "button", class: "g-row", onclick: () => select(p.id) },
+        h("span", { class: "g-row-title" }, p.title), h("span", { class: "g-row-sub" }, `${p.steps_done} of ${p.progress.length} steps done`))), ""));
   }
 
   function paintPaper(n) {

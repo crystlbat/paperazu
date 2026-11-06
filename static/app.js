@@ -90,7 +90,8 @@ function route() {
 window.addEventListener("hashchange", route);
 
 // ---------- Library ----------
-const lib = { q: "", status: "all", sort: "date" };
+const lib = { q: "", status: "all", sort: "date", theme: "" };
+let themeList = []; // [{id, name, color, papers}], loaded with the Library
 const STATUSES = [["all", "All"], ["not_started", "Not started"], ["in_progress", "In progress"],
   ["notes_done", "Notes done"], ["reflection_done", "Reflection done"]];
 const SORTS = [["date", "Presentation date"], ["opened", "Last opened"], ["title", "Title"], ["progress", "Progress"]];
@@ -123,18 +124,19 @@ function fmtSpent(sec) {
 }
 
 async function renderLibrary() {
-  const [s, fw, list] = await Promise.all([api("/settings"), api("/framework"), loadPapers()]);
+  const [s, fw, list, th] = await Promise.all([api("/settings"), api("/frameworks"), loadPapers(), api("/themes")]);
+  themeList = th.themes;
   const page = h("div", { class: "library" });
   view.append(page);
   // The agenda shows every dated paper, even when a filter or search narrows the list.
   const draw = async (data) => {
-    const all = lib.q || lib.status !== "all" ? (await api("/papers")).papers : data.papers;
-    page.replaceChildren(libHead(data, s, all), data.total ? libBody(data, s, fw, nextTalk(all)?.id) : libEmpty(fw));
+    const all = lib.q || lib.status !== "all" || lib.theme ? (await api("/papers")).papers : data.papers;
+    page.replaceChildren(libHead(data, s, all), data.total ? libBody(data, s, fw, nextTalk(all)?.id) : libEmpty(fw.paper));
   };
   await draw(list);
   enablePageDrop(page);
   libraryGreeting(list);
-  libRedraw = async () => draw(await loadPapers());
+  libRedraw = async () => { themeList = (await api("/themes")).themes; await draw(await loadPapers()); };
 }
 let libRedraw = async () => {};
 
@@ -255,7 +257,57 @@ function libBody(data, s, fw, nextId) {
       h("button", { class: "btn", type: "button", onclick: () => picker.click() }, "Add paper"), picker),
     h("div", { class: "toolbar-2" }, filters,
       h("span", { class: "quiet small upload-msg", "aria-live": "polite" }, "You can also drop a PDF anywhere on this page.")),
-    listEl);
+    themeBar(), listEl);
+}
+
+// Themes: your own topic groups. Click one to show only its papers; papers with none are "Unsorted".
+const themeDot = (t) => h("i", { class: "tdot", style: `--tc:var(--theme-${t.color})` });
+function themeBar() {
+  const pick = (id) => { lib.theme = lib.theme === id ? "" : id; libRedraw(); };
+  const name = h("input", { type: "text", placeholder: "New theme", maxlength: 40, "aria-label": "Name of the new theme" });
+  const err = h("span", { class: "status err", "aria-live": "polite" });
+  const add = h("form", { class: "tadd", onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = "";
+    try { await api("/themes", { method: "POST", body: JSON.stringify({ name: name.value }) }); libRedraw(); }
+    catch (x) { err.textContent = x.body?.detail?.errors?.name ?? "Could not add the theme."; }
+  } }, name, h("button", { type: "submit", class: "btn ghost" }, "Add"), err);
+  return h("div", { class: "themebar", role: "group", "aria-label": "Themes" },
+    h("span", { class: "tlabel" }, "Themes"),
+    h("button", { type: "button", class: "tchip", "aria-pressed": String(!lib.theme), onclick: () => pick("") }, "All"),
+    themeList.map((t) => h("span", { class: "tchip-wrap" },
+      h("button", { type: "button", class: "tchip", "aria-pressed": String(lib.theme === t.id), onclick: () => pick(t.id) },
+        themeDot(t), t.name, h("span", { class: "tn" }, String(t.papers))),
+      h("button", { type: "button", class: "tdel", "aria-label": `Delete the theme ${t.name}`, title: "Delete theme",
+        onclick: async () => {
+          if (!confirm(`Delete the theme "${t.name}"? Papers stay in the library, only the theme goes.`)) return;
+          await api(`/themes/${t.id}`, { method: "DELETE" }).catch(() => {});
+          if (lib.theme === t.id) lib.theme = "";
+          libRedraw();
+        } }, "×"))),
+    themeList.length ? h("button", { type: "button", class: "tchip", "aria-pressed": String(lib.theme === "none"), onclick: () => pick("none") }, "Unsorted") : null,
+    add);
+}
+
+// The theme picker on a card: tick themes, or make a new one and put the paper in it at once.
+function themePicker(p) {
+  const menu = h("details", { class: "menu tpick" });
+  const save = async (ids) => { await api(`/papers/${p.id}/themes`, { method: "PUT", body: JSON.stringify({ ids }) }); libRedraw(); };
+  const name = h("input", { type: "text", placeholder: "New theme", maxlength: 40, "aria-label": "New theme for this paper" });
+  menu.append(h("summary", { class: "pchip add", "aria-label": `Themes for ${p.title}` }, p.themes.length ? "Edit themes" : "+ Theme"),
+    h("div", { class: "menu-list" },
+      themeList.map((t) => h("label", { class: "tcheck" },
+        h("input", { type: "checkbox", checked: p.themes.includes(t.id),
+          onchange: (e) => save(e.target.checked ? [...p.themes, t.id] : p.themes.filter((x) => x !== t.id)) }),
+        themeDot(t), t.name)),
+      themeList.length ? h("hr") : null,
+      h("form", { class: "tadd", onsubmit: async (e) => {
+        e.preventDefault();
+        try {
+          const t = await api("/themes", { method: "POST", body: JSON.stringify({ name: name.value }) });
+          await save([...p.themes, t.id]);
+        } catch (x) { name.setCustomValidity(x.body?.detail?.errors?.name ?? "Could not add."); name.reportValidity(); name.setCustomValidity(""); }
+      } }, name, h("button", { type: "submit", class: "btn ghost" }, "Add"))));
+  return menu;
 }
 
 function progressBar(progress) {
@@ -263,16 +315,19 @@ function progressBar(progress) {
     progress.map((st, i) => h("i", { class: st, style: `--i:${i}` })));
 }
 
+let cardsPlayed = false;
 function paperTable(papers, s, fw, nextId) {
   if (!papers.length) {
     return h("p", { class: "none quiet" }, lib.q ? `No papers match "${lib.q}".` : "No papers with this status.");
   }
   // "You are here" in the Library: the next presentation overall (nextId comes from the unfiltered list).
-  return h("ol", { class: "pcards" }, papers.map((p, i) => paperRow(p, s, fw, p.id === nextId, i)));
+  const intro = !cardsPlayed; cardsPlayed = true; // the entrance plays once, not on every change
+  return h("ol", { class: `pcards${intro ? " intro" : ""}` }, papers.map((p, i) => paperRow(p, s, fw, p.id === nextId, i)));
 }
 
 // One paper: cover, what it is, how far you are, and the one thing to do next. Only facts that exist are shown.
-function paperRow(p, s, fw, isNext, i = 0) {
+function paperRow(p, s, fws, isNext, i = 0) {
+  const fw = fws[p.template] ?? fws.paper;
   const done = h("input", { type: "checkbox", checked: p.reflection_done, class: "switch",
     "aria-label": `Reflection done for ${p.title}`,
     onchange: async () => { await api(`/papers/${p.id}`, { method: "PATCH",
@@ -295,6 +350,9 @@ function paperRow(p, s, fw, isNext, i = 0) {
     p.primer_status !== "not_made" ? chip(`AI summary ${PRIMER[p.primer_status].toLowerCase()}`, p.primer_status) : null,
     p.seconds >= 60 ? chip(`${fmtSpent(p.seconds)} read`) : null,
     chip(p.last_opened ? `Opened ${ago(p.last_opened).toLowerCase()}` : "Not opened yet", "soft"),
+    ...p.themes.map((id) => themeList.find((t) => t.id === id)).filter(Boolean)
+      .map((t) => h("span", { class: "pchip theme", style: `--tc:var(--theme-${t.color})` }, themeDot(t), t.name)),
+    themePicker(p),
     ...p.tags.map((t) => chip(t, "tag")),
   ].filter(Boolean);
   return h("li", { class: `pcard${isNext ? " is-next" : ""}${p.reflection_done ? " is-done" : ""}`, style: `--i:${i}` },
@@ -303,7 +361,8 @@ function paperRow(p, s, fw, isNext, i = 0) {
         onerror: (e) => e.target.replaceWith(h("span", { class: "pcover-none" }, "PDF")) })),
     h("div", { class: "pmain" },
       h("a", { href: `#read/${p.id}`, class: "ptitle" }, p.title),
-      h("span", { class: "pauthors" }, p.authors || "Authors unknown"),
+      h("span", { class: "pauthors" }, h("span", { class: "ptype" }, p.template === "slides" ? "Slides" : "Paper"),
+        p.authors || "Authors unknown"),
       h("div", { class: "chips" }, chips)),
     h("div", { class: "ptrack" },
       h("span", { class: "pwhere" }, where),
@@ -323,6 +382,10 @@ function rowMenu(p, s) {
     h("summary", { "aria-label": `More actions for ${p.title}` }, "More"),
     h("div", { class: "menu-list" },
       h("button", { type: "button", onclick: () => detailsDialog(p, s, false) }, "Edit details"),
+      h("button", { type: "button", onclick: async () => {
+        await api(`/papers/${p.id}`, { method: "PATCH", body: JSON.stringify({ template: p.template === "slides" ? "paper" : "slides" }) });
+        libRedraw();
+      } }, p.template === "slides" ? "Read as a research paper" : "Read as lecture slides"),
       later("Make AI summary again", 5), later("Export Markdown", 7), later("Export reflection outline", 7),
       h("hr", {}),
       h("button", { type: "button", class: "danger", onclick: () => deleteDialog(p) }, "Delete")));
@@ -394,6 +457,9 @@ function detailsDialog(p, s, isNew) {
     Array.from({ length: s.reflections_target }, (_, i) =>
       h("option", { value: String(i + 1), selected: p.reflection_no === i + 1 }, `Reflection ${i + 1}`)));
   body.push(row("reflection_no", "Reflection number", inputs.reflection_no));
+  inputs.template = h("select", {}, [["paper", "Research paper, 10 steps"], ["slides", "Lecture slides, 8 steps"]]
+    .map(([v, l]) => h("option", { value: v, selected: (p.template ?? "paper") === v }, l)));
+  body.push(row("template", "Reading template", inputs.template, "Picked from the PDF. Your notes for each template are kept."));
 
   const dlg = h("dialog", { class: "dialog" });
   const form = h("form", { method: "dialog", onsubmit: async (e) => {

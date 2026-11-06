@@ -18,8 +18,9 @@ window.addEventListener("pagehide", () => openReader?.flushOnExit());
 document.addEventListener("visibilitychange", () => { if (document.hidden) openReader?.flushOnExit(); });
 
 async function renderReader(paperId, startPage) {
-  const [fw, paper, saved] = await Promise.all([api("/framework"),
-    api(`/papers/${paperId}?open=true`).catch(() => null), api(`/papers/${paperId}/notes`).catch(() => null)]);
+  const [paper, saved] = await Promise.all([api(`/papers/${paperId}?open=true`).catch(() => null),
+    api(`/papers/${paperId}/notes`).catch(() => null)]);
+  const fw = await api(`/framework?template=${paper?.template ?? "paper"}`);
   if (!paper || !saved) {
     view.className = "page page-library";
     view.append(h("div", { class: "library" }, h("h1", {}, "Paper not found"),

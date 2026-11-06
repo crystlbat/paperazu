@@ -13,6 +13,9 @@
   --select: #e9eae5; /* menu hover tint: ink 11.57, pencil 5.72, redpen 4.59 */
   --redpen: #b4432f;
   --green: #2f7a57;
+  /* theme colours: 8 slots a theme picks from; used as dots and rings, never as text colour */
+  --theme-0: #2f6fd0; --theme-1: #d0553a; --theme-2: #2f8a5e; --theme-3: #8a52d0;
+  --theme-4: #b8860b; --theme-5: #1f8f95; --theme-6: #c7407f; --theme-7: #6f7d2a;
   --amber: #8a5f00;
   /* the graphite device (Dot, the connection display). Text on it is fixed hex.
      device-ink #f4f4ef on #1c1d20 15.28, on dark #17181b 16.09; device-dim #b9bcc2 8.86 / 9.33 */
@@ -51,6 +54,8 @@
     --paper: #2a2d31; --sheet: #33363b; --ink: #f2f2ee; --pencil: #c3c6cc;
     --rule: #50545b; --rule-soft: #41444a; --desk: #222428; --select: #3f4248;
     --redpen: #ff9c87; --green: #8ad6ac; --amber: #f0c25e;
+    --theme-0: #7cb4ff; --theme-1: #ff9c87; --theme-2: #8ad6ac; --theme-3: #c9a7ff;
+    --theme-4: #f0c25e; --theme-5: #6fd3d3; --theme-6: #ff8fc7; --theme-7: #c3cf7d;
     --dot: rgb(255 255 255 / .07); --device: #17181b;
     color-scheme: dark;
   }
@@ -685,8 +690,8 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .pcards { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .pcard { display: grid; grid-template-columns: 92px minmax(0, 1fr) 236px 196px; gap: 0 28px; align-items: center;
   padding: 16px 20px 16px 16px; background: var(--paper); border: 1px solid var(--rule-soft); border-radius: 14px;
-  transition: border-color .18s, transform .18s cubic-bezier(.3,.7,.2,1), box-shadow .18s;
-  animation: card-in .45s cubic-bezier(.3,.7,.2,1) both; animation-delay: calc(var(--i) * 50ms); }
+  transition: border-color .18s, transform .18s cubic-bezier(.3,.7,.2,1), box-shadow .18s; }
+.pcards.intro .pcard { animation: card-in .45s cubic-bezier(.3,.7,.2,1) both; animation-delay: calc(var(--i) * 50ms); }
 @keyframes card-in { from { opacity: 0; translate: 0 10px; } }
 .pcard:hover, .pcard:focus-within { border-color: var(--rule); transform: translateY(-2px); box-shadow: 0 16px 30px -22px rgb(0 0 0 / .55); }
 .pcard.is-next { border-left: 4px solid var(--marker); padding-left: 13px; }
@@ -713,7 +718,8 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .pwhere { grid-column: 1 / -1; font-size: var(--fs-ui); font-weight: var(--fw-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .steps { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
 .steps i { height: 10px; border-radius: 3px; background: var(--rule-soft); transition: transform .15s, background .15s;
-  animation: seg-in .35s cubic-bezier(.3,.7,.2,1) both; animation-delay: calc(var(--i) * 50ms + var(--k) * 30ms); transform-origin: bottom; }
+  transform-origin: bottom; }
+.pcards.intro .steps i { animation: seg-in .35s cubic-bezier(.3,.7,.2,1) both; animation-delay: calc(var(--i) * 50ms + var(--k) * 30ms); }
 .steps i.partial { background: repeating-linear-gradient(135deg, var(--pencil) 0 1.5px, var(--rule-soft) 1.5px 4px); }
 .steps i.done { background: var(--ink); }
 .steps i.here { box-shadow: 0 0 0 2px var(--marker); }
@@ -741,3 +747,41 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
   .pact .pdone { grid-column: auto; grid-row: 1; }
   .pact .menu { grid-column: auto; }
 }
+
+/* ---------- themes ---------- */
+.tdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--tc); flex: none; }
+.themebar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.tlabel { font-size: var(--fs-ui); font-weight: var(--fw-strong); margin-right: 6px; }
+.tchip-wrap { display: inline-flex; align-items: center; position: relative; }
+.tchip { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: 999px; cursor: pointer;
+  background: none; border: 1px solid var(--rule-soft); color: var(--ink); font: var(--fw-ui) var(--fs-ui) var(--sans); transition: border-color .15s, background .15s; }
+.tchip:hover { border-color: var(--pencil); }
+.tchip[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.tchip .tn { color: var(--pencil); font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }
+.tchip[aria-pressed="true"] .tn { color: inherit; opacity: .7; }
+.tchip-wrap .tchip { padding-right: 26px; }
+.tdel { position: absolute; right: 4px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--pencil);
+  cursor: pointer; font-size: 15px; line-height: 1; opacity: 0; transition: opacity .15s; }
+.tchip-wrap:hover .tdel, .tdel:focus-visible { opacity: 1; }
+.tdel:hover { background: var(--select); color: var(--ink); }
+.tchip[aria-pressed="true"] + .tdel { color: var(--paper); }
+.tadd { display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; }
+.tadd input { width: 150px; height: 30px; padding: 0 10px; font-size: var(--fs-ui); }
+.tadd .btn { padding: 4px 10px; font-size: var(--fs-ui); }
+.tadd .status { font-size: var(--fs-caption); }
+.pchip.theme { gap: 6px; border-color: color-mix(in srgb, var(--tc) 55%, var(--rule-soft)); }
+.tpick { display: inline-block; margin: 0; }
+.tpick summary.pchip { list-style: none; }
+.tpick summary::-webkit-details-marker { display: none; }
+.tpick .menu-list { left: 0; right: auto; min-width: 240px; }
+.tcheck { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: var(--fs-ui); }
+.tcheck:hover { background: var(--select); }
+.tcheck input { margin: 0; }
+.tpick .tadd { margin: 4px 0 2px; }
+.tpick .tadd input { flex: 1; width: auto; min-width: 0; }
+.ptype { display: inline-block; margin-right: 8px; padding: 0 7px; border-radius: 5px; font-size: var(--fs-caption); font-weight: var(--fw-strong);
+  background: var(--sheet); border: 1px solid var(--rule-soft); color: var(--ink); }
+.pcard { position: relative; }
+.pcard:has(details[open]) { z-index: 5; }
+.tpick summary.pchip.add { border: 1px dashed var(--rule); padding: 0 10px; font-size: var(--fs-caption); font-weight: var(--fw-ui); color: var(--pencil); }
+.tpick summary.pchip.add:hover, .tpick[open] summary.pchip.add { border-style: solid; border-color: var(--ink); color: var(--ink); }

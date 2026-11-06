@@ -11,7 +11,7 @@ import pymupdf
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from . import db
-from .framework import Framework, Step
+from .framework import Framework, Step, Template
 
 MAX_PDF_BYTES = 100 * 1024 * 1024
 StepState = Literal["empty", "partial", "done"]
@@ -30,6 +30,7 @@ class PaperPatch(BaseModel):
     tags: list[str] | None = None
     reflection_no: int | None = None
     reflection_done: bool | None = None
+    template: Template | None = None
 
     @field_validator("title")
     @classmethod
@@ -89,6 +90,33 @@ def guess_details(pdf: bytes) -> dict[str, str]:
     return {"title": re.sub(r"\s+", " ", title)[:300], "authors": re.sub(r"\s+", " ", authors)[:300]}
 
 
+_SLIDE_TITLE = re.compile(r"^slide\s+\d+\b", re.I)
+
+
+def guess_template(doc: pymupdf.Document) -> str:
+    """Slides if most pages are wide (16:9 or 4:3 decks) or the outline lists "Slide N". Else a paper."""
+    pages = [doc[i].rect for i in range(min(doc.page_count, 12))]
+    wide = sum(r.width > r.height * 1.15 for r in pages)
+    toc = [t for _, t, _ in doc.get_toc(simple=True)]
+    slide_toc = toc and sum(bool(_SLIDE_TITLE.match(t)) for t in toc) >= 0.6 * len(toc)
+    return "slides" if slide_toc or (pages and wide >= 0.6 * len(pages)) else "paper"
+
+
+def pick_missing_templates() -> None:
+    """Papers added before templates existed get one picked from their PDF, once."""
+    con = db.connect()
+    with con:
+        for (pid,) in con.execute("SELECT id FROM papers WHERE template = ''").fetchall():
+            path = db.PAPERS_DIR / f"{pid}.pdf"
+            try:
+                with pymupdf.open(path) as doc:
+                    t = guess_template(doc)
+            except Exception:
+                t = "paper"
+            con.execute("UPDATE papers SET template = ? WHERE id = ?", (t, pid))
+    con.close()
+
+
 def create(pdf: bytes, filename: str) -> str:
     """Raises ValueError with a message for the user if the file is not a usable PDF."""
     if len(pdf) > MAX_PDF_BYTES:
@@ -104,10 +132,12 @@ def create(pdf: bytes, filename: str) -> str:
     paper_id = uuid.uuid4().hex[:12]
     db.PAPERS_DIR.mkdir(parents=True, exist_ok=True)
     (db.PAPERS_DIR / f"{paper_id}.pdf").write_bytes(pdf)
+    with pymupdf.open(stream=pdf, filetype="pdf") as doc:
+        template = guess_template(doc)
     con = db.connect()
     with con:
-        con.execute("INSERT INTO papers (id, title, authors) VALUES (?, ?, ?)",
-                    (paper_id, details["title"], details["authors"]))
+        con.execute("INSERT INTO papers (id, title, authors, template) VALUES (?, ?, ?, ?)",
+                    (paper_id, details["title"], details["authors"], template))
         reindex(con, paper_id)
     con.close()
     return paper_id
@@ -360,7 +390,13 @@ def _notes(con: sqlite3.Connection, paper_id: str) -> dict[str, sqlite3.Row]:
     return {r["step_id"]: r for r in rows}
 
 
-def _to_dict(con: sqlite3.Connection, row: sqlite3.Row, fw: Framework) -> dict[str, Any]:
+Frameworks = Framework | dict[str, Framework]
+
+
+def _to_dict(con: sqlite3.Connection, row: sqlite3.Row, fws: Frameworks) -> dict[str, Any]:
+    """fws is one framework, or one per template (then each paper is measured by its own)."""
+    template = row["template"] or "paper"
+    fw = fws if isinstance(fws, Framework) else fws.get(template, fws["paper"])
     notes = _notes(con, row["id"])
     progress = [step_state(s, json.loads(notes[s.id]["data"])) if s.id in notes else "empty"
                 for s in fw.steps]
@@ -369,7 +405,11 @@ def _to_dict(con: sqlite3.Connection, row: sqlite3.Row, fw: Framework) -> dict[s
     paper["reflection_done"] = bool(paper["reflection_done"])
     paper["progress"] = progress
     paper["steps_done"] = progress.count("done")
-    paper["seconds"] = sum(n["seconds"] for n in notes.values())
+    paper["seconds"] = sum(n["seconds"] for n in notes.values() if n["step_id"] in {st.id for st in fw.steps})
+    paper["template"] = template
+    paper["themes"] = [r[0] for r in con.execute(
+        "SELECT theme_id FROM paper_themes pt JOIN themes t ON t.id = pt.theme_id WHERE paper_id = ? ORDER BY t.name",
+        (row["id"],))]
     return paper
 
 
@@ -387,7 +427,8 @@ def _fts_query(q: str) -> str:
     return " ".join(f'"{t}"*' for t in re.findall(r"\w+", q))
 
 
-def list_papers(fw: Framework, q: str = "", status: Status = "all", sort: Sort = "date") -> list[dict[str, Any]]:
+def list_papers(fw: Frameworks, q: str = "", status: Status = "all", sort: Sort = "date",
+                theme: str = "") -> list[dict[str, Any]]:
     con = db.connect()
     match = _fts_query(q)
     if match:
@@ -401,6 +442,8 @@ def list_papers(fw: Framework, q: str = "", status: Status = "all", sort: Sort =
         p["status"] = _status(p)
     if status != "all":
         papers = [p for p in papers if p["status"] == status]
+    if theme:
+        papers = [p for p in papers if (not p["themes"] if theme == "none" else theme in p["themes"])]
     if sort == "opened":
         papers.sort(key=lambda p: p["last_opened"] or "", reverse=True)  # never opened goes last
     elif sort == "title":
@@ -420,7 +463,7 @@ def _date_key(p: dict[str, Any]) -> tuple[int, int]:
     return (0, days) if days >= 0 else (1, -days)
 
 
-def get(fw: Framework, paper_id: str, touch: bool = False) -> dict[str, Any] | None:
+def get(fw: Frameworks, paper_id: str, touch: bool = False) -> dict[str, Any] | None:
     con = db.connect()
     with con:
         if touch:

@@ -159,3 +159,18 @@
 }
 .g-side[hidden] { display: none; }
 .page-graph:has(> .g-side[hidden]) { grid-template-columns: minmax(0, 1fr); }
+
+/* themes: a soft territory and a coloured tie to each paper */
+.g-node.theme .terr { fill: var(--tc); opacity: .07; stroke: var(--tc); stroke-opacity: .25; stroke-dasharray: 3 6; }
+.g-node.theme .body { fill: var(--tc); }
+.g-node.theme .halo { fill: var(--tc); opacity: 0; }
+.g-node.theme:hover .halo, .g-node.theme.sel .halo { opacity: .25; }
+.g-node.theme .tlabel { fill: var(--ink); font: 400 22px/1 var(--serif); paint-order: stroke; stroke: var(--desk); stroke-width: 5px; stroke-linejoin: round; }
+.g-edge.theme { stroke: var(--tc); opacity: .55; }
+.g-node.paper .track.themed { stroke: var(--tc); }
+.g-edge.cross { stroke: var(--marker); }
+.lg-theme { width: 12px; height: 12px; border-radius: 50%; background: var(--theme-0); box-shadow: 0 0 0 4px color-mix(in srgb, var(--theme-0) 20%, transparent); }
+.lg-cross { width: 18px; height: 0; border-top: 2px dashed var(--marker); }
+.g-legend .lg-crossing { display: none; }
+.g-stage.themed .g-legend .lg-crossing { display: inline-flex; }
+.g-legend { bottom: 60px; max-width: calc(100% - 36px); }
