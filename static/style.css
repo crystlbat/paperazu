@@ -990,3 +990,65 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
   background: color-mix(in srgb, var(--paper) 70%, transparent); border-left: 3px solid var(--rule); }
 .chk-hint.partial { border-left-color: var(--amber, #b07d00); }
 .chk-hint.wrong { border-left-color: var(--redpen); }
+
+/* ==========================================================================
+   Dot's material. Everything you operate (top bar, steps rail, paper toolbar,
+   search panel) is made of the same graphite as Dot: dot-grid surface,
+   dot-matrix numbers, glowing lights. Everything you read and write stays paper.
+   The tokens are remapped here, so buttons, chips, menus and step tiles inside
+   follow without their own rules.
+   device-ink #f4f4ef on #1c1d20 15.28; dim #b9bcc2 8.86; on raised #2a2c31 13.3 / 7.7
+   ========================================================================== */
+.topbar, .rail, .pdf-tools, .cs-panel, .sel-bubble, .pane-toggles, .buddy-bubble {
+  --paper: #1c1d20; --sheet: #2a2c31; --ink: #f4f4ef; --pencil: #b9bcc2;
+  --rule: #3b3e44; --rule-soft: #2e3035; --select: #34373c; --desk: #1c1d20;
+  --dot: rgb(255 255 255 / .05); --green: #8ad6ac; --redpen: #ff9c87; --amber: #f0c25e;
+  color-scheme: dark; color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+  .topbar, .rail, .pdf-tools, .cs-panel, .sel-bubble { --paper: #17181b; --sheet: #26282c; --rule: #33363b; --rule-soft: #26282c; }
+}
+.topbar, .rail, .pdf-tools, .cs-panel, .buddy-bubble {
+  background: var(--paper) radial-gradient(var(--dot) 1px, transparent 1.4px) 0 0 / 8px 8px;
+}
+.topbar { border-bottom-color: #000; box-shadow: 0 1px 0 rgb(255 255 255 / .04) inset; }
+.pdf-tools { border-bottom-color: #000; }
+.rail { border-right-color: #000; }
+
+/* dot-matrix type: the brand and the numbers you read at a glance */
+.brand { font-family: "Doto", var(--mono); font-weight: 800; font-size: 21px; letter-spacing: .01em; }
+.topbar .num, .pdf-tools .num, .pdf-tools input.num, .rail-count, .timer, .gd-count {
+  font-family: "Doto", var(--mono); font-weight: 800; letter-spacing: .02em;
+}
+.topbar .num { font-size: 17px; }
+.pdf-tools input.num { font-size: 16px; }
+.rail-count { font-size: 16px; }
+.timer { font-size: 17px; }
+
+/* lights glow like Dot's */
+.chip::before { box-shadow: 0 0 0 2px rgb(255 255 255 / .05); }
+.chip[data-status="ready"]::before { box-shadow: 0 0 8px var(--green); }
+.chip[data-status="not_running"]::before, .chip[data-status="error"]::before { box-shadow: 0 0 8px var(--redpen); }
+.chip[data-status="wrong_key"]::before { box-shadow: 0 0 8px var(--amber); }
+
+/* rounded squares, like Dot's face, for every control */
+.btn, input, select, textarea { border-radius: 10px; }
+.chip { border-radius: 10px; }
+.circle { border-radius: 11px; }
+.rail-glide { border-radius: 14px !important; box-shadow: 0 0 0 1px var(--rule), 0 10px 22px -12px rgb(0 0 0 / .7) !important; }
+.rail button.active .circle { box-shadow: 0 0 0 3px var(--marker), 0 0 16px rgb(255 227 71 / .45); }
+.circle.done { box-shadow: 0 0 10px rgb(244 244 239 / .25); }
+.rail-ring .arc { stroke: var(--marker); filter: drop-shadow(0 0 3px rgb(255 227 71 / .5)); }
+
+/* on the graphite, primary buttons are lit keys */
+.topbar .btn:not(.ghost), .pdf-tools .btn:not(.ghost), .cs-panel .btn:not(.ghost), .sel-bubble .btn:not(.ghost) {
+  background: var(--marker); border-color: var(--marker); color: var(--on-marker);
+}
+.topbar .btn.ghost:not([aria-pressed="true"]), .pdf-tools .btn.ghost:not([aria-pressed="true"]) { background: rgb(255 255 255 / .03); }
+.topbar .btn.ghost:not([aria-pressed="true"]):hover, .pdf-tools .btn.ghost:not([aria-pressed="true"]):hover { background: rgb(255 255 255 / .08); }
+
+/* the search panel and the selection bubble float like the Dot window */
+.cs-panel { z-index: 5; border-color: rgb(255 255 255 / .1); box-shadow: 0 30px 70px -24px rgb(0 0 0 / .7); }
+.sel-bubble { background: #1f2023; border-color: rgb(255 255 255 / .12); }
+.cs-hit:hover, .cs-hit[aria-current], .cs-paper:hover { background: rgb(255 255 255 / .06); }
+.buddy-bubble { border-color: rgb(255 255 255 / .1); }
