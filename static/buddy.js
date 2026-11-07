@@ -321,12 +321,14 @@ const buddy = (() => {
   }
 
   // ---------- the Dot window: Dot bursts into dots that become a window ----------
-  /** open({ x, y, quote, first: Promise<{ok,text,error}>, ask(question) => Promise<…> }) → close() */
-  function open({ x, y, quote, first, ask }) {
+  /** open({ x, y, quote, first, ask(question), area?: DOMRect to open inside, save?(text) }) → close() */
+  function open({ x, y, quote, first, ask, area, save }) {
     pen(false);
     const [fx, fy] = centre();
     const w = Math.min(500, innerWidth - 24), maxH = Math.min(620, innerHeight * 0.78);
-    const left = Math.max(12, Math.min(x + 24, innerWidth - w - 12));
+    // inside the area it was asked from (the paper), so it does not cover the notes
+    const box = area && area.width >= w + 24 ? area : { left: 0, right: innerWidth };
+    const left = Math.max(box.left + 12, Math.min(x + 24, box.right - w - 12));
     const top = Math.max(12, Math.min(y - 60, innerHeight - maxH - 12));
     const el = document.createElement("section");
     el.className = "dot-win"; el.setAttribute("role", "dialog"); el.setAttribute("aria-label", "Dot explains");
@@ -351,20 +353,28 @@ const buddy = (() => {
       el.animate([{ clipPath: `circle(10px at ${ox}px ${oy}px)`, opacity: 0.4 }, { clipPath: `circle(${R}px at ${ox}px ${oy}px)`, opacity: 1 }],
         { duration: 560, delay: 180, easing: "cubic-bezier(.3,.7,.2,1)", fill: "backwards" });
     }
+    draggable(el, el.querySelector(".dw-head"));
     const add = (cls, text) => { const p = document.createElement("div"); p.className = cls; p.append(...format(text)); log.append(p); p.scrollIntoView({ block: "nearest" }); return p; };
+    let lastQ = "";
     async function answer(promise) {
       const pending = add("dw-wait", "Reading the paper");
       form.querySelector("button").disabled = true;
       const res = await promise.catch(() => ({ ok: false, error: "Could not ask the model. Is the app still running?" }));
       pending.remove(); form.querySelector("button").disabled = false;
-      add(res.ok ? "dw-a" : "dw-a err", res.ok ? res.text : res.error);
+      const a = add(res.ok ? "dw-a" : "dw-a err", res.ok ? res.text : res.error);
+      if (res.ok && save) {
+        const q = lastQ, b = document.createElement("button");
+        b.type = "button"; b.className = "dw-save"; b.textContent = "Add to my note";
+        b.addEventListener("click", async () => { b.disabled = true; b.textContent = (await save({ quote, question: q, answer: res.text })) === false ? "Could not add it" : "Added to your note"; });
+        a.append(b);
+      }
       input.focus();
     }
     form.addEventListener("submit", (e) => {
       e.preventDefault();
       const q = input.value.trim();
       if (!q || form.querySelector("button").disabled) return;
-      input.value = ""; add("dw-q", q); answer(ask(q));
+      input.value = ""; lastQ = q; add("dw-q", q); answer(ask(q));
     });
     let closed = false;
     async function close() {
@@ -385,6 +395,28 @@ const buddy = (() => {
     answer(first);
     return close;
   }
+  // Drag a floating card by its handle (buttons inside the handle still click). Kept on screen.
+  function draggable(el, handle) {
+    handle.style.cursor = "grab"; handle.style.touchAction = "none";
+    let start = null;
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.closest("button, input, a")) return;
+      const dx = parseFloat(el.style.getPropertyValue("--dx")) || 0, dy = parseFloat(el.style.getPropertyValue("--dy")) || 0;
+      start = { x: e.clientX - dx, y: e.clientY - dy, r: el.getBoundingClientRect(), dx, dy };
+      handle.setPointerCapture(e.pointerId); handle.style.cursor = "grabbing"; e.preventDefault();
+    });
+    handle.addEventListener("pointermove", (e) => {
+      if (!start) return;
+      const { r } = start;
+      // how far the card may go and still keep its handle on screen
+      const nx = Math.max(start.dx - r.left + 8, Math.min(start.dx + innerWidth - r.right - 8, e.clientX - start.x));
+      const ny = Math.max(start.dy - r.top + 8, Math.min(start.dy + innerHeight - r.top - 48, e.clientY - start.y));
+      el.style.setProperty("--dx", `${nx}px`); el.style.setProperty("--dy", `${ny}px`);
+    });
+    const end = () => { start = null; handle.style.cursor = "grab"; };
+    handle.addEventListener("pointerup", end); handle.addEventListener("pointercancel", end);
+  }
+
   // Model text as paragraphs and lists; small models add Markdown marks even when asked not to.
   function format(text) {
     const out = [];
@@ -404,5 +436,5 @@ const buddy = (() => {
   setMuted(st.muted);
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
-  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, open, format };
+  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, open, format, draggable };
 })();

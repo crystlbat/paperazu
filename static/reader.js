@@ -56,7 +56,8 @@ async function renderReader(paperId, startPage) {
       buddy.say(`Step ${st.n}, ${st.title}, is done. Nice work.`, { mood: "happy" });
     }
   });
-  const pdf = pdfViewer(`/papers/${paperId}/pdf`, hideBtn, paperId, Number(startPage) || 1);
+  const pdf = pdfViewer(`/papers/${paperId}/pdf`, hideBtn, paperId, Number(startPage) || 1,
+    ({ quote, question, answer }) => plain.append([`Marked: "${quote}"`, question && `Q: ${question}`, `AI: ${answer}`].filter(Boolean).join("\n")));
   const rail = stepRail(fw, notes, (st) => { setMode("steps"); open(st); });
   const timer = stepTimer(() => notes[current.id], () => queue.touch(current.id));
   const body = h("div", { class: "nb-body" });
@@ -169,6 +170,7 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
       h("button", { type: "button", class: "buddy-x", "aria-label": "Stop guided reading", onclick: () => stop() }, "×")),
     what, where, look, h("div", { class: "gd-actions" }, back, next));
   pdf.el.append(card);
+  buddy.draggable(card, card.querySelector(".gd-top"));
   const onKey = (e) => { if (e.key === "Escape" && on && !document.querySelector(".dot-win")) stop(); };
 
   function offer() {
@@ -265,6 +267,13 @@ function plainNote(paperId, page) {
 
   return {
     el, flush,
+    /** Add text at the end of the note (loading it first), and save. */
+    async append(text) {
+      if (!loaded) { loaded = true; const r = await api(url).catch(() => null); if (r && !dirty) ta.value = r.text; }
+      ta.value = `${ta.value.replace(/\s*$/, "")}${ta.value.trim() ? "\n\n" : ""}${text}\n`;
+      changed(); await flush();
+      return !dirty;
+    },
     async show() {
       if (!loaded) {
         loaded = true;
@@ -733,7 +742,7 @@ function oldFields(st, fields) {
 
 // ---------- PDF viewer ----------
 // Canvas only, no text layer, so the text cannot be selected or copied. Renders the current page only.
-function pdfViewer(url, hideBtn, paperId, startPage = 1) {
+function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   const v = { doc: null, page: startPage, scale: 1, fit: true, task: null, seq: 0, hidden: false, auto: false, vp: null };
   const sheet = h("div", { class: "pdf-sheet" });
   let shown = 0; // the page on screen, so a page change can slide in
@@ -741,7 +750,8 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
   const ink = h("canvas", { class: "pdf-ink", "aria-hidden": "true" });
   const pageBox = h("div", { class: "pdf-page" });
   let textLayer = h("div", { class: "textLayer" });
-  const penHint = h("p", { class: "pen-hint", hidden: true }, "Drag over the words for Dot to explain. Esc to stop.");
+  const penHint = h("p", { class: "pen-hint", hidden: true }, "Drag over the words for Dot to explain.",
+    h("button", { type: "button", class: "pen-stop", onclick: () => { endPen(); buddy.goHome(); } }, "Stop"));
   const guideMark = h("i", { class: "guide-mark", hidden: true, "aria-hidden": "true" });
   const pickBtn = (label, fn) => h("button", { type: "button", class: "btn small-btn", onmousedown: (e) => e.preventDefault(), onclick: fn }, label);
   const bubble = h("div", { class: "sel-bubble", hidden: true, role: "toolbar", "aria-label": "Selected text" },
@@ -842,7 +852,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
     await buddy.goTo(x, y);
     let said = "";
     const post = (path, body) => api(`/papers/${paperId}/${path}`, { method: "POST", body: JSON.stringify(body) });
-    buddy.open({ x, y, quote: words,
+    buddy.open({ x, y, quote: words, area: el.getBoundingClientRect(), save: saveToNote,
       first: post("explain", { words, page: v.page }).then((r) => { said = r.text || ""; return r; }),
       ask: (q) => post("ask", { page: v.page,
         question: `${q}\n\n(This is about the part I marked: "${words.slice(0, 300)}". You explained: "${said.slice(0, 400)}")`.slice(0, 1000) })
