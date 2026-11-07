@@ -1,8 +1,9 @@
 """Margin notes. Dot traces a paragraph and you write beside it. Paragraph boxes come from PyMuPDF's
 text blocks; a note keeps the box (PDF points, top-left origin) and the page it is on."""
-from typing import Any
+from typing import Any, Literal
 
 import base64
+import json
 
 import pymupdf
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -22,6 +23,23 @@ class MarkIn(BaseModel):
         if not (r[0] < r[2] and r[1] < r[3] and min(r) >= 0):
             raise ValueError("The box must have its top-left corner before its bottom-right corner.")
         return r
+
+
+class HighlightIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    page: int = Field(ge=1)
+    kind: Literal["me", "dot"] = "me"
+    text: str = Field("", max_length=2000)
+    rects: list[list[float]] = Field(min_length=1, max_length=60)
+
+    @field_validator("rects")
+    @classmethod
+    def _boxes(cls, rs: list[list[float]]) -> list[list[float]]:
+        for r in rs:
+            if len(r) != 4:
+                raise ValueError("Each rectangle needs four numbers.")
+            MarkIn._box.__func__(cls, r)
+        return rs
 
 
 class MarkText(BaseModel):
@@ -53,21 +71,42 @@ def _join(boxes: list[list[float]]) -> list[list[float]]:
     return out
 
 
-def blocks(paper_id: str, page: int) -> dict[str, Any] | None:
-    """The page size and its paragraphs (text blocks with real text). None if there is no such page."""
+def _layout(pg: Any) -> list[list[float]]:
+    text = [(list(b[:4]), len(" ".join(str(b[4]).split()))) for b in pg.get_text("blocks") if b[6] == 0]
+    long = [r for r, n in text if n >= 25]
+    small = _join([r for r, n in text if 0 < n < 25])  # equations come out as many small blocks
+    keep = long + [r for r in small if r[2] - r[0] >= 60 and not any(_near(r, x, 0) and r[1] >= x[1] and r[3] <= x[3] for x in long)]
+    return sorted(([round(v, 1) for v in r] for r in keep), key=lambda r: (r[0] > pg.rect.width / 2, r[1]))
+
+
+def _page(paper_id: str, page: int) -> Any:
+    """Open the PDF and return (doc, page), or None. The caller closes the doc."""
     path = db.PAPERS_DIR / f"{paper_id}.pdf"
     if not paper_id.isalnum() or not path.exists():
         return None
-    with pymupdf.open(path) as doc:
-        if not 1 <= page <= doc.page_count:
-            return None
-        pg = doc[page - 1]
-        text = [(list(b[:4]), len(" ".join(str(b[4]).split()))) for b in pg.get_text("blocks") if b[6] == 0]
-        long = [r for r, n in text if n >= 25]
-        small = _join([r for r, n in text if 0 < n < 25])  # equations come out as many small blocks
-        keep = long + [r for r in small if r[2] - r[0] >= 60 and not any(_near(r, x, 0) and r[1] >= x[1] and r[3] <= x[3] for x in long)]
-        out = sorted(([round(v, 1) for v in r] for r in keep), key=lambda r: (r[0] > pg.rect.width / 2, r[1]))
-        return {"w": pg.rect.width, "h": pg.rect.height, "blocks": out}
+    doc = pymupdf.open(path)
+    if not 1 <= page <= doc.page_count:
+        doc.close()
+        return None
+    return doc, doc[page - 1]
+
+
+def blocks(paper_id: str, page: int) -> dict[str, Any] | None:
+    """The page size and its paragraphs (text blocks with real text). None if there is no such page."""
+    got = _page(paper_id, page)
+    if not got:
+        return None
+    with got[0]:
+        return {"w": got[1].rect.width, "h": got[1].rect.height, "blocks": _layout(got[1])}
+
+
+def paragraphs(paper_id: str, page: int) -> list[tuple[list[float], str]] | None:
+    """The same boxes as blocks(), each with its text. None if there is no such page."""
+    got = _page(paper_id, page)
+    if not got:
+        return None
+    with got[0]:
+        return [(r, " ".join(got[1].get_text("text", clip=pymupdf.Rect(*r)).split())) for r in _layout(got[1])]
 
 
 def boxed(paper_id: str, page: int, rect: list[float]) -> tuple[str, str] | None:
@@ -138,3 +177,51 @@ def delete(paper_id: str, mark_id: int) -> bool:
         n = con.execute("DELETE FROM marks WHERE id = ? AND paper_id = ?", (mark_id, paper_id)).rowcount
     con.close()
     return bool(n)
+
+
+def _hrow(r: Any) -> dict[str, Any]:
+    return {"id": r["id"], "page": r["page"], "kind": r["kind"], "text": r["text"], "rects": json.loads(r["rects"])}
+
+
+def highlights(paper_id: str) -> list[dict[str, Any]] | None:
+    con = db.connect()
+    try:
+        if not _exists(con, paper_id):
+            return None
+        return [_hrow(r) for r in con.execute("SELECT * FROM highlights WHERE paper_id = ? ORDER BY page, id", (paper_id,))]
+    finally:
+        con.close()
+
+
+def add_highlight(paper_id: str, h: HighlightIn) -> dict[str, Any] | None:
+    con = db.connect()
+    try:
+        if not _exists(con, paper_id):
+            return None
+        with con:
+            cur = con.execute("INSERT INTO highlights (paper_id, page, kind, text, rects) VALUES (?, ?, ?, ?, ?)",
+                              (paper_id, h.page, h.kind, h.text, json.dumps(h.rects)))
+        return _hrow(con.execute("SELECT * FROM highlights WHERE id = ?", (cur.lastrowid,)).fetchone())
+    finally:
+        con.close()
+
+
+def keep_highlight(paper_id: str, hid: int) -> dict[str, Any] | None:
+    """Dot's blue highlight becomes yours (yellow)."""
+    con = db.connect()
+    try:
+        with con:
+            con.execute("UPDATE highlights SET kind = 'me' WHERE id = ? AND paper_id = ?", (hid, paper_id))
+        r = con.execute("SELECT * FROM highlights WHERE id = ? AND paper_id = ?", (hid, paper_id)).fetchone()
+        return _hrow(r) if r else None
+    finally:
+        con.close()
+
+
+def remove_highlight(paper_id: str, hid: int) -> bool:
+    con = db.connect()
+    try:
+        with con:
+            return bool(con.execute("DELETE FROM highlights WHERE id = ? AND paper_id = ?", (hid, paper_id)).rowcount)
+    finally:
+        con.close()

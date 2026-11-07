@@ -352,6 +352,41 @@ def remove_mark(paper_id: str, mark_id: int) -> dict[str, Any]:
     return {"ok": True}
 
 
+@app.get("/papers/{paper_id}/highlights")
+def get_highlights(paper_id: str) -> dict[str, Any]:
+    out = marks.highlights(paper_id)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return {"highlights": out}
+
+
+@app.post("/papers/{paper_id}/highlights")
+def add_highlight(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        h = marks.HighlightIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    out = marks.add_highlight(paper_id, h)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return out
+
+
+@app.put("/papers/{paper_id}/highlights/{hid}")
+def keep_highlight(paper_id: str, hid: int) -> dict[str, Any]:
+    out = marks.keep_highlight(paper_id, hid)
+    if out is None:
+        raise HTTPException(404, detail="This highlight is not there.")
+    return out
+
+
+@app.delete("/papers/{paper_id}/highlights/{hid}")
+def remove_highlight(paper_id: str, hid: int) -> dict[str, Any]:
+    if not marks.remove_highlight(paper_id, hid):
+        raise HTTPException(404, detail="This highlight is not there.")
+    return {"ok": True}
+
+
 @app.get("/papers/{paper_id}/checks")
 def get_checks(paper_id: str) -> dict[str, Any]:
     out = checker.history(paper_id)

@@ -111,6 +111,16 @@ CREATE TABLE IF NOT EXISTS marks (
     text TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- saved highlights: kind 'me' (yellow) or 'dot' (blue, a suggestion); rects is a JSON list of line rects in PDF points
+CREATE TABLE IF NOT EXISTS highlights (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    page INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'me',
+    text TEXT NOT NULL DEFAULT '',
+    rects TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,

@@ -107,3 +107,32 @@ def test_explain_sends_a_picture_of_the_marked_area(monkeypatch: pytest.MonkeyPa
     assert calls[0]["messages"][1]["content"][1]["image_url"]["url"].startswith("data:image/png")
     assert isinstance(calls[1]["messages"][1]["content"], str)
     assert c.post(f"/papers/{pid}/explain", json={"words": "x", "rect": [300, 88, 70, 106]}).status_code == 422
+
+
+def test_paragraphs_have_text_in_block_order() -> None:
+    pid = _paper()
+    paras = marks.paragraphs(pid, 1)
+    assert [r for r, _ in paras] == marks.blocks(pid, 1)["blocks"]
+    assert "first paragraph" in paras[0][1] and "second paragraph" in paras[1][1]
+    assert marks.paragraphs(pid, 2) is None
+
+
+def test_a_page_with_no_text_has_no_paragraphs() -> None:
+    doc = pymupdf.open()
+    doc.new_page()
+    pid = library.create(doc.tobytes(), "blank.pdf")
+    assert marks.paragraphs(pid, 1) == []
+
+
+def test_highlights_round_trip() -> None:
+    pid = _paper()
+    c = TestClient(main.app)
+    h = c.post(f"/papers/{pid}/highlights", json={"page": 1, "text": "first paragraph", "rects": [[90, 92, 160, 102]]}).json()
+    assert h["kind"] == "me" and c.get(f"/papers/{pid}/highlights").json()["highlights"] == [h]
+    assert c.post(f"/papers/{pid}/highlights", json={"page": 1, "rects": [[400, 90, 70, 110]]}).status_code == 422
+    assert c.post(f"/papers/{pid}/highlights", json={"page": 1, "rects": []}).status_code == 422
+    d = c.post(f"/papers/{pid}/highlights", json={"page": 1, "kind": "dot", "rects": [[90, 92, 160, 102]]}).json()
+    assert c.put(f"/papers/{pid}/highlights/{d['id']}", json={"kind": "me"}).json()["kind"] == "me"
+    assert c.delete(f"/papers/{pid}/highlights/{h['id']}").json() == {"ok": True}
+    assert c.delete(f"/papers/{pid}/highlights/{h['id']}").status_code == 404
+    assert c.get("/papers/nope/highlights").status_code == 404
