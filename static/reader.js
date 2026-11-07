@@ -874,12 +874,14 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       return !v.hidden && !!c && x >= c.left && x <= c.right && y >= c.top && y <= c.bottom;
     },
     hover: (x, y) => preview(x == null ? null : edgeBlock(x, y)),
-    drop: (x, y) => { const b = edgeBlock(x, y); preview(null); return b ? trace(b) : lens(); },
+    drop: (x, y) => { const b = edgeBlock(x, y); preview(null); return !b ? lens() : openMark ? grow2(openMark, b) : trace(b); },
   });
 
   // ---------- margin notes: drag Dot to a paragraph's edge; it runs round it and you write beside it ----------
   const blockCache = new Map();
-  let blocks = [], marks = [];
+  let blocks = [], marks = [], openMark = null; // openMark: the note whose card is open; a drop then grows its box
+  const union = (a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+  const inside = (a, b) => a[0] >= b[0] - 1 && a[1] >= b[1] - 1 && a[2] <= b[2] + 1 && a[3] <= b[3] + 1;
   api(`/papers/${paperId}/marks`).then((r) => { marks = r.marks; drawMarks(); }).catch(() => {});
   async function loadBlocks(n) {
     if (!blockCache.has(n)) blockCache.set(n, api(`/papers/${paperId}/blocks/${n}`).catch(() => ({ blocks: [] })));
@@ -904,7 +906,9 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   const traceBox = h("div", { class: "trace-preview", hidden: true }, h("span", {}, "Drop to trace"));
   function preview(b) {
     if (!b) { traceBox.hidden = true; return; }
-    const [x0, y0, x1, y1] = px(b);
+    const grow = openMark?.page === v.page;
+    traceBox.firstChild.textContent = grow ? "Drop to add to this note" : "Drop to trace";
+    const [x0, y0, x1, y1] = px(grow ? union(openMark.rect, b) : b);
     traceBox.style.cssText = `left:${x0 - 8}px;top:${y0 - 8}px;width:${x1 - x0 + 16}px;height:${y1 - y0 + 16}px`;
     if (traceBox.parentNode !== marksLayer) marksLayer.append(traceBox);
     traceBox.hidden = false;
@@ -942,6 +946,23 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     buddy.goHome();
     drawMarks(); card(r);
   }
+  // Grow a note's box over another box (with every box between, so a merged area reads in order).
+  async function grow2(m, b) {
+    if (m.page !== v.page) return trace(b);
+    clearPick(); buddy.pen(false); buddy.goHome();
+    let r = union(m.rect, b);
+    for (const x of blocks) if (x[0] < r[2] && x[2] > r[0] && x[1] < r[3] && x[3] > r[1]) r = union(r, x); // boxes it now cuts
+    m.rect = r.map((q) => Math.round(q * 10) / 10);
+    await api(`/papers/${paperId}/marks/${m.id}`, { method: "PUT", body: JSON.stringify({ text: m.text, rect: m.rect }) }).catch(() => {});
+    marksLayer.querySelector(".mk-card")?.dispatchEvent(new Event("regrow"));
+  }
+  // the box after this note's box in reading order (column by column, top to bottom)
+  function nextBlock(m) {
+    if (m.page !== v.page) return null;
+    const last = blocks.findLastIndex((b) => inside(b, m.rect)); // blocks come sorted column by column
+    return last >= 0 ? blocks.slice(last + 1).find((b) => !inside(b, m.rect))
+      : blocks.find((b) => b[1] >= m.rect[3] - 2 && Math.abs(b[0] - m.rect[0]) < 60);
+  }
   // the note beside the paragraph; empty notes go away when closed, written ones fold into a pin
   function card(m) {
     marksLayer.querySelector(".mk-card")?.dispatchEvent(new Event("fold"));
@@ -950,24 +971,50 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     const side = W - x1 - 20 >= 200 ? x1 + 14 : x0 - 20 >= 200 ? Math.max(8, x0 - 14 - w) : null;
     const pos = side != null ? `left:${side}px;top:${y0 - 4}px;width:${Math.min(w, side > x1 ? W - side - 10 : w)}px`
       : `left:${Math.max(8, Math.min(x0, W - w - 8))}px;top:${y1 + 14}px;width:${w}px`;
-    const ta = h("textarea", { class: "mk-text", rows: 3, placeholder: "Write beside this paragraph", "aria-label": `Margin note, page ${m.page}` });
+    const ta = h("textarea", { class: "mk-text", rows: 3, placeholder: "Write here. Start a line with @ai and press Enter to ask about this box.", "aria-label": `Margin note, page ${m.page}` });
     ta.value = m.text;
     let t = 0;
     const save = () => { clearTimeout(t); if (m.text === ta.value) return; m.text = ta.value; return api(`/papers/${paperId}/marks/${m.id}`, { method: "PUT", body: JSON.stringify({ text: m.text }) }).catch(() => {}); };
     ta.addEventListener("input", () => { clearTimeout(t); t = setTimeout(save, SAVE_DELAY); grow(ta); });
+    ta.addEventListener("keydown", async (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+      const start = ta.value.lastIndexOf("\n", ta.selectionStart - 1) + 1;
+      const q = ta.value.slice(start, ta.selectionStart).match(/^\s*@ai\b[:,]?\s*(.+)$/i);
+      if (!q) return;
+      e.preventDefault();
+      const wait = `AI is looking at this box (${Date.now()})`;
+      ta.setRangeText(`\n${wait}\n`, ta.selectionStart, ta.selectionStart, "end");
+      grow(ta); await save();
+      const r = await api(`/papers/${paperId}/marks/${m.id}/ask`, { method: "POST", body: JSON.stringify({ question: q[1].trim().slice(0, 600) }) })
+        .catch(() => ({ ok: false, error: "Could not ask the model. Is the app still running?" }));
+      const answer = r.ok ? `AI: ${r.text}` : `AI could not answer: ${r.error}`;
+      const i = ta.value.indexOf(wait);
+      if (i >= 0) ta.setRangeText(answer, i, i + wait.length, "preserve"); else ta.value += `\n${answer}\n`;
+      grow(ta); await save();
+    });
+    const more = h("button", { type: "button", class: "mk-del mk-more", title: "Take in the next paragraph or formula too",
+      onclick: () => { const b = nextBlock(m); if (b) grow2(m, b); else more.disabled = true; } }, "+ Next box");
     const el = h("div", { class: "mk-card", style: pos, role: "dialog", "aria-label": "Margin note" },
       h("div", { class: "mk-head" }, h("span", { class: "buddy-name" }, `p. ${m.page}`),
-        h("button", { type: "button", class: "mk-del", onclick: () => remove(m) }, "Delete"),
+        more, h("button", { type: "button", class: "mk-del", onclick: () => remove(m) }, "Delete"),
         h("button", { type: "button", class: "buddy-x", "aria-label": "Fold the note", onclick: () => fold() }, "×")),
       ta);
     async function fold() {
       document.removeEventListener("pointerdown", outside, true);
+      if (openMark === m) openMark = null;
       await save();
       el.remove();
       if (!m.text.trim()) remove(m);
     }
-    const outside = (e) => { if (!el.contains(e.target) && !e.target.closest?.(".mk-pin")) fold(); };
+    // Dot stays usable while a note is open: dragging it to another box grows this note
+    const outside = (e) => { if (!el.contains(e.target) && !e.target.closest?.(".mk-pin, .buddy")) fold(); };
     el.addEventListener("fold", fold);
+    el.addEventListener("regrow", async () => { // the box changed: redraw it, move the card, keep the words
+      document.removeEventListener("pointerdown", outside, true);
+      clearTimeout(t); m.text = ta.value; el.remove(); openMark = null;
+      drawMarks(); card(m);
+    });
+    openMark = m;
     el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); fold(); } });
     setTimeout(() => document.addEventListener("pointerdown", outside, true), 0);
     marksLayer.append(el);
@@ -975,6 +1022,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
   async function remove(m) {
     marks = marks.filter((x) => x !== m);
+    if (openMark === m) openMark = null;
     marksLayer.querySelector(".mk-card")?.remove();
     drawMarks();
     await api(`/papers/${paperId}/marks/${m.id}`, { method: "DELETE" }).catch(() => {});

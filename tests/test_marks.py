@@ -42,3 +42,48 @@ def test_margin_notes_round_trip_and_export() -> None:
     assert c.delete(f"/papers/{pid}/marks/{mid}").status_code == 404
     library.delete(pid)
     assert c.get(f"/papers/{pid}/marks").status_code == 404
+
+
+def test_formula_pieces_join_into_one_box() -> None:
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "A paragraph with enough words to count as text.", fontsize=10)
+    for x, piece in [(150, "f* <- argmin"), (230, "sum"), (262, "L(f(x), y)   (1)")]:  # one equation, three blocks
+        page.insert_text((x, 160), piece, fontsize=10)
+    pid = library.create(doc.tobytes(), "f.pdf")
+    boxes = marks.blocks(pid, 1)["blocks"]
+    assert len(boxes) == 2 and boxes[1][0] < 151 and boxes[1][2] > 300
+    text, png = marks.boxed(pid, 1, boxes[1])
+    assert "argmin" in text and "(1)" in text and png.startswith("data:image/png;base64,")
+
+
+def test_box_grows_and_ai_sees_a_picture(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    import openai
+
+    class NoImages(openai.APIStatusError):  # what a text-only server sends back
+        def __init__(self) -> None:
+            self.status_code, self.message = 400, "image input is not supported"
+
+    from workbench import llm
+    calls = []
+
+    def create(**kw):
+        calls.append(kw)
+        if len(calls) == 1 and isinstance(kw["messages"][1]["content"], list):
+            raise NoImages()
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="It is the training objective."))])
+    monkeypatch.setattr(llm, "pick_model", lambda s: "m")
+    monkeypatch.setattr(llm, "client", lambda *a, **k: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    pid = _paper()
+    c = TestClient(main.app)
+    mid = c.post(f"/papers/{pid}/marks", json={"page": 1, "rect": [70, 90, 400, 110]}).json()["id"]
+    assert c.put(f"/papers/{pid}/marks/{mid}", json={"text": "", "rect": [70, 90, 400, 310]}).json() == {"ok": True}
+    assert c.get(f"/papers/{pid}/marks").json()["marks"][0]["rect"] == [70, 90, 400, 310]
+    r = c.post(f"/papers/{pid}/marks/{mid}/ask", json={"question": "What is this?"}).json()
+    assert r["ok"] and r["text"] == "It is the training objective."
+    first, second = calls[0]["messages"][1]["content"], calls[1]["messages"][1]["content"]
+    assert first[1]["image_url"]["url"].startswith("data:image/png") and "second paragraph" in first[0]["text"]
+    assert isinstance(second, str)  # a text-only model gets asked again without the picture
+    assert c.post(f"/papers/{pid}/marks/999/ask", json={"question": "x"}).status_code == 404

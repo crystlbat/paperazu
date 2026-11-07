@@ -142,18 +142,26 @@ ASK_SYSTEM = (
 )
 
 
-def _answer(s: Settings, system: str, question: str, title: str, pages: list[str], page: int) -> dict[str, Any]:
-    """One question to the local model with the paper (or what fits) as context. `page` is 0-based."""
+def _answer(s: Settings, system: str, question: str, title: str, pages: list[str], page: int,
+            image: str | None = None) -> dict[str, Any]:
+    """One question to the local model with the paper (or what fits) as context. `page` is 0-based.
+    `image` is a data: URL sent with the question; if the server will not take images, it asks again without."""
     page = min(max(page, 0), max(len(pages) - 1, 0))
     paper, keep = paper_text(s, pages, page, system + question + title)
     start = time.perf_counter()
+    prompt = f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\n{question}"
+    content: Any = [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": image}}] if image else prompt
     try:
-        r = client(s).chat.completions.create(
-            model=pick_model(s) or "default",
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\n{question}"}],
-            max_tokens=s.max_output_tokens, temperature=s.temperature,
-        )
+        try:
+            r = client(s).chat.completions.create(
+                model=pick_model(s) or "default",
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": content}],
+                max_tokens=s.max_output_tokens, temperature=s.temperature,
+            )
+        except APIStatusError as e:
+            if not image or e.status_code not in (400, 415, 422, 500, 501):
+                raise
+            return _answer(s, system, question, title, pages, page)  # a text-only model: ask without the picture
     except AuthenticationError:
         return {"ok": False, "error": "Wrong API key. Check it in Settings."}
     except APIConnectionError:
@@ -178,3 +186,18 @@ def ask(s: Settings, question: str, title: str, pages: list[str], page: int) -> 
     """Answer a free question about the paper. `page` is the 0-based page the student is looking at."""
     page = min(max(page, 0), max(len(pages) - 1, 0))
     return _answer(s, ASK_SYSTEM, f"I am looking at page {page + 1}. My question: {question}", title, pages, page)
+
+
+BOX_SYSTEM = (
+    "You help a student read a research paper. The student drew a box round part of a page and asked about it. "
+    "You get the text inside the box (formulas may look jumbled after copying out of the PDF) and, when possible, "
+    "a picture of the box: trust the picture for formulas. Answer in simple English, in 2 to 5 short sentences, "
+    "about the boxed part as it is used in this paper. For a formula, say what each symbol stands for."
+)
+
+
+def ask_box(s: Settings, question: str, boxed: str, image: str | None, title: str, pages: list[str], page: int) -> dict[str, Any]:
+    """Answer a question about a boxed part of a page, with a picture of the box. `page` is 0-based."""
+    page = min(max(page, 0), max(len(pages) - 1, 0))
+    q = f'The box I drew on page {page + 1} holds this text:\n"""\n{boxed[:3000]}\n"""\nMy question: {question}'
+    return _answer(s, BOX_SYSTEM, q, title, pages, page, image)

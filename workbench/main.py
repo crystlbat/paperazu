@@ -320,9 +320,25 @@ def edit_mark(paper_id: str, mark_id: int, body: dict[str, Any] = Body(...)) -> 
         t = marks.MarkText(**body)
     except ValidationError as e:
         raise HTTPException(422, detail={"errors": _errors(e)})
-    if not marks.update(paper_id, mark_id, t.text):
+    if not marks.update(paper_id, mark_id, t.text, t.rect):
         raise HTTPException(404, detail="This note is not there.")
     return {"ok": True}
+
+
+@app.post("/papers/{paper_id}/marks/{mark_id}/ask")
+def ask_mark(paper_id: str, mark_id: int, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """An @ai question in a margin note: the local model gets the boxed text and a picture of the box."""
+    try:
+        req = marks.BoxAsk(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    paper = _paper_or_404(paper_id)
+    m = marks.get(paper_id, mark_id)
+    pages = library.page_texts(paper_id)
+    box = m and marks.boxed(paper_id, m["page"], m["rect"])
+    if not box or pages is None:
+        raise HTTPException(404, detail="This note is not there.")
+    return llm.ask_box(settings.get_all(), req.question.strip(), box[0], box[1], paper["title"], pages, m["page"] - 1)
 
 
 @app.delete("/papers/{paper_id}/marks/{mark_id}")
