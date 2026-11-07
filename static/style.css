@@ -658,6 +658,16 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .buddy.hop .buddy-face { animation: hop .7s cubic-bezier(.3,.7,.2,1.2); }
 .buddy.done .buddy-face { animation: hop .6s cubic-bezier(.3,.7,.2,1.4); }
 @keyframes hop { 30% { translate: 0 -9px; scale: 1.04 .96; } 55% { translate: 0 0; scale: .97 1.03; } 75% { translate: 0 -2px; } }
+/* travelling: the whole buddy glides, leaning the way it goes; yes nods green, no shakes red */
+.buddy { transition: transform var(--trip, 700ms) cubic-bezier(.45,.05,.25,1); }
+.buddy.moving .buddy-face { rotate: var(--lean); animation: walk .32s ease-in-out infinite; }
+@keyframes walk { 50% { translate: 0 -6px; } }
+.buddy.yes .buddy-face { animation: nod .55s ease-in-out 1; box-shadow: 0 0 0 2px #6fd39b inset, 0 0 24px rgb(111 211 155 / .45); }
+.buddy.no .buddy-face { animation: shake .45s ease-in-out 1; box-shadow: 0 0 0 2px #ff5a4a inset, 0 0 24px rgb(255 90 74 / .4); }
+.buddy.yes .buddy-grid i.on { background: #8ef0b6; }
+.buddy.no .buddy-grid i.on { background: #ff8a7e; }
+@keyframes nod { 30% { translate: 0 5px; } 60% { translate: 0 -3px; } }
+@keyframes shake { 20% { translate: -6px 0; } 40% { translate: 6px 0; } 60% { translate: -4px 0; } 80% { translate: 3px 0; } }
 .buddy-led { position: absolute; top: 8px; right: 10px; width: 5px; height: 5px; border-radius: 50%; background: rgb(255 255 255 / .15); }
 .buddy[data-status="ready"] .buddy-led { background: #6fd39b; }
 .buddy[data-status="not_running"] .buddy-led, .buddy[data-status="error"] .buddy-led { background: #ff5a4a; animation: blink 1.2s ease-in-out infinite; }
@@ -683,7 +693,7 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 @media (prefers-color-scheme: dark) {
   .buddy-face { box-shadow: 0 0 0 1px rgb(255 255 255 / .12) inset, 0 14px 30px -14px rgb(0 0 0 / .7); }
 }
-@media (prefers-reduced-motion: reduce) { .buddy-face, .buddy-bubble, .buddy.busy .buddy-face, .buddy.hop .buddy-face { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .buddy-face, .buddy-bubble, .buddy.busy .buddy-face, .buddy.hop .buddy-face, .buddy.yes .buddy-face, .buddy.no .buddy-face, .buddy.moving .buddy-face { animation: none; } .buddy { transition: none; } }
 @media (max-width: 480px) { .buddy { right: 12px; bottom: 12px; } }
 
 /* ---------- Library: paper cards ---------- */

@@ -36,8 +36,15 @@ const buddy = (() => {
     .concat([...Array(W).keys()].map((x) => (H - 1) * W + W - 1 - x))
     .concat([...Array(H - 2).keys()].map((y) => (H - 2 - y) * W));
 
+  // a tick and a cross, for when Dot judges a match
+  const GLYPHS = {
+    yes: [[3, 4], [4, 5], [5, 6], [6, 5], [7, 4], [8, 3], [9, 2], [3, 5], [4, 6], [5, 7], [6, 6], [7, 5], [8, 4], [9, 3]],
+    no: [[4, 2], [5, 3], [6, 4], [7, 5], [8, 6], [8, 2], [7, 3], [5, 5], [4, 6], [3, 1], [9, 1], [3, 7], [9, 7]],
+  };
+
   const st = { mood: "idle", dx: 0, dy: 0, blink: false, talkFrame: 0, talking: false, busy: 0, spin: 0,
-    muted: localStorage.getItem("buddy-muted") === "1", last: null };
+    muted: localStorage.getItem("buddy-muted") === "1", last: null,
+    glyph: null, lookUntil: 0, off: { x: 0, y: 0 }, away: false, trip: 0 };
 
   const root = document.createElement("aside");
   root.className = "buddy";
@@ -65,7 +72,7 @@ const buddy = (() => {
     const dx = st.busy ? [-1, 0, 1, 0][Math.floor(st.spin / 6) % 4] : m.dx ?? st.dx, dy = m.dy ?? st.dy;
     const eyes = st.blink && m.eyes !== "closed" ? "closed" : m.eyes;
     const mouth = st.talking ? (st.talkFrame ? "o" : "talk") : m.mouth;
-    const on = new Set([...EYES[eyes](dx, dy), ...MOUTHS[mouth]].map(([x, y]) => y * W + x));
+    const on = new Set((st.glyph ? GLYPHS[st.glyph] : [...EYES[eyes](dx, dy), ...MOUTHS[mouth]]).map(([x, y]) => y * W + x));
     const tail = new Map(st.busy ? [0, 1, 2, 3, 4].map((k) => [RIM[(st.spin - k + RIM.length) % RIM.length], k]) : []);
     dots.forEach((d, i) => {
       d.classList.toggle("on", on.has(i) || tail.get(i) === 0);
@@ -99,7 +106,7 @@ const buddy = (() => {
   }
   function scheduleGlance() {
     setTimeout(() => {
-      if (!reduced() && Date.now() - lastMouse > 3000 && st.mood !== "sleep") {
+      if (!reduced() && Date.now() - lastMouse > 3000 && Date.now() > st.lookUntil && st.mood !== "sleep") {
         st.dx = [-1, 0, 0, 1][Math.floor(Math.random() * 4)]; st.dy = 0; draw();
       }
       scheduleGlance();
@@ -117,7 +124,7 @@ const buddy = (() => {
   let raf = 0;
   document.addEventListener("mousemove", (e) => {
     lastMouse = Date.now();
-    if (raf || reduced()) return;
+    if (raf || reduced() || Date.now() < st.lookUntil) return;
     raf = requestAnimationFrame(() => {
       raf = 0;
       const r = face.getBoundingClientRect();
@@ -130,6 +137,7 @@ const buddy = (() => {
   // ---------- talking ----------
   let typing = 0, mouthTimer = 0, hideTimer = 0;
   function show(msg) {
+    if (st.away) home(); // talk from the corner, where the bubble has room
     clearInterval(typing); clearInterval(mouthTimer); clearTimeout(hideTimer);
     st.mood = msg.mood; st.talking = false; draw();
     actionsEl.replaceChildren(...(msg.actions || []).map((a) => {
@@ -206,11 +214,79 @@ const buddy = (() => {
     show(msg);
   }
   function status(s) { root.dataset.status = s; }
+
+  // ---------- moving about: travel to a point, look at a point, judge, wander ----------
+  const centre = () => { const r = face.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // where the face sits in its corner: its centre now, less however far the glide has carried it so far
+  const homeCentre = () => { const [cx, cy] = centre(), m = new DOMMatrixReadOnly(getComputedStyle(root).transform); return [cx - m.m41, cy - m.m42]; };
+  /** Turn the eyes toward a point on screen and hold the look for `ms`. */
+  function lookAt(x, y, ms = 1800) {
+    const [cx, cy] = centre();
+    st.dx = Math.max(-1, Math.min(1, Math.round((x - cx) / 120)));
+    st.dy = y < cy - 60 ? -1 : y > cy + 60 ? 1 : 0;
+    st.lookUntil = Date.now() + ms; draw();
+  }
+  /** Walk so the face is centred on (x, y). Resolves on arrival. Stays put with reduced motion. */
+  async function goTo(x, y) {
+    if (reduced()) return;
+    const [cx, cy] = centre();
+    const [hx, hy] = homeCentre();
+    const dist = Math.hypot(x - cx, y - cy);
+    if (dist < 4) return;
+    hide();
+    const ms = Math.round(Math.min(1100, Math.max(380, dist * 1.1)));
+    st.off = { x: x - hx, y: y - hy };
+    st.away = Math.hypot(st.off.x, st.off.y) > 4;
+    lookAt(x, y, ms + 200);
+    root.style.setProperty("--trip", `${ms}ms`);
+    root.style.setProperty("--lean", `${Math.sign(x - cx) * 6}deg`);
+    root.classList.add("moving");
+    root.style.transform = `translate(${st.off.x}px, ${st.off.y}px)`;
+    await wait(ms);
+    root.classList.remove("moving");
+  }
+  function home() {
+    st.off = { x: 0, y: 0 }; st.away = false;
+    root.style.setProperty("--trip", "700ms");
+    root.style.transform = "";
+  }
+  async function goHome() {
+    if (!st.away) return;
+    await goTo(...homeCentre());
+    home();
+  }
+  /** Show a tick ("yes") or a cross ("no") with a nod or a shake. */
+  async function react(kind) {
+    st.glyph = kind; draw();
+    root.classList.remove("yes", "no"); void root.offsetWidth; root.classList.add(kind);
+    await wait(reduced() ? 500 : 750);
+    st.glyph = null; root.classList.remove(kind); draw();
+  }
+  /** A trip is a run of moves that owns Dot; starting a new one cancels the old. */
+  function trip() { st.trip += 1; const id = st.trip; return () => id === st.trip; }
+
+  // wander inside the area the page gives (a function returning a DOMRect), then come back
+  let roamArea = null;
+  function roam(area) { roamArea = area; if (!area) { st.trip += 1; goHome(); } }
+  (function scheduleRoam() {
+    setTimeout(async () => {
+      const r = roamArea?.();
+      if (r && !reduced() && !st.busy && !st.away && bubble.hidden && document.visibilityState === "visible") {
+        const live = trip();
+        await goTo(r.left + 60 + Math.random() * (r.width - 120), r.top + 60 + Math.random() * (r.height - 120));
+        for (const d of [-1, 1, 0]) { if (!live()) return; st.dx = d; st.lookUntil = Date.now() + 700; draw(); await wait(600); }
+        if (live()) { root.classList.remove("hop"); void root.offsetWidth; root.classList.add("hop"); await wait(2600); }
+        if (live()) goHome();
+      }
+      scheduleRoam();
+    }, 9000 + Math.random() * 8000);
+  })();
   function mood(m) { if (bubble.hidden) { st.mood = m; draw(); } }
 
   document.body.append(root);
   setMuted(st.muted);
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
-  return { say, hide, status, mood, busy };
+  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam };
 })();

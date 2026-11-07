@@ -34,6 +34,10 @@ async function renderGraph() {
     "aria-label": "Search an idea across your papers", maxlength: 300 });
   const findBtn = h("button", { type: "submit", class: "btn" }, "Find");
   const form = h("form", { class: "g-search", onsubmit: (e) => { e.preventDefault(); find(input.value.trim()); } }, input, findBtn);
+  // Dot watches the search box while you type in it
+  const watchInput = () => { const r = input.getBoundingClientRect(); buddy.lookAt(r.left + Math.min(r.width, 14 + input.value.length * 8), r.top + r.height / 2, 2500); };
+  input.addEventListener("focus", watchInput);
+  input.addEventListener("input", watchInput);
   const legend = h("div", { class: "g-legend", "aria-hidden": "true" },
     h("span", {}, h("i", { class: "lg-theme" }), "Theme"),
     h("span", {}, h("i", { class: "lg-paper" }), "Paper"),
@@ -492,6 +496,9 @@ async function renderGraph() {
   async function find(q) {
     if (!q) return;
     findBtn.disabled = true;
+    const live = buddy.trip();
+    const fr = form.getBoundingClientRect();
+    buddy.goTo(fr.right + 56, fr.top + fr.height / 2).then(() => live() && watchInput()); // Dot comes to read your question
     side.replaceChildren(h("p", { class: "g-kind" }, "Searching"), h("h3", { class: "g-title serif" }, q),
       h("p", { class: "help g-wait" }, "Comparing your search with every passage in your papers."));
     try {
@@ -499,9 +506,35 @@ async function renderGraph() {
       st.ghost = { q, results: r.results.map((x) => ({ ...x, on: x.pick })) };
       st.sel = "ghost";
       build(); heat(0.7); paintSide();
+      visit(st.ghost.results, live);
     } catch (e) {
+      if (live()) buddy.goHome();
       side.replaceChildren(h("p", { class: "status err" }, e.body?.detail?.errors?.q || e.body?.detail || "Search failed."));
     } finally { findBtn.disabled = false; }
+  }
+
+  // Dot walks to each paper the search found, nods at good matches and shakes at weak ones, then goes home.
+  async function visit(results, live) {
+    const seen = new Set();
+    const stops = [...results].sort((a, b) => b.score - a.score).filter((r) => !seen.has(r.paper_id) && seen.add(r.paper_id)).slice(0, 6);
+    await new Promise((r) => setTimeout(r, 500)); // let the search dot settle in
+    for (const r of stops) {
+      const n = st.nodes.get(r.paper_id);
+      if (!live() || !st.alive || !n) break;
+      const box = svg.getBoundingClientRect();
+      const x = box.left + st.t.x + n.x * st.t.k, y = box.top + st.t.y + n.y * st.t.k;
+      if (x < box.left || x > box.right || y < box.top || y > box.bottom) continue; // off screen
+      await buddy.goTo(x + (n.r ?? 30) * st.t.k + 48, y - 18);
+      if (!live()) break;
+      buddy.lookAt(x, y, 1200);
+      await buddy.react(r.on ? "yes" : "no");
+    }
+    if (live()) {
+      await buddy.goHome();
+      const good = results.filter((r) => r.on).length;
+      buddy.say(good ? `I ticked ${good} good ${good === 1 ? "match" : "matches"}. Untick any you disagree with, then link.` : "Nothing matched well. Try other words.",
+        { mood: good ? "happy" : "worried" });
+    }
   }
 
   function paintSearch() {
@@ -688,7 +721,8 @@ async function renderGraph() {
   }
   function closeTree() { tree?.remove(); tree = null; stage.classList.remove("tree-open"); side.hidden = false; }
 
-  openGraph = { leave() { st.alive = false; cancelAnimationFrame(st.raf); ro.disconnect(); savePos(); } };
+  buddy.roam(() => (st.alive && !tree ? stage.getBoundingClientRect() : null)); // Dot wanders the graph now and then
+  openGraph = { leave() { st.alive = false; cancelAnimationFrame(st.raf); ro.disconnect(); savePos(); buddy.roam(null); } };
   await boot();
   requestAnimationFrame(() => fit());
 }
