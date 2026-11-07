@@ -762,7 +762,11 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   const marksLayer = h("div", { class: "marks-layer" });
   const pickBtn = (label, fn) => h("button", { type: "button", class: "btn small-btn", onmousedown: (e) => e.preventDefault(), onclick: fn }, label);
   const bubble = h("div", { class: "sel-bubble", hidden: true, role: "toolbar", "aria-label": "Selected text" },
-    pickBtn("Explain", () => { const r = bubble.getBoundingClientRect(); dotExplain(picked(), r.left, r.top); clearPick(); }),
+    pickBtn("Explain", () => {
+      const r = bubble.getBoundingClientRect(), s = getSelection().getRangeAt(0).getBoundingClientRect(), box = pageBox.getBoundingClientRect();
+      dotExplain(picked(), r.left, r.top, toPoints(s.left - box.left, s.top - box.top, s.right - box.left, s.bottom - box.top));
+      clearPick();
+    }),
     pickBtn("Find in paper", () => { search.find(picked()); clearPick(); }));
   const stage = h("div", { class: "pdf-stage" }, sheet);
   const closed = h("div", { class: "pdf-closed", hidden: true },
@@ -855,13 +859,18 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   function unmark() { guideMark.hidden = true; }
 
   // Dot explains in its own window, and takes follow-up questions there.
-  async function dotExplain(words, x, y) {
+  // a page-pixel area, padded a little, as PDF points for the server to crop
+  function toPoints(x0, y0, x1, y1) {
+    const k = v.vp?.scale ?? 1, pad = 8;
+    return [Math.max(0, x0 - pad), Math.max(0, y0 - pad), x1 + pad, y1 + pad].map((q) => Math.round((q / k) * 10) / 10);
+  }
+  async function dotExplain(words, x, y, rect) {
     if (!words) return;
     await buddy.goTo(x, y);
     let said = "";
     const post = (path, body) => api(`/papers/${paperId}/${path}`, { method: "POST", body: JSON.stringify(body) });
     buddy.open({ x, y, quote: words, area: el.getBoundingClientRect(), save: saveToNote,
-      first: post("explain", { words, page: v.page }).then((r) => { said = r.text || ""; return r; }),
+      first: post("explain", { words, page: v.page, ...(rect && { rect }) }).then((r) => { said = r.text || ""; return r; }),
       ask: (q) => post("ask", { page: v.page,
         question: `${q}\n\n(This is about the part I marked: "${words.slice(0, 300)}". You explained: "${said.slice(0, 400)}")`.slice(0, 1000) })
         .then((r) => { if (r.ok) said = r.text; return r; }) });
@@ -1029,9 +1038,9 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
   function lens() {
     clearPick(); buddy.pen(true); penHint.hidden = false;
-    search.startPen((words, x, y) => {
+    search.startPen((words, x, y, area) => {
       endPen();
-      if (words) return dotExplain(words, x, y);
+      if (words) return dotExplain(words, x, y, area && toPoints(...area));
       buddy.goHome(); buddy.say("No words there. Pictures and scanned pages have no text to read.", { mood: "worried" });
     });
   }
@@ -1194,7 +1203,8 @@ function circleSearch({ v, go, ink, hits, pane, paperId }) {
   // Dot as a highlighter: the words under the stroke, and where the stroke ended on screen
   async function highlight(p, cb) {
     const box = ink.getBoundingClientRect(), [ex, ey] = p.at(-1);
-    cb(wordsIn(await pageItems(v.page), v.vp, region(p), 120), box.left + ex, box.top + ey);
+    const r = region(p);
+    cb(wordsIn(await pageItems(v.page), v.vp, r, 120), box.left + ex, box.top + ey, [r.x0, r.y0 - 10, Math.max(r.x1, r.x0 + 60), r.y1 + 10]);
   }
   function startPen(cb) { penCb = cb; pane.classList.add("is-penning"); }
   function stopPen() { penCb = null; pane.classList.remove("is-penning"); }

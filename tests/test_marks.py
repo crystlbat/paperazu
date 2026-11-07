@@ -87,3 +87,23 @@ def test_box_grows_and_ai_sees_a_picture(monkeypatch: pytest.MonkeyPatch) -> Non
     assert first[1]["image_url"]["url"].startswith("data:image/png") and "second paragraph" in first[0]["text"]
     assert isinstance(second, str)  # a text-only model gets asked again without the picture
     assert c.post(f"/papers/{pid}/marks/999/ask", json={"question": "x"}).status_code == 404
+
+
+def test_explain_sends_a_picture_of_the_marked_area(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from workbench import llm
+    calls = []
+
+    def create(**kw):
+        calls.append(kw)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="A claim."))])
+    monkeypatch.setattr(llm, "pick_model", lambda s: "m")
+    monkeypatch.setattr(llm, "client", lambda *a, **k: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    pid = _paper()
+    c = TestClient(main.app)
+    assert c.post(f"/papers/{pid}/explain", json={"words": "first paragraph", "page": 1, "rect": [70, 88, 300, 106]}).json()["ok"]
+    assert c.post(f"/papers/{pid}/explain", json={"words": "first paragraph", "page": 1}).json()["ok"]
+    assert calls[0]["messages"][1]["content"][1]["image_url"]["url"].startswith("data:image/png")
+    assert isinstance(calls[1]["messages"][1]["content"], str)
+    assert c.post(f"/papers/{pid}/explain", json={"words": "x", "rect": [300, 88, 70, 106]}).status_code == 422

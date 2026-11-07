@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import unquote
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from . import checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, settings, themes
 
@@ -203,6 +203,9 @@ class ExplainIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     words: str = Field(min_length=1, max_length=600)
     page: int = Field(1, ge=1)  # the page the words were marked on, 1-based
+    rect: list[float] | None = Field(None, min_length=4, max_length=4)  # the marked area in PDF points, sent as a picture
+
+    _box = field_validator("rect")(marks.MarkIn._box.__func__)
 
 
 @app.post("/papers/{paper_id}/explain")
@@ -216,7 +219,8 @@ def explain(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     pages = library.page_texts(paper_id)
     if pages is None:
         raise HTTPException(404, detail="This paper is not in the library.")
-    return llm.explain(settings.get_all(), req.words.strip(), paper["title"], pages, req.page - 1)
+    box = marks.boxed(paper_id, req.page, req.rect) if req.rect else None
+    return llm.explain(settings.get_all(), req.words.strip(), paper["title"], pages, req.page - 1, box[1] if box else None)
 
 
 @app.get("/papers/{paper_id}/primer")

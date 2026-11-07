@@ -57,7 +57,7 @@ EXPLAIN_SYSTEM = (
     "mean and why they matter here. Do not summarize the paper's results. If the paper does not define "
     "them, say so and give the usual meaning. If the marked text is a formula or notation (it may look "
     "jumbled after copying out of the PDF), say what each symbol stands for in this paper and what the "
-    "formula says as a whole. No headings, no lists."
+    "formula says as a whole. If a picture of the marked part comes with the question, trust it over the copied text. No headings, no lists."
 )
 
 
@@ -175,11 +175,11 @@ def _answer(s: Settings, system: str, question: str, title: str, pages: list[str
             "whole": len(keep) == len(pages), "total": len(pages), "seconds": round(time.perf_counter() - start, 1)}
 
 
-def explain(s: Settings, words: str, title: str, pages: list[str], page: int) -> dict[str, Any]:
-    """Explain marked words with the whole paper as context (or as much as fits the budget)."""
+def explain(s: Settings, words: str, title: str, pages: list[str], page: int, image: str | None = None) -> dict[str, Any]:
+    """Explain marked words with the whole paper as context (or as much as fits the budget), and a picture of them if given."""
     page = min(max(page, 0), max(len(pages) - 1, 0))
     question = f'Words I marked on page {page + 1}: "{words}"\nWhat do they mean in this paper?'
-    return _answer(s, EXPLAIN_SYSTEM, question, title, pages, page)
+    return _answer(s, EXPLAIN_SYSTEM, question, title, pages, page, image)
 
 
 def ask(s: Settings, question: str, title: str, pages: list[str], page: int) -> dict[str, Any]:
