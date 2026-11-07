@@ -38,7 +38,12 @@ async function renderReader(paperId, startPage) {
     onclick: () => pdf.setHidden(!pdf.hidden()) }, "Hide paper");
   $("#page-extra").append(
     h("a", { href: "#library", class: "paper-title", title: "Back to the Library" }, paper.title),
-    h("span", { class: "quiet nowrap" }, done, " steps done"), hideBtn);
+    h("span", { class: "quiet nowrap" }, done, " steps done"), hideBtn,
+    h("details", { class: "menu" },
+      h("summary", {}, "Export"),
+      h("div", { class: "menu-list" },
+        h("button", { type: "button", onclick: () => exportDialog(paper, "markdown", () => queue.flush()) }, "Export Markdown"),
+        h("button", { type: "button", onclick: () => exportDialog(paper, "reflection", () => queue.flush()) }, "Export reflection outline"))));
 
   const status = h("span", { class: "save-status", role: "status" });
   const queue = saveQueue(paperId, notes, status, (id, r) => {

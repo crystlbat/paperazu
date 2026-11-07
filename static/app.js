@@ -15,7 +15,7 @@ function h(tag, attrs = {}, ...kids) {
 }
 
 // calls that wait on the local model: Dot shows it is working while they run
-const MODEL_CALL = /\/(explain|ask|test-connection)$|\/check\/\w+$|^\/graph\/(index|search|suggest)$/;
+const MODEL_CALL = /\/(explain|ask|test-connection)$|\/check\/\w+$|\/export\/reflection$|^\/graph\/(index|search|suggest)$/;
 
 async function api(path, opts = {}) {
   const working = MODEL_CALL.test(path);
@@ -418,7 +418,6 @@ async function makePrimerFromLibrary(p) {
 }
 
 function rowMenu(p, s) {
-  const later = (label, phase) => h("button", { type: "button", disabled: true, title: `Comes in phase ${phase}` }, label);
   return h("details", { class: "menu" },
     h("summary", { "aria-label": `More actions for ${p.title}` }, "More"),
     h("div", { class: "menu-list" },
@@ -429,7 +428,8 @@ function rowMenu(p, s) {
       } }, p.template === "slides" ? "Read as a research paper" : "Read as lecture slides"),
       h("button", { type: "button", disabled: p.primer_status === "making", onclick: () => makePrimerFromLibrary(p) },
         p.primer_status === "ready" ? "Make AI summary again" : "Make AI summary"),
-      later("Export Markdown", 7), later("Export reflection outline", 7),
+      h("button", { type: "button", onclick: () => exportDialog(p, "markdown") }, "Export Markdown"),
+      h("button", { type: "button", onclick: () => exportDialog(p, "reflection") }, "Export reflection outline"),
       h("hr", {}),
       h("button", { type: "button", class: "danger", onclick: () => deleteDialog(p) }, "Delete")));
 }
@@ -547,6 +547,42 @@ function deleteDialog(p) {
   dlg.addEventListener("close", () => dlg.remove());
   document.body.append(dlg);
   dlg.showModal();
+}
+
+// ---------- export ----------
+// Shows the Markdown, then copy or download it. `before` lets the Reader save pending notes first.
+async function exportDialog(p, kind, before) {
+  document.querySelectorAll("details.menu[open]").forEach((d) => { d.open = false; });
+  const outline = kind === "reflection";
+  const status = h("p", { class: "quiet", role: "status" }, outline ? "Your model is sorting your notes into the sections..." : "Getting your notes...");
+  const text = h("textarea", { class: "export-text", readonly: true, "aria-label": "Exported Markdown", hidden: true });
+  const name = `${(p.title || "paper").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").slice(0, 60) || "paper"}${outline ? "-reflection" : ""}.md`;
+  const copy = h("button", { type: "button", class: "btn ghost", disabled: true, onclick: async () => {
+    await navigator.clipboard.writeText(text.value).then(() => { copy.textContent = "Copied"; }, () => { text.select(); copy.textContent = "Press Cmd+C to copy"; });
+  } }, "Copy");
+  const save = h("button", { type: "button", class: "btn", disabled: true, onclick: () => {
+    const a = h("a", { href: URL.createObjectURL(new Blob([text.value], { type: "text/markdown" })), download: name });
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } }, "Download .md");
+  const dlg = h("dialog", { class: "dialog export" },
+    h("h2", {}, outline ? "Reflection outline" : "Export notes"),
+    h("p", {}, h("strong", {}, p.title)),
+    outline ? h("p", { class: "quiet" }, "Every line is from your own notes. The model only chose which section each note goes in. It adds no new facts.") : null,
+    status, text,
+    h("div", { class: "dactions" },
+      h("button", { type: "button", class: "btn ghost", onclick: () => dlg.close() }, "Close"), copy, save));
+  dlg.addEventListener("close", () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
+  try {
+    if (before) await before();
+    const r = await api(`/papers/${p.id}/export/${kind}`);
+    if (!r.ok) { status.textContent = r.error; return; }
+    text.value = r.markdown; text.hidden = false; status.hidden = true;
+    copy.disabled = save.disabled = false;
+  } catch (e) {
+    status.textContent = e.status === 404 ? "This paper is not in the library." : "Could not export. Try again.";
+  }
 }
 
 // The Reader lives in reader.js.

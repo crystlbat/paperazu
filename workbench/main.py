@@ -16,7 +16,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import checker, db, framework, graph, library, llm, notes, primer, settings, themes
+from . import checker, db, export, framework, graph, library, llm, notes, primer, settings, themes
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -256,6 +256,26 @@ def check_notes(paper_id: str, step_id: str) -> dict[str, Any]:
     if out is None:
         raise HTTPException(404, detail="This paper is not in the library.")
     return {"ok": True, **out}
+
+
+@app.get("/papers/{paper_id}/export/markdown")
+def export_markdown(paper_id: str) -> dict[str, Any]:
+    out = export.markdown(paper_id)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return {"ok": True, "markdown": out}
+
+
+@app.get("/papers/{paper_id}/export/reflection")
+def export_reflection(paper_id: str) -> dict[str, Any]:
+    """The model only sorts your notes into sections; every line is your own text."""
+    try:
+        out = export.reflection(settings.get_all(), paper_id)
+    except primer.PrimerError as e:
+        return {"ok": False, "error": str(e)}
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return {"ok": True, "markdown": out}
 
 
 @app.get("/papers/{paper_id}/checks")
