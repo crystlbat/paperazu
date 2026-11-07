@@ -225,3 +225,38 @@ def remove_highlight(paper_id: str, hid: int) -> bool:
             return bool(con.execute("DELETE FROM highlights WHERE id = ? AND paper_id = ?", (hid, paper_id)).rowcount)
     finally:
         con.close()
+
+
+def _lines(rects: list[Any]) -> list[list[float]]:
+    """Merge the pieces of one line (same height band) into a single rectangle per line."""
+    out: list[list[float]] = []
+    for r in sorted(rects, key=lambda r: (r.y0, r.x0)):
+        last = out[-1] if out else None
+        if last and min(last[3], r.y1) - max(last[1], r.y0) > 0.5 * (r.y1 - r.y0):
+            last[:] = [min(last[0], r.x0), min(last[1], r.y0), max(last[2], r.x1), max(last[3], r.y1)]
+        else:
+            out.append([r.x0, r.y0, r.x1, r.y1])
+    return [[round(v, 1) for v in r] for r in out]
+
+
+def suggest(s: Any, paper_id: str, page: int, rect: list[float], title: str) -> list[dict[str, Any]] | None:
+    """Dot highlights the important quotes inside a box. Quotes the model made up, or that are most of the box, are dropped."""
+    from . import llm
+    got = boxed(paper_id, page, rect)
+    if not got:
+        return None
+    text = got[0]
+    quotes = llm.pick_quotes(s, text, title)
+    pg = _page(paper_id, page)
+    if not pg:
+        return None
+    out: list[dict[str, Any]] = []
+    with pg[0]:
+        clip = pymupdf.Rect(*rect) & pg[1].rect
+        for q in quotes:
+            if len(q) > 0.6 * len(text):
+                continue
+            found = pg[1].search_for(q, clip=clip) or pg[1].search_for(" ".join(q.split()[:8]), clip=clip)
+            if found:
+                out.append({"text": q, "rects": _lines(found)})
+    return [h for x in out if (h := add_highlight(paper_id, HighlightIn(page=page, kind="dot", text=x["text"], rects=x["rects"])))]

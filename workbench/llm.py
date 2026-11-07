@@ -1,4 +1,5 @@
 """Talk to the Unsloth (llama-server) OpenAI-compatible endpoint."""
+import json
 import re
 import time
 from typing import Any
@@ -201,3 +202,27 @@ def ask_box(s: Settings, question: str, boxed: str, image: str | None, title: st
     page = min(max(page, 0), max(len(pages) - 1, 0))
     q = f'The box I drew on page {page + 1} holds this text:\n"""\n{boxed[:3000]}\n"""\nMy question: {question}'
     return _answer(s, BOX_SYSTEM, q, title, pages, page, image)
+
+
+HIGHLIGHT_SYSTEM = (
+    "You help a student read a research paper. You get one part of a page. Pick only the most important parts "
+    "the student should remember (a key claim, a definition, a main result). Copy each one word for word from the "
+    "text. Give at most 3, each at most 25 words, never a whole paragraph. Fewer is better. "
+    'Reply with JSON only: {"quotes": ["..."]}.'
+)
+_QUOTES = {"type": "object", "properties": {"quotes": {"type": "array", "items": {"type": "string"}}},
+           "required": ["quotes"], "additionalProperties": False}
+
+
+def pick_quotes(s: Settings, text: str, title: str) -> list[str]:
+    """Quotes worth highlighting in `text`. Raises primer.PrimerError for the user; broken JSON is asked twice, then []."""
+    from . import primer  # primer imports this module
+    msgs = [{"role": "system", "content": HIGHLIGHT_SYSTEM},
+            {"role": "user", "content": f"Paper: {title}\n\nText:\n\"\"\"\n{text[:6000]}\n\"\"\""}]
+    for _ in range(2):
+        try:
+            out = json.loads(primer._complete(s, msgs, _QUOTES, "quotes"))["quotes"]
+            return [q.strip() for q in out if isinstance(q, str) and q.strip()][:3]
+        except (ValueError, KeyError, TypeError):
+            continue
+    return []

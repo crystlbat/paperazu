@@ -136,3 +136,36 @@ def test_highlights_round_trip() -> None:
     assert c.delete(f"/papers/{pid}/highlights/{h['id']}").json() == {"ok": True}
     assert c.delete(f"/papers/{pid}/highlights/{h['id']}").status_code == 404
     assert c.get("/papers/nope/highlights").status_code == 404
+
+
+def _fake_model(monkeypatch: pytest.MonkeyPatch, replies: list[str]) -> None:
+    from types import SimpleNamespace
+
+    from workbench import llm, primer
+    it = iter(replies)
+
+    def create(**kw):
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=next(it)))])
+    monkeypatch.setattr(llm, "pick_model", lambda s: "m")
+    monkeypatch.setattr(llm, "client", lambda *a, **k: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    monkeypatch.setattr(primer, "_json_schema_ok", True)
+
+
+def test_dot_suggests_only_quotes_that_are_really_there(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+    _fake_model(monkeypatch, [json.dumps({"quotes": ["enough words to count", "words that are not on the page",
+                                                     "A first paragraph with enough words to count as text."]})])
+    pid = _paper()
+    c = TestClient(main.app)
+    r = c.post(f"/papers/{pid}/highlights/suggest", json={"page": 1, "rect": [60, 80, 560, 120]}).json()
+    assert r["ok"] and [h["text"] for h in r["highlights"]] == ["enough words to count"]
+    assert r["highlights"][0]["kind"] == "dot" and r["highlights"][0]["rects"]
+    assert len(c.get(f"/papers/{pid}/highlights").json()["highlights"]) == 1
+    assert c.post(f"/papers/{pid}/highlights/suggest", json={"page": 5, "rect": [60, 80, 560, 120]}).status_code == 404
+
+
+def test_suggest_with_a_broken_model_reply_adds_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_model(monkeypatch, ["nope", "nope"])
+    pid = _paper()
+    r = TestClient(main.app).post(f"/papers/{pid}/highlights/suggest", json={"page": 1, "rect": [60, 80, 560, 120]}).json()
+    assert r == {"ok": True, "highlights": []}

@@ -372,6 +372,23 @@ def add_highlight(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, 
     return out
 
 
+@app.post("/papers/{paper_id}/highlights/suggest")
+def suggest_highlights(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Dot picks the important lines inside a box and highlights them in blue. Runs on the local model only."""
+    try:
+        req = marks.MarkIn(**{**body, "text": ""})
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    paper = _paper_or_404(paper_id)
+    try:
+        out = marks.suggest(settings.get_all(), paper_id, req.page, req.rect, paper["title"])
+    except primer.PrimerError as e:
+        return {"ok": False, "error": str(e)}
+    if out is None:
+        raise HTTPException(404, detail="This page is not there.")
+    return {"ok": True, "highlights": out}
+
+
 @app.put("/papers/{paper_id}/highlights/{hid}")
 def keep_highlight(paper_id: str, hid: int) -> dict[str, Any]:
     out = marks.keep_highlight(paper_id, hid)
