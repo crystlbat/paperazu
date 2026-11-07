@@ -532,10 +532,10 @@ def _text_of(value: Any) -> str:
 
 def reindex(con: sqlite3.Connection, paper_id: str) -> None:
     """Refresh the search row for one paper. Call inside the caller's transaction."""
-    p = con.execute("SELECT title, authors, tags FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    p = con.execute("SELECT title, authors, tags, note FROM papers WHERE id = ?", (paper_id,)).fetchone()
     con.execute("DELETE FROM papers_fts WHERE paper_id = ?", (paper_id,))
     if p:
         notes = " ".join(_text_of(json.loads(r["data"]).get("fields", {}))
-                         for r in _notes(con, paper_id).values())
+                         for r in _notes(con, paper_id).values()) + " " + p["note"]
         con.execute("INSERT INTO papers_fts (paper_id, title, authors, tags, notes) VALUES (?, ?, ?, ?, ?)",
                     (paper_id, p["title"], p["authors"], " ".join(json.loads(p["tags"])), notes))

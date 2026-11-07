@@ -214,6 +214,58 @@ def explain(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return llm.explain(settings.get_all(), req.words.strip(), paper["title"], pages, req.page - 1)
 
 
+class AskIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str = Field(min_length=1, max_length=1000)
+    page: int = Field(1, ge=1)
+
+
+@app.post("/papers/{paper_id}/ask")
+def ask(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Answers a question from the plain note (@ai). Runs on the local model only."""
+    try:
+        req = AskIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    paper = _paper_or_404(paper_id)
+    pages = library.page_texts(paper_id)
+    if pages is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return llm.ask(settings.get_all(), req.question.strip(), paper["title"], pages, req.page - 1)
+
+
+class NoteTextIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(max_length=200_000)
+
+
+@app.get("/papers/{paper_id}/note")
+def get_note(paper_id: str) -> dict[str, Any]:
+    con = db.connect()
+    row = con.execute("SELECT note FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    con.close()
+    if row is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return {"text": row["note"]}
+
+
+@app.put("/papers/{paper_id}/note")
+def put_note(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        req = NoteTextIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    con = db.connect()
+    try:
+        with con:
+            if con.execute("UPDATE papers SET note = ? WHERE id = ?", (req.text, paper_id)).rowcount == 0:
+                raise HTTPException(404, detail="This paper is not in the library.")
+            library.reindex(con, paper_id)
+    finally:
+        con.close()
+    return {"ok": True}
+
+
 @app.delete("/papers/{paper_id}", status_code=204)
 def delete_paper(paper_id: str) -> None:
     if not library.delete(paper_id):

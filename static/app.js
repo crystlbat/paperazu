@@ -15,7 +15,7 @@ function h(tag, attrs = {}, ...kids) {
 }
 
 // calls that wait on the local model: Dot shows it is working while they run
-const MODEL_CALL = /\/(explain|test-connection)$|^\/graph\/(index|search|suggest)$/;
+const MODEL_CALL = /\/(explain|ask|test-connection)$|^\/graph\/(index|search|suggest)$/;
 
 async function api(path, opts = {}) {
   const working = MODEL_CALL.test(path);

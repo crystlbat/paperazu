@@ -131,6 +131,8 @@ def init() -> None:
         cols = {r["name"] for r in con.execute("PRAGMA table_info(papers)")}
         if "template" not in cols:  # '' = not picked yet; library.pick_missing_templates() fills it in
             con.execute("ALTER TABLE papers ADD COLUMN template TEXT NOT NULL DEFAULT ''")
+        if "note" not in cols:  # the plain note, written next to the paper instead of the steps
+            con.execute("ALTER TABLE papers ADD COLUMN note TEXT NOT NULL DEFAULT ''")
     con.close()
 
 

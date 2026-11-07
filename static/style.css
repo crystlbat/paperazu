@@ -785,3 +785,17 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .pcard:has(details[open]) { z-index: 5; }
 .tpick summary.pchip.add { border: 1px dashed var(--rule); padding: 0 10px; font-size: var(--fs-caption); font-weight: var(--fw-ui); color: var(--pencil); }
 .tpick summary.pchip.add:hover, .tpick[open] summary.pchip.add { border-style: solid; border-color: var(--ink); color: var(--ink); }
+
+/* ---------- Reader: Steps or Note ---------- */
+.nb-mode { display: flex; gap: 4px; padding: 12px 32px 0; }
+.nb-tab { min-height: 0; padding: 6px 14px; border-radius: 999px; border: 1px solid transparent; background: none;
+  color: var(--pencil); font-weight: var(--fw-ui); cursor: pointer; box-shadow: none; }
+.nb-tab:hover { color: var(--ink); }
+.nb-tab[aria-selected="true"] { background: var(--ink); color: var(--sheet); }
+.nb-body[hidden], .nb-foot[hidden], .plain[hidden] { display: none; }
+.plain { flex: 1; min-height: 0; overflow: auto; padding: 16px 32px 40px; display: flex; flex-direction: column; gap: 10px; }
+.plain .help code { font-family: var(--mono); background: var(--marker); color: var(--on-marker); padding: 0 4px; border-radius: 3px; }
+.plain-text { width: 100%; min-height: 60vh; border: 0; background: none; padding: 0; box-shadow: none;
+  font: 400 17px/1.65 var(--sans, inherit); color: var(--ink); white-space: pre-wrap; }
+.plain-text:focus { outline: none; }
+.plain-foot { min-height: 20px; }

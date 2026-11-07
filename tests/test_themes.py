@@ -59,3 +59,16 @@ def test_themes_group_and_filter_papers() -> None:
     assert {t["name"]: t["papers"] for t in themes.list_all()} == {"Data science": 1, "Privacy": 1}
     themes.delete(priv["id"])
     assert library.get(fws, a)["themes"] == [ds["id"]]
+
+
+def test_plain_note_saves_and_is_searchable() -> None:
+    from fastapi.testclient import TestClient
+    from workbench.main import app
+    pid = library.create(_pdf(False), "p.pdf")
+    c = TestClient(app)
+    assert c.get(f"/papers/{pid}/note").json() == {"text": ""}
+    assert c.put(f"/papers/{pid}/note", json={"text": "zebracrossing idea"}).json() == {"ok": True}
+    assert c.get(f"/papers/{pid}/note").json() == {"text": "zebracrossing idea"}
+    assert [p["id"] for p in library.list_papers(framework.load_all(), "zebracrossing")] == [pid]
+    assert c.put("/papers/nope/note", json={"text": "x"}).status_code == 404
+    assert c.put(f"/papers/{pid}/note", json={"text": "x", "extra": 1}).status_code == 422

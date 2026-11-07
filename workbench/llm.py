@@ -133,17 +133,22 @@ def key_ideas(s: Settings, title: str, pages: list[str]) -> list[str]:
     return ideas[:5]
 
 
-def explain(s: Settings, words: str, title: str, pages: list[str], page: int) -> dict[str, Any]:
-    """Explain marked words with the whole paper as context (or as much as fits the budget).
-    `page` is the 0-based page the words were marked on."""
+ASK_SYSTEM = (
+    "You help a student read a research paper. Answer the student's question using this paper, in simple "
+    "English, in at most 6 short sentences. Name the page when you use one. If the paper does not answer "
+    "it, say so and give the usual answer. No headings."
+)
+
+
+def _answer(s: Settings, system: str, question: str, title: str, pages: list[str], page: int) -> dict[str, Any]:
+    """One question to the local model with the paper (or what fits) as context. `page` is 0-based."""
     page = min(max(page, 0), max(len(pages) - 1, 0))
-    question = f'Words I marked on page {page + 1}: "{words}"\nWhat do they mean in this paper?'
-    paper, keep = paper_text(s, pages, page, EXPLAIN_SYSTEM + question + title)
+    paper, keep = paper_text(s, pages, page, system + question + title)
     start = time.perf_counter()
     try:
         r = client(s).chat.completions.create(
             model=pick_model(s) or "default",
-            messages=[{"role": "system", "content": EXPLAIN_SYSTEM},
+            messages=[{"role": "system", "content": system},
                       {"role": "user", "content": f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\n{question}"}],
             max_tokens=s.max_output_tokens, temperature=s.temperature,
         )
@@ -158,3 +163,16 @@ def explain(s: Settings, words: str, title: str, pages: list[str], page: int) ->
         return {"ok": False, "error": "The model ran out of room before it answered. Raise Max output tokens in Settings."}
     return {"ok": True, "text": text, "pages": [keep[0] + 1, keep[-1] + 1] if keep else [],
             "whole": len(keep) == len(pages), "total": len(pages), "seconds": round(time.perf_counter() - start, 1)}
+
+
+def explain(s: Settings, words: str, title: str, pages: list[str], page: int) -> dict[str, Any]:
+    """Explain marked words with the whole paper as context (or as much as fits the budget)."""
+    page = min(max(page, 0), max(len(pages) - 1, 0))
+    question = f'Words I marked on page {page + 1}: "{words}"\nWhat do they mean in this paper?'
+    return _answer(s, EXPLAIN_SYSTEM, question, title, pages, page)
+
+
+def ask(s: Settings, question: str, title: str, pages: list[str], page: int) -> dict[str, Any]:
+    """Answer a free question about the paper. `page` is the 0-based page the student is looking at."""
+    page = min(max(page, 0), max(len(pages) - 1, 0))
+    return _answer(s, ASK_SYSTEM, f"I am looking at page {page + 1}. My question: {question}", title, pages, page)

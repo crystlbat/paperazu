@@ -56,3 +56,12 @@ def test_trims_to_budget_around_marked_page(monkeypatch: pytest.MonkeyPatch) -> 
 def test_unfinished_thinking_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
     out, _ = _run(monkeypatch, "<think>still going", ["p"])
     assert out["ok"] is False and "Max output tokens" in out["error"]
+
+
+def test_ask_sends_question_and_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _Fake("Because of X (page 3).")
+    monkeypatch.setattr(llm, "client", lambda *a, **k: fake)
+    out = llm.ask(Settings(model_name="m"), "why does it fail?", "T", ["a", "b", "c"], 2)
+    assert out["ok"] and out["text"] == "Because of X (page 3)."
+    assert "why does it fail?" in fake.sent[1]["content"] and "page 3" in fake.sent[1]["content"]
+    assert fake.sent[0]["content"] == llm.ASK_SYSTEM

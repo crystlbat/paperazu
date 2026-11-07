@@ -50,7 +50,7 @@ async function renderReader(paperId, startPage) {
     }
   });
   const pdf = pdfViewer(`/papers/${paperId}/pdf`, hideBtn, paperId, Number(startPage) || 1);
-  const rail = stepRail(fw, notes, (st) => open(st));
+  const rail = stepRail(fw, notes, (st) => { setMode("steps"); open(st); });
   const timer = stepTimer(() => notes[current.id], () => queue.touch(current.id));
   const body = h("div", { class: "nb-body" });
   const back = h("button", { type: "button", class: "btn ghost", onclick: () => open(fw.steps[idx() - 1]) }, "Back");
@@ -73,15 +73,88 @@ async function renderReader(paperId, startPage) {
     stepTip(st, pop);
   }
 
+  // Steps (the template) or one plain note per paper, where "@ai question" asks the local model.
+  const foot = h("footer", { class: "nb-foot" }, back, status, next);
+  const plain = plainNote(paperId, () => pdf.page());
+  const tab = (m, label) => h("button", { type: "button", role: "tab", class: "nb-tab", "data-mode": m,
+    onclick: () => setMode(m) }, label);
+  const tabs = h("div", { class: "nb-mode", role: "tablist", "aria-label": "Notes view" }, tab("steps", "Steps"), tab("note", "Note"));
+  function setMode(m) {
+    localStorage.setItem("reader-mode", m);
+    tabs.querySelectorAll(".nb-tab").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === m)));
+    body.hidden = foot.hidden = m !== "steps";
+    plain.el.hidden = m !== "note";
+    if (m === "note") plain.show(); else plain.flush();
+  }
   view.append(rail.el, pdf.el, splitter(view),
-    h("section", { class: "notebook", "aria-label": "Notebook" }, body,
-      h("footer", { class: "nb-foot" }, back, status, next)));
+    h("section", { class: "notebook", "aria-label": "Notebook" }, tabs, body, plain.el, foot));
   open(current, !greeted.has("reader")); greeted.add("reader");
+  setMode(localStorage.getItem("reader-mode") === "note" ? "note" : "steps");
 
   // Saves (and retries) can finish after you leave; Dot only speaks while this Reader is open.
   const me = openReader = {
-    leave() { timer.stop(); queue.flush(); pdf.destroy(); },
-    flushOnExit() { queue.flushKeepalive(); },
+    leave() { timer.stop(); queue.flush(); plain.flush(); pdf.destroy(); },
+    flushOnExit() { queue.flushKeepalive(); plain.flush(true); },
+  };
+}
+
+// One free page of notes per paper. A line that starts with @ai, ended with Enter, asks the local model
+// about this paper; the answer is written into the note under the question.
+function plainNote(paperId, page) {
+  const url = `/papers/${paperId}/note`;
+  const ta = h("textarea", { class: "plain-text", "aria-label": "Note",
+    placeholder: "Write anything here.\n\nTo ask about the paper, start a line with @ai, for example:\n@ai what problem does this solve?\nthen press Enter." });
+  const status = h("span", { class: "save-status", role: "status" });
+  const el = h("div", { class: "plain", hidden: true },
+    h("p", { class: "help" }, "Start a line with ", h("code", {}, "@ai"), " and press Enter to ask your model about this paper."),
+    ta, h("div", { class: "plain-foot" }, status));
+  let loaded = false, dirty = false, t = 0;
+  const say = (text, cls = "") => { status.textContent = text; status.className = `save-status ${cls}`; };
+
+  async function flush(keepalive = false) {
+    clearTimeout(t);
+    if (!dirty) return;
+    dirty = false;
+    const req = { method: "PUT", body: JSON.stringify({ text: ta.value }) };
+    if (keepalive) { fetch(url, { ...req, keepalive: true, headers: { "Content-Type": "application/json" } }); return; }
+    try { await api(url, req); say("Saved"); } catch { dirty = true; say("Not saved. Retrying when you type.", "err"); }
+  }
+  const changed = () => { dirty = true; say("Saving"); clearTimeout(t); t = setTimeout(flush, SAVE_DELAY); grow(ta); };
+
+  async function askAi(question) {
+    const mark = `AI is reading the paper (${Date.now()})`;
+    const at = ta.selectionStart;
+    ta.setRangeText(`\n${mark}\n`, at, at, "end");
+    changed();
+    const r = await api(`/papers/${paperId}/ask`, { method: "POST", body: JSON.stringify({ question, page: page() }) })
+      .catch(() => ({ ok: false, error: "Could not ask the model. Is the app still running?" }));
+    const answer = r.ok ? `AI: ${r.text}` : `AI could not answer: ${r.error}`;
+    const i = ta.value.indexOf(mark);
+    if (i >= 0) ta.setRangeText(answer, i, i + mark.length, "preserve");
+    else ta.value += `\n${answer}\n`;
+    changed();
+  }
+
+  ta.addEventListener("input", changed);
+  ta.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+    const start = ta.value.lastIndexOf("\n", ta.selectionStart - 1) + 1;
+    const m = ta.value.slice(start, ta.selectionStart).match(/^\s*@ai\b[:,]?\s*(.+)$/i);
+    if (!m) return;
+    e.preventDefault();
+    askAi(m[1].trim());
+  });
+
+  return {
+    el, flush,
+    async show() {
+      if (!loaded) {
+        loaded = true;
+        const r = await api(url).catch(() => null);
+        if (r && !dirty) ta.value = r.text;
+      }
+      grow(ta); ta.focus();
+    },
   };
 }
 
@@ -525,7 +598,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
   }
 
   return {
-    el, setHidden, hidden: () => v.hidden,
+    el, setHidden, hidden: () => v.hidden, page: () => v.page,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
     destroy() { document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
