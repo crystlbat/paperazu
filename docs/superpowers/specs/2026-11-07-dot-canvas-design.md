@@ -12,12 +12,13 @@ Two live sketches in `.superpowers/brainstorm/24622-1794092239/content/` are the
 
 1. **Paper mode is the default.** On opening a paper you see only the paper and Dot. The steps rail and the notebook are not on screen.
 2. **Canvas mode opens beside the paper.** The canvas slides in from the right and the paper slides left to make room. Closing it tucks it away and returns to paper mode. One canvas per paper, saved, so it is as you left it next time.
-3. **Dot follows you.** In paper mode Dot trails the cursor with a little lag and outlines the paragraph under it. Clicking a paragraph (a click, not a drag; dragging still selects text as now) stops Dot and pops out five icon buttons in an arc around it, each with its name on hover:
-   - **Highlight** (marker icon). Dot turns into a tilted marker and runs along each line of the selection, leaving a yellow stroke. Highlights are saved. On a paragraph that is already highlighted, the icon becomes **Remove highlight**.
+3. **Dot follows you.** In paper mode Dot trails the cursor with a little lag and outlines the paragraph under it. Clicking a paragraph (a click, not a drag; dragging still selects text as now) stops Dot and pops out five icon buttons (Suggest highlights, Ask, Note, Add more, Back) in an arc around it, each with its name on hover:
+   - **Suggest highlights** (marker icon). Dot does not highlight everything. It turns into a tilted marker and runs along the selection while the model picks only the important parts (key claims, definitions, results; usually 1 to 3 short spans, never whole paragraphs). Those spans get a stroke in Dot's own colour, a soft blue (`--dot-ink: #8ecbff`), so they never look like yours. Click a blue span for a small chip: **Keep** (it becomes your yellow highlight) or **Remove**.
    - **Ask** (magnifier icon). Dot stretches into an input pill right there. On Enter it turns into a magnifying glass and sweeps the page while the model works; then the sources fly to the canvas as in goal 4.
    - **Note** (pencil icon). Dot stretches into the input pill; the text becomes a note card on the canvas tied to the selection (goal 6).
    - **Add more** (down-arrow icon). Dot squashes and rides down the selection box, which springs down over the next paragraph while a wave of yellow dots pours through it, and a badge counts what was added ("+1", "+2"). The icons pop back out.
    - **Back** (return-arrow icon). Icons fold away; Dot follows again.
+   **Your own highlighter is manual.** Select words with the mouse, exactly as now; the bar that shows Explain and Find gets **Highlight**, which marks exactly the selected words in yellow. Click a yellow span for **Remove**.
    After every job Dot changes back into its face and follows the cursor. Escape always cancels back to following. No permanent text box anywhere. Clicking where there is no paragraph (margin, empty canvas) offers only Ask, Note and Back, about the paper as a whole.
 4. **Answers show their sources on the paper.** Dot glides down the page while the model works. When the answer arrives, its source paragraphs light up, a copy of each lifts off the page, flies to the canvas, and shrinks into a short gist card (a one-line summary plus "p. N"). A dotted thread links each card to its paragraph. The answer card appears and is threaded to its source cards.
 5. **Follow-ups start from what you click.** Click an answer or source card, and Dot stretches into the input on that card. The question and reply become a new answer card that branches off it with a thread. The card you clicked, and the chain of cards above it, are the context the model gets.
@@ -43,7 +44,7 @@ Two live sketches in `.superpowers/brainstorm/24622-1794092239/content/` are the
 ## Constraints
 
 - FastAPI, SQLite, PyMuPDF, plain HTML/JS/CSS, PDF.js 3.11.174. No new dependencies without asking.
-- Fonts and colours as now: Instrument Serif, Geist, Geist Mono, Doto; graphite plus #ffe347.
+- Fonts and colours as now: Instrument Serif, Geist, Geist Mono, Doto; graphite plus #ffe347. One addition the user asked for: Dot's suggested highlights use a second colour, soft blue #8ecbff (my pick of the shade).
 - Simple English in all UI text, no em dashes.
 - The local model may be text-only or may reject `json_schema`; use the existing fallbacks (`primer._complete` falls back to `json_object`; `llm._answer` retries without the picture).
 - Reduced motion respected everywhere.
@@ -67,12 +68,12 @@ My call: answer length stays at the current "at most 6 short sentences"; at most
 New tables, both with `ON DELETE CASCADE` on the paper:
 
 - `canvas_cards`: id, paper_id, kind (`answer`, `source`, `note`), question (for answers: your words, shown as the card's first line), text (answers and sources), entries (notes: JSON list of `{who: "me"|"dot", text}`), x, y, w, page (nullable), rect x0..y1 (nullable; for a note, the union of its selected paragraphs), parent (nullable card id), created_at.
-- `highlights`: id, paper_id, page, x0, y0, x1, y1 (PDF points). Drawn on the page as the yellow marker stroke under each line in the box.
+- `highlights`: id, paper_id, page, kind (`me` or `dot`), text (the exact words), rects (JSON list of line rects in PDF points, one per line the words cover). `me` is drawn yellow, `dot` blue. Manual highlights send the rects of the browser selection converted to PDF points. Dot's suggestions: the model returns exact quotes from the selected paragraphs (JSON `{"quotes": [str]}`, at most 3, each at most about 25 words); the server keeps only quotes found word for word with PyMuPDF `page.search_for(quote, clip=selection)` and stores their line rects.
 - `canvas_links`: id, paper_id, from_card, to_card. Only for links you draw yourself.
 
 Threads from `parent` and from `canvas_links` are both drawn, in different styles. A source card's parent is its answer card. A follow-up is one answer card whose parent is the card you tapped. Deleting a card deletes its links; cards whose parent it was keep living with parent set to empty (my call).
 
-Card positions are canvas coordinates in CSS pixels. REST: `GET /papers/{id}/canvas`, `POST/PUT/DELETE /papers/{id}/canvas/cards[/{cid}]`, `POST/DELETE /papers/{id}/canvas/links[/{lid}]`, `POST /papers/{id}/canvas/cards/{cid}/say` (add a line to a note; if it is a question, Dot's reply is added too and returned), `GET/POST/DELETE /papers/{id}/highlights[/{hid}]`. The ask endpoint saves the cards it makes and returns them.
+Card positions are canvas coordinates in CSS pixels. REST: `GET /papers/{id}/canvas`, `POST/PUT/DELETE /papers/{id}/canvas/cards[/{cid}]`, `POST/DELETE /papers/{id}/canvas/links[/{lid}]`, `POST /papers/{id}/canvas/cards/{cid}/say` (add a line to a note; if it is a question, Dot's reply is added too and returned), `GET/POST/DELETE /papers/{id}/highlights[/{hid}]`, `PUT /papers/{id}/highlights/{hid}` (`{kind: "me"}` to keep a suggestion), `POST /papers/{id}/highlights/suggest` (`{page, rect}` → the new `dot` highlights). The ask endpoint saves the cards it makes and returns them.
 
 The Markdown export gains a "Canvas" section: notes and answers in the order they were made, each answer with its question and its sources as "p. N", each note with its lines, Dot's lines marked "Dot:".
 
