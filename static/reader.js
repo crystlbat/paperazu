@@ -124,6 +124,8 @@ async function renderReader(paperId, startPage) {
     { name: pdf.watching() ? "Proactive: on" : "Proactive", hint: pdf.watching() ? "Turn off check-ins" : "I check in if you get stuck",
       pick: () => { pdf.watch(!pdf.watching()); dotTools(); },
       pic: [".........", "..#####..", ".#.....#.", "#..###..#", "#..###..#", "#..###..#", ".#.....#.", "..#####..", "........."] },
+    ...(pdf.watching() ? [{ name: "Clear trail", hint: "Forget which parts you read", pick: () => pdf.clearTrail(),
+      pic: [".........", "#.......#", ".#.....#.", "..#...#..", "...#.#...", "..#...#..", ".#.....#.", "#.......#", "........."] }] : []),
   ]);
   dotTools();
   const panes = paneToggles([["rail", rail.el, "Steps", "paneRail"], ["paper", pdf.el, "Paper", "panePaper"], ["notes", nbEl, "Notes", "paneNotes"]],
@@ -1129,7 +1131,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     }).map((sp) => sp.textContent).join(" ").normalize("NFKC").replace(/\s+/g, " ").trim();
   }
   // A small Dot rides in the margin beside the part you are reading; parts you stayed on keep a rail.
-  const READ_MS = 10_000, trailKey = `dot-trail:${paperId}`;
+  const READ_MS = 10_000, trailKey = `dot-trail:${paperId}`, lastKey = `dot-last:${paperId}`;
   const trail = new Set(JSON.parse(localStorage.getItem(trailKey) || "[]"));
   const here = h("div", { class: "track-here", hidden: true }, h("i", {}, h("b"), h("b")));
   let hereKey = "";
@@ -1163,6 +1165,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   stage.addEventListener("scroll", trackSoon, opt);
   pageBox.addEventListener("pointermove", trackSoon, opt);
   function readIt(key) {
+    localStorage.setItem(lastKey, key); // the last part you read, to pick up from next time
     if (trail.has(key)) return;
     trail.add(key); localStorage.setItem(trailKey, JSON.stringify([...trail]));
     const [pg, r] = key.split(":");
@@ -1204,6 +1207,26 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
         .then((r) => { q = r.text || ""; return r; }),
       ask: (a) => post(`You asked me "${q.slice(0, 250)}" about this part: "${part.slice(0, 300)}". My answer: "${a}". Is it right? Say what is right and what is missing, in 2 to 4 sentences.`) });
   }
+  function clearTrail() {
+    trail.clear(); localStorage.removeItem(trailKey); localStorage.removeItem(lastKey); drawTrack();
+    buddy.say("I cleared the reading trail for this paper.", { mood: "idle" });
+  }
+  // Opening the paper again: Dot offers to take you back to the last part you read.
+  function offerResume() {
+    const last = localStorage.getItem(lastKey);
+    if (!watchOn || !last) return;
+    const [pg, r] = last.split(":"), b = r.split(",").map(Number);
+    setTimeout(() => buddy.say(`Last time you got to page ${pg}. Pick up there?`, { mood: "happy", actions: [
+      { label: "Take me there", onClick: async () => {
+        await go(Number(pg));
+        const box = pageBox.getBoundingClientRect(), s = stage.getBoundingClientRect();
+        stage.scrollTop += box.top + px(b)[1] - s.top - 80;
+        const off = glow(b, "You were here");
+        setTimeout(off, 3000);
+      } },
+      { label: "Not now", onClick: () => {} },
+    ] }), 2500);
+  }
   function watch(on) {
     watchOn = on; localStorage.setItem("dot-proactive", on ? "1" : "0"); seen = { key: "", ms: 0 };
     drawTrack();
@@ -1244,12 +1267,12 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     msg("Opening the PDF");
     pdfjsLib.getDocument({ url, isEvalSupported: false }).promise.then((doc) => {
       v.doc = doc; v.page = Math.min(Math.max(1, v.page), doc.numPages); // a link may ask for any page
-      total.textContent = `of ${doc.numPages}`; pageIn.max = doc.numPages; draw();
+      total.textContent = `of ${doc.numPages}`; pageIn.max = doc.numPages; draw().then(offerResume);
     }, () => msg("This PDF could not be opened."));
   }
 
   return {
-    el, setHidden, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn,
+    el, setHidden, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
     destroy() { clearInterval(watchTimer); watchStop.abort(); buddy.tools(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
