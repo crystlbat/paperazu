@@ -445,7 +445,7 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .pdf-page { position: relative; }
 .pdf-hits, .pdf-ink { position: absolute; left: 0; top: 0; pointer-events: none; }
 .pdf-hits { z-index: 1; }
-.pdf-ink { z-index: 3; }
+.pdf-ink { z-index: 4; }
 /* PDF.js text layer: invisible text over the page, so you can select it */
 .textLayer { position: absolute; inset: 0; overflow: clip; line-height: 1; text-align: initial; z-index: 2;
   text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; }
@@ -455,7 +455,7 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .textLayer .endOfContent.active { top: 0; }
 .is-circling .textLayer { pointer-events: none; }
 .sel-bubble[hidden] { display: none; }
-.sel-bubble { position: absolute; z-index: 4; display: flex; gap: 6px; padding: 6px; border-radius: 10px;
+.sel-bubble { position: absolute; z-index: 5; display: flex; gap: 6px; padding: 6px; border-radius: 10px;
   background: var(--sheet); border: 1px solid var(--rule); box-shadow: 0 12px 30px -12px rgb(30 32 35 / .45); }
 .pdf-hits i { position: absolute; background: rgb(255 227 71 / .55); mix-blend-mode: multiply; border-radius: 2px; animation: pop .25s cubic-bezier(.3,.7,.2,1) both; }
 .pdf-sheet canvas.pdf-ink { background: none; box-shadow: none; transition: opacity .45s; }
@@ -1052,3 +1052,36 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .sel-bubble { background: #1f2023; border-color: rgb(255 255 255 / .12); }
 .cs-hit:hover, .cs-hit[aria-current], .cs-paper:hover { background: rgb(255 255 255 / .06); }
 .buddy-bubble { border-color: rgb(255 255 255 / .1); }
+
+/* ---------- margin notes: Dot's dotted trace round a paragraph, a note beside it, a pin when folded ---------- */
+.marks-layer { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.mk-outline { position: absolute; pointer-events: none; }
+.mk-outline svg { display: block; overflow: visible; }
+.mk-dots { stroke: #1f2023; stroke-width: 3.4; opacity: .55; }
+@keyframes mk-draw { to { stroke-dashoffset: 0; } }
+.trace-preview { position: absolute; border-radius: 12px; pointer-events: none;
+  background: rgb(255 227 71 / .12); box-shadow: 0 0 0 2px rgb(255 227 71 / .9), 0 0 18px rgb(255 227 71 / .4); }
+.trace-preview[hidden] { display: none; }
+.trace-preview span { position: absolute; right: 6px; top: -26px; padding: 2px 9px; border-radius: 8px;
+  background: #1f2023; color: #f4f4ef; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.mk-pin { position: absolute; pointer-events: auto; width: 24px; height: 20px; padding: 0; border: 0; border-radius: 7px; cursor: pointer;
+  background: #1f2023; box-shadow: 0 4px 10px -4px rgb(0 0 0 / .6); display: flex; align-items: center; justify-content: center; gap: 5px;
+  transition: scale .15s; }
+.mk-pin i { width: 4px; height: 4px; border-radius: 50%; background: #f4f4ef; }
+.mk-pin:hover, .mk-pin:focus-visible { scale: 1.15; outline: none; box-shadow: 0 0 0 2px var(--marker), 0 4px 10px -4px rgb(0 0 0 / .6); }
+.mk-card { position: absolute; pointer-events: auto; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 12px;
+  border-radius: 14px; color: #f4f4ef; border: 1px solid rgb(255 255 255 / .12);
+  background: radial-gradient(rgb(255 255 255 / .06) 1px, transparent 1.4px) 0 0 / 8px 8px, rgb(28 29 32 / .92);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 18px 40px -18px rgb(0 0 0 / .6);
+  animation: pop .22s cubic-bezier(.3,.7,.2,1) both; }
+.mk-head { display: flex; align-items: center; gap: 6px; }
+.mk-head .buddy-name { font-size: 15px; margin-right: auto; }
+.mk-card .buddy-x { color: rgb(244 244 239 / .6); }
+.mk-card .buddy-x:hover { color: #f4f4ef; background: rgb(255 255 255 / .08); }
+.mk-del { border: 0; background: none; color: rgb(244 244 239 / .55); font-size: 12px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.mk-del:hover { color: #ff8a7e; background: rgb(255 255 255 / .06); }
+.mk-text { width: 100%; min-height: 64px; resize: none; background: rgb(255 255 255 / .06); color: #f4f4ef; border: 1px solid rgb(255 255 255 / .12);
+  border-radius: 10px; padding: 8px 10px; font-size: 14px; line-height: 1.5; }
+.mk-text::placeholder { color: rgb(244 244 239 / .45); }
+.mk-text:focus-visible { border-color: var(--marker); box-shadow: none; }
+@media (prefers-reduced-motion: reduce) { .mk-card { animation: none; } .mk-outline rect { animation: none !important; stroke-dashoffset: 0 !important; } }

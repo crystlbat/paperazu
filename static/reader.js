@@ -759,6 +759,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   const penHint = h("p", { class: "pen-hint", hidden: true }, "Drag over the words for Dot to explain.",
     h("button", { type: "button", class: "pen-stop", onclick: () => { endPen(); buddy.goHome(); } }, "Stop"));
   const guideMark = h("i", { class: "guide-mark", hidden: true, "aria-hidden": "true" });
+  const marksLayer = h("div", { class: "marks-layer" });
   const pickBtn = (label, fn) => h("button", { type: "button", class: "btn small-btn", onmousedown: (e) => e.preventDefault(), onclick: fn }, label);
   const bubble = h("div", { class: "sel-bubble", hidden: true, role: "toolbar", "aria-label": "Selected text" },
     pickBtn("Explain", () => { const r = bubble.getBoundingClientRect(); dotExplain(picked(), r.left, r.top); clearPick(); }),
@@ -811,8 +812,9 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     pdfjsLib.renderTextLayer({ textContentSource: await page.getTextContent(), container: layer, viewport: vp });
     if (seq !== v.seq) return;
     textLayer = layer;
-    pageBox.replaceChildren(canvas, hits, guideMark, textLayer, ink, bubble);
+    pageBox.replaceChildren(canvas, hits, guideMark, textLayer, marksLayer, ink, bubble);
     guideMark.hidden = true;
+    drawMarks(); loadBlocks(v.page);
     bubble.hidden = true;
     sheet.replaceChildren(pageBox);
     search.paint();
@@ -871,8 +873,112 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       const c = pageBox.querySelector("canvas")?.getBoundingClientRect();
       return !v.hidden && !!c && x >= c.left && x <= c.right && y >= c.top && y <= c.bottom;
     },
-    drop: () => lens(),
+    hover: (x, y) => preview(x == null ? null : edgeBlock(x, y)),
+    drop: (x, y) => { const b = edgeBlock(x, y); preview(null); return b ? trace(b) : lens(); },
   });
+
+  // ---------- margin notes: drag Dot to a paragraph's edge; it runs round it and you write beside it ----------
+  const blockCache = new Map();
+  let blocks = [], marks = [];
+  api(`/papers/${paperId}/marks`).then((r) => { marks = r.marks; drawMarks(); }).catch(() => {});
+  async function loadBlocks(n) {
+    if (!blockCache.has(n)) blockCache.set(n, api(`/papers/${paperId}/blocks/${n}`).catch(() => ({ blocks: [] })));
+    const r = await blockCache.get(n);
+    if (n === v.page) blocks = r.blocks;
+  }
+  const px = (r) => r.map((q) => q * (v.vp?.scale ?? 1)); // PDF points to page pixels
+  // The paragraph whose edge is near the point: within 40px outside it, but not deep inside its text.
+  function edgeBlock(x, y) {
+    if (!v.vp || v.hidden) return null;
+    const box = pageBox.getBoundingClientRect(), lx = x - box.left, ly = y - box.top;
+    let best = null, bestD = Infinity;
+    for (const b of blocks) {
+      const [x0, y0, x1, y1] = px(b);
+      const out = Math.max(x0 - lx, lx - x1, y0 - ly, ly - y1); // > 0 outside, < 0 inside
+      if (out > 40 || out < -12) continue;
+      const d = Math.abs(out);
+      if (d < bestD) { bestD = d; best = b; }
+    }
+    return best;
+  }
+  const traceBox = h("div", { class: "trace-preview", hidden: true }, h("span", {}, "Drop to trace"));
+  function preview(b) {
+    if (!b) { traceBox.hidden = true; return; }
+    const [x0, y0, x1, y1] = px(b);
+    traceBox.style.cssText = `left:${x0 - 8}px;top:${y0 - 8}px;width:${x1 - x0 + 16}px;height:${y1 - y0 + 16}px`;
+    if (traceBox.parentNode !== marksLayer) marksLayer.append(traceBox);
+    traceBox.hidden = false;
+  }
+  // a dotted outline: a mask draws it in, so the dots appear as Dot runs past
+  function outline(m, ms = 0) {
+    const [x0, y0, x1, y1] = px(m.rect), w = x1 - x0 + 16, ht = y1 - y0 + 16;
+    const el = h("div", { class: "mk-outline", style: `left:${x0 - 8}px;top:${y0 - 8}px;width:${w}px;height:${ht}px` });
+    const id = `mk${m.id}-${Math.random().toString(36).slice(2, 7)}`;
+    el.innerHTML = `<svg width="${w}" height="${ht}" viewBox="0 0 ${w} ${ht}"><defs><mask id="${id}"><rect x="2" y="2" width="${w - 4}" height="${ht - 4}" rx="10" pathLength="100" fill="none" stroke="#fff" stroke-width="10" stroke-dasharray="100" stroke-dashoffset="${ms ? 100 : 0}"${ms ? ` style="animation: mk-draw ${ms}ms linear forwards"` : ""}/></mask></defs>
+      <rect class="mk-dots" x="2" y="2" width="${w - 4}" height="${ht - 4}" rx="10" fill="none" pathLength="${Math.round((w + ht) * 2 / 9)}" stroke-dasharray="0 1" stroke-linecap="round" mask="url(#${id})"/></svg>`;
+    return el;
+  }
+  function drawMarks() {
+    marksLayer.replaceChildren(...marks.filter((m) => m.page === v.page).flatMap((m) => [outline(m), pin(m)]));
+  }
+  function pin(m) {
+    const [x0, y0, x1] = px(m.rect), right = x1 + 32 < pageBox.clientWidth;
+    return h("button", { type: "button", class: "mk-pin", style: `left:${right ? x1 + 6 : x0 - 30}px;top:${y0 - 10}px`,
+      title: m.text.slice(0, 120), "aria-label": `Margin note: ${m.text.slice(0, 60)}`, onclick: () => card(m) },
+      h("i"), h("i"));
+  }
+  async function trace(b) {
+    clearPick(); buddy.pen(false);
+    const r = await api(`/papers/${paperId}/marks`, { method: "POST", body: JSON.stringify({ page: v.page, rect: b, text: "" }) }).catch(() => null);
+    if (!r) { buddy.goHome(); return buddy.say("I could not save that note. Is the app still running?", { mood: "worried" }); }
+    marks.push(r);
+    const [x0, y0, x1, y1] = px(b), box = pageBox.getBoundingClientRect();
+    const c = [[x0 - 8, y0 - 8], [x1 + 8, y0 - 8], [x1 + 8, y1 + 8], [x0 - 8, y1 + 8], [x0 - 8, y0 - 8]].map(([x, y]) => [box.left + x, box.top + y]);
+    const edges = [x1 - x0 + 16, y1 - y0 + 16, x1 - x0 + 16, y1 - y0 + 16];
+    const total = Math.min(2600, Math.max(1300, edges.reduce((a, e) => a + e, 0) * 1.6));
+    await buddy.goTo(...c[0]);
+    marksLayer.append(outline(r, total));
+    for (let i = 0; i < 4; i++) await buddy.goTo(...c[i + 1], Math.round((total * edges[i]) / edges.reduce((a, e) => a + e, 0)));
+    buddy.goHome();
+    drawMarks(); card(r);
+  }
+  // the note beside the paragraph; empty notes go away when closed, written ones fold into a pin
+  function card(m) {
+    marksLayer.querySelector(".mk-card")?.dispatchEvent(new Event("fold"));
+    const [x0, y0, x1, y1] = px(m.rect), W = pageBox.clientWidth;
+    const w = Math.min(280, W - 24);
+    const side = W - x1 - 20 >= 200 ? x1 + 14 : x0 - 20 >= 200 ? Math.max(8, x0 - 14 - w) : null;
+    const pos = side != null ? `left:${side}px;top:${y0 - 4}px;width:${Math.min(w, side > x1 ? W - side - 10 : w)}px`
+      : `left:${Math.max(8, Math.min(x0, W - w - 8))}px;top:${y1 + 14}px;width:${w}px`;
+    const ta = h("textarea", { class: "mk-text", rows: 3, placeholder: "Write beside this paragraph", "aria-label": `Margin note, page ${m.page}` });
+    ta.value = m.text;
+    let t = 0;
+    const save = () => { clearTimeout(t); if (m.text === ta.value) return; m.text = ta.value; return api(`/papers/${paperId}/marks/${m.id}`, { method: "PUT", body: JSON.stringify({ text: m.text }) }).catch(() => {}); };
+    ta.addEventListener("input", () => { clearTimeout(t); t = setTimeout(save, SAVE_DELAY); grow(ta); });
+    const el = h("div", { class: "mk-card", style: pos, role: "dialog", "aria-label": "Margin note" },
+      h("div", { class: "mk-head" }, h("span", { class: "buddy-name" }, `p. ${m.page}`),
+        h("button", { type: "button", class: "mk-del", onclick: () => remove(m) }, "Delete"),
+        h("button", { type: "button", class: "buddy-x", "aria-label": "Fold the note", onclick: () => fold() }, "×")),
+      ta);
+    async function fold() {
+      document.removeEventListener("pointerdown", outside, true);
+      await save();
+      el.remove();
+      if (!m.text.trim()) remove(m);
+    }
+    const outside = (e) => { if (!el.contains(e.target) && !e.target.closest?.(".mk-pin")) fold(); };
+    el.addEventListener("fold", fold);
+    el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); fold(); } });
+    setTimeout(() => document.addEventListener("pointerdown", outside, true), 0);
+    marksLayer.append(el);
+    grow(ta); ta.focus();
+  }
+  async function remove(m) {
+    marks = marks.filter((x) => x !== m);
+    marksLayer.querySelector(".mk-card")?.remove();
+    drawMarks();
+    await api(`/papers/${paperId}/marks/${m.id}`, { method: "DELETE" }).catch(() => {});
+  }
   function lens() {
     clearPick(); buddy.pen(true); penHint.hidden = false;
     search.startPen((words, x, y) => {

@@ -16,7 +16,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import checker, db, export, guide, framework, graph, library, llm, notes, primer, settings, themes
+from . import checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, settings, themes
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -284,6 +284,52 @@ def get_guide(paper_id: str) -> dict[str, Any]:
     if out is None:
         raise HTTPException(404, detail="This paper is not in the library.")
     return {"stops": out}
+
+
+@app.get("/papers/{paper_id}/blocks/{page}")
+def get_blocks(paper_id: str, page: int) -> dict[str, Any]:
+    out = marks.blocks(paper_id, page)
+    if out is None:
+        raise HTTPException(404, detail="This page is not in the library.")
+    return out
+
+
+@app.get("/papers/{paper_id}/marks")
+def get_marks(paper_id: str) -> dict[str, Any]:
+    out = marks.all_for(paper_id)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return {"marks": out}
+
+
+@app.post("/papers/{paper_id}/marks")
+def add_mark(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        m = marks.MarkIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    out = marks.create(paper_id, m)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return out
+
+
+@app.put("/papers/{paper_id}/marks/{mark_id}")
+def edit_mark(paper_id: str, mark_id: int, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        t = marks.MarkText(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    if not marks.update(paper_id, mark_id, t.text):
+        raise HTTPException(404, detail="This note is not there.")
+    return {"ok": True}
+
+
+@app.delete("/papers/{paper_id}/marks/{mark_id}")
+def remove_mark(paper_id: str, mark_id: int) -> dict[str, Any]:
+    if not marks.delete(paper_id, mark_id):
+        raise HTTPException(404, detail="This note is not there.")
+    return {"ok": True}
 
 
 @app.get("/papers/{paper_id}/checks")

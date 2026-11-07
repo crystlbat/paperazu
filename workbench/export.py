@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from . import db, framework, library, primer
+from . import db, framework, library, marks, primer
 from .framework import Field, Framework
 from .settings import Settings
 
@@ -76,6 +76,9 @@ def markdown(paper_id: str) -> str | None:
             out += [f"- [{'x' if i < len(gate) and gate[i] else ' '}] {g}" for i, g in enumerate(st.gate)] + [""]
     if paper["note"].strip():
         out += ["## My note", "", paper["note"].strip(), ""]
+    margin = [m for m in marks.all_for(paper_id) or [] if m["text"].strip()]
+    if margin:
+        out += ["## Margin notes", ""] + [f"- p. {m['page']}: {' '.join(m['text'].split())}" for m in margin] + [""]
     return "\n".join(out).rstrip() + "\n"
 
 

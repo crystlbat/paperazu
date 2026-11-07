@@ -102,6 +102,15 @@ CREATE TABLE IF NOT EXISTS concept_links (
     score REAL NOT NULL,
     PRIMARY KEY (concept_id, paper_id)
 );
+-- margin notes: a paragraph Dot traced (its box in PDF points, top-left origin) and what you wrote beside it
+CREATE TABLE IF NOT EXISTS marks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    page INTEGER NOT NULL,
+    x0 REAL NOT NULL, y0 REAL NOT NULL, x1 REAL NOT NULL, y1 REAL NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,

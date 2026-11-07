@@ -229,15 +229,16 @@ const buddy = (() => {
     st.dy = y < cy - 60 ? -1 : y > cy + 60 ? 1 : 0;
     st.lookUntil = Date.now() + ms; draw();
   }
-  /** Walk so the face is centred on (x, y). Resolves on arrival. Stays put with reduced motion. */
-  async function goTo(x, y) {
+  /** Walk so the face is centred on (x, y). Resolves on arrival. Stays put with reduced motion.
+      `ms` sets the trip time (a run around a paragraph keeps an even pace). */
+  async function goTo(x, y, ms) {
     if (reduced()) return;
     const [cx, cy] = centre();
     const [hx, hy] = homeCentre();
     const dist = Math.hypot(x - cx, y - cy);
     if (dist < 4) return;
     hide();
-    const ms = Math.round(Math.min(1100, Math.max(380, dist * 1.1)));
+    ms = ms ?? Math.round(Math.min(1100, Math.max(380, dist * 1.1)));
     st.off = { x: x - hx, y: y - hy };
     st.away = Math.hypot(st.off.x, st.off.y) > 4;
     lookAt(x, y, ms + 200);
@@ -304,6 +305,7 @@ const buddy = (() => {
     }
     place(e.clientX, e.clientY);
     root.classList.toggle("pen", !!target?.over(e.clientX, e.clientY));
+    target?.hover?.(e.clientX, e.clientY);
   });
   face.addEventListener("pointerup", (e) => {
     if (!drag) return;
@@ -311,6 +313,7 @@ const buddy = (() => {
     if (!was) return;
     dragged = true; setTimeout(() => { dragged = false; }, 0);
     root.classList.remove("dragging");
+    target?.hover?.(null);
     if (target?.over(e.clientX, e.clientY)) { st.mood = "idle"; draw(); target.drop(e.clientX, e.clientY); }
     else { root.classList.remove("pen"); st.mood = "idle"; draw(); goHome(); }
   });
