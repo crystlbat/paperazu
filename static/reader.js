@@ -645,9 +645,10 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
   const ink = h("canvas", { class: "pdf-ink", "aria-hidden": "true" });
   const pageBox = h("div", { class: "pdf-page" });
   let textLayer = h("div", { class: "textLayer" });
+  const penHint = h("p", { class: "pen-hint", hidden: true }, "Drag over the words for Dot to explain. Esc to stop.");
   const pickBtn = (label, fn) => h("button", { type: "button", class: "btn small-btn", onmousedown: (e) => e.preventDefault(), onclick: fn }, label);
   const bubble = h("div", { class: "sel-bubble", hidden: true, role: "toolbar", "aria-label": "Selected text" },
-    pickBtn("Explain", () => { search.explain(picked()); clearPick(); }),
+    pickBtn("Explain", () => { const r = bubble.getBoundingClientRect(); dotExplain(picked(), r.left, r.top); clearPick(); }),
     pickBtn("Find in paper", () => { search.find(picked()); clearPick(); }));
   const stage = h("div", { class: "pdf-stage" }, sheet);
   const closed = h("div", { class: "pdf-closed", hidden: true },
@@ -668,7 +669,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
     h("div", { class: "pdf-tools" }, prev, pageIn, total, next, search.button, h("span", { class: "spacer" }),
       tool(icon("minus"), "Zoom out", () => zoom(1 / 1.2)), zoomLbl, tool(icon("plus"), "Zoom in", () => zoom(1.2)),
       h("button", { type: "button", class: "btn ghost tool", onclick: () => { v.fit = true; draw(); } }, icon("fit"), "Fit width")),
-    h("div", { class: "pdf-view" }, stage, closed, search.panel));
+    h("div", { class: "pdf-view" }, stage, closed, search.panel, penHint));
 
   async function draw() {
     if (!v.doc) return;
@@ -705,7 +706,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
   // Select text with the mouse (formulas too), then Explain or Find it.
   const picked = () => getSelection().toString().normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, 600);
   function clearPick() { bubble.hidden = true; getSelection().removeAllRanges(); }
-  pageBox.addEventListener("mouseup", () => setTimeout(() => {
+  pageBox.addEventListener("mouseup", (e) => !e.target.closest?.(".sel-bubble") && setTimeout(() => {
     const sel = getSelection();
     if (sel.isCollapsed || !textLayer.contains(sel.anchorNode) || !picked()) { bubble.hidden = true; return; }
     const r = sel.getRangeAt(0).getBoundingClientRect(), box = pageBox.getBoundingClientRect();
@@ -714,6 +715,35 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
     bubble.hidden = false;
   }));
   document.addEventListener("selectionchange", () => { if (getSelection().isCollapsed) bubble.hidden = true; });
+
+  // Dot explains in its own window, and takes follow-up questions there.
+  async function dotExplain(words, x, y) {
+    if (!words) return;
+    await buddy.goTo(x, y);
+    let said = "";
+    const post = (path, body) => api(`/papers/${paperId}/${path}`, { method: "POST", body: JSON.stringify(body) });
+    buddy.open({ x, y, quote: words,
+      first: post("explain", { words, page: v.page }).then((r) => { said = r.text || ""; return r; }),
+      ask: (q) => post("ask", { page: v.page,
+        question: `${q}\n\n(This is about the part I marked: "${words.slice(0, 300)}". You explained: "${said.slice(0, 400)}")`.slice(0, 1000) })
+        .then((r) => { if (r.ok) said = r.text; return r; }) });
+  }
+  // Drag Dot onto the page and it becomes a highlighter; drag over words and it explains them.
+  function endPen() { search.stopPen(); buddy.pen(false); penHint.hidden = true; }
+  buddy.droppable({
+    over: (x, y) => {
+      const c = pageBox.querySelector("canvas")?.getBoundingClientRect();
+      return !v.hidden && !!c && x >= c.left && x <= c.right && y >= c.top && y <= c.bottom;
+    },
+    drop: () => {
+      clearPick(); buddy.pen(true); penHint.hidden = false;
+      search.startPen((words, x, y) => {
+        endPen();
+        if (words) return dotExplain(words, x, y);
+        buddy.goHome(); buddy.say("No words there. Pictures and scanned pages have no text to read.", { mood: "worried" });
+      });
+    },
+  });
 
   function go(n) {
     if (!v.doc) return;
@@ -733,6 +763,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
   const msg = (text) => sheet.replaceChildren(h("p", { class: "pdf-msg" }, text));
 
   const onKey = (e) => {
+    if (e.key === "Escape" && search.penning()) { endPen(); return buddy.goHome(); }
     if (e.key === "Escape" && search.isOpen()) return search.close();
     if (e.altKey || e.ctrlKey || e.metaKey || e.target.closest?.("input, textarea, select, [contenteditable], dialog, [role=separator]")) return;
     if (e.key === "ArrowLeft") go(v.page - 1);
@@ -756,7 +787,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
     el, setHidden, hidden: () => v.hidden, page: () => v.page, go,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
-    destroy() { document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
+    destroy() { if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
   };
 }
 
@@ -773,7 +804,7 @@ function itemBox(it, vp) {
 
 // shortcut: letters are placed by even spacing across each text run, so a circle edge can be off by a letter
 // in wide fonts; the cut is widened to whole words, which hides it. Upgrade to per-glyph boxes if it misses.
-function wordsIn(items, vp, r) {
+function wordsIn(items, vp, r, max = 12) {
   const parts = [];
   for (const it of items) {
     const b = itemBox(it, vp);
@@ -794,7 +825,7 @@ function wordsIn(items, vp, r) {
   }
   const text = flat(parts.join(" ")).normalize("NFKC");
   // plain words: trim stray punctuation and keep it short for search; a formula keeps its symbols
-  return /[=∑∏∫←→≤≥∈∼~^_]/.test(text) ? text.slice(0, 600) : text.replace(/^\W+|\W+$/g, "").split(" ").slice(0, 12).join(" ");
+  return /[=∑∏∫←→≤≥∈∼~^_]/.test(text) ? text.slice(0, 600) : text.replace(/^\W+|\W+$/g, "").split(" ").slice(0, max).join(" ").slice(0, 600);
 }
 
 function circleSearch({ v, go, ink, hits, pane, paperId }) {
@@ -804,7 +835,7 @@ function circleSearch({ v, go, ink, hits, pane, paperId }) {
       .then((tc) => tc.items.filter((i) => i.str?.trim())));
     return texts.get(n);
   };
-  let on = false, query = "", run = 0, jump = false, pts = null;
+  let on = false, query = "", run = 0, jump = false, pts = null, penCb = null;
 
   const input = h("input", { type: "search", class: "cs-input", placeholder: "Words to find", "aria-label": "Words to find",
     onkeydown: (e) => { if (e.key === "Enter") find(input.value); } });
@@ -837,11 +868,12 @@ function circleSearch({ v, go, ink, hits, pane, paperId }) {
     c.clearRect(0, 0, ink.width, ink.height);
     c.lineCap = c.lineJoin = "round";
     c.beginPath(); pts.forEach(([x, y], i) => (i ? c.lineTo(x * k, y * k) : c.moveTo(x * k, y * k)));
+    if (penCb) { c.lineWidth = 18 * k; c.strokeStyle = "rgba(255,227,71,.55)"; c.globalCompositeOperation = "multiply"; c.stroke(); c.globalCompositeOperation = "source-over"; return; } // a highlighter
     c.lineWidth = 8 * k; c.strokeStyle = "rgba(31,32,35,.25)"; c.stroke(); // soft edge so yellow shows on white
     c.lineWidth = 5 * k; c.strokeStyle = "#ffe347"; c.stroke();
   }
   ink.addEventListener("pointerdown", (e) => {
-    if (!on || !v.vp) return;
+    if ((!on && !penCb) || !v.vp) return;
     e.preventDefault(); ink.setPointerCapture(e.pointerId); clearInk();
     pts = [pt(e)]; stroke();
   });
@@ -849,17 +881,28 @@ function circleSearch({ v, go, ink, hits, pane, paperId }) {
   ink.addEventListener("pointerup", () => {
     if (!pts) return;
     const p = pts; pts = null;
-    ink.classList.add("fade"); setTimeout(() => { if (!pts) clearInk(); }, 450);
-    pick(p);
+    ink.classList.add("fade"); setTimeout(() => { if (!pts) clearInk(); }, penCb ? 900 : 450);
+    if (penCb) { const cb = penCb; stopPen(); highlight(p, cb); } else pick(p);
   });
   ink.addEventListener("pointercancel", () => { pts = null; clearInk(); });
 
-  async function pick(p) {
+  function region(p) {
     const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
-    let r = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
-    if (r.x1 - r.x0 < 6 && r.y1 - r.y0 < 6) r = { ...r, x1: r.x0, line: r.y0, tap: true }; // a tap picks one word
-    else if (r.y1 - r.y0 < 14) r = { ...r, line: (r.y0 + r.y1) / 2 }; // a flat swipe picks the line it runs along
-    const words = wordsIn(await pageItems(v.page), v.vp, r);
+    const r = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+    if (r.x1 - r.x0 < 6 && r.y1 - r.y0 < 6) return { ...r, x1: r.x0, line: r.y0, tap: true }; // a tap picks one word
+    if (r.y1 - r.y0 < 14) return { ...r, line: (r.y0 + r.y1) / 2 }; // a flat swipe picks the line it runs along
+    return r;
+  }
+  // Dot as a highlighter: the words under the stroke, and where the stroke ended on screen
+  async function highlight(p, cb) {
+    const box = ink.getBoundingClientRect(), [ex, ey] = p.at(-1);
+    cb(wordsIn(await pageItems(v.page), v.vp, region(p), 120), box.left + ex, box.top + ey);
+  }
+  function startPen(cb) { penCb = cb; pane.classList.add("is-penning"); }
+  function stopPen() { penCb = null; pane.classList.remove("is-penning"); }
+
+  async function pick(p) {
+    const words = wordsIn(await pageItems(v.page), v.vp, region(p));
     if (!words) {
       results.replaceChildren(h("p", { class: "help" }, "No words there. Pictures and scanned pages have no text to find."));
       return;
@@ -918,7 +961,7 @@ function circleSearch({ v, go, ink, hits, pane, paperId }) {
       const r = await api(`/papers/${paperId}/explain`, { method: "POST", body: JSON.stringify({ words, page }) });
       box.replaceChildren(...(r.ok ? [
         h("p", { class: "cs-ai-label" }, "AI explanation"),
-        h("p", { class: "cs-ai-text" }, r.text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/(^|\s)\*(\S.*?)\*/g, "$1$2")), // small models add Markdown anyway
+        h("div", { class: "cs-ai-text" }, buddy.format(r.text)),
         h("p", { class: "help" }, r.whole
           ? `Your model read the whole paper (${r.total} pages) in ${r.seconds} seconds.`
           : `The paper is too long for your model's context, so it read pages ${r.pages[0]} to ${r.pages[1]} of ${r.total}.`),
@@ -956,6 +999,7 @@ function circleSearch({ v, go, ink, hits, pane, paperId }) {
   return {
     button, panel, paint, close, isOpen: () => on,
     find(words) { open(); input.value = words; return find(words); },
+    startPen, stopPen, penning: () => !!penCb,
     async explain(words) {
       open(); input.value = words; await find(words);
       results.querySelectorAll(".cs-sum").forEach((p) => { if (p.textContent === "Not in this paper.") p.remove(); }); // a formula rarely matches word for word

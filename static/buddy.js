@@ -195,6 +195,7 @@ const buddy = (() => {
     "A short break between steps helps you remember more.",
   ];
   face.addEventListener("click", () => {
+    if (dragged) { dragged = false; return; } // the end of a drag is not a click
     if (!bubble.hidden) return hide();
     if (st.muted) setMuted(false);
     if (!reduced()) { st.mood = "surprised"; draw(); }
@@ -284,9 +285,124 @@ const buddy = (() => {
   })();
   function mood(m) { if (bubble.hidden) { st.mood = m; draw(); } }
 
+  // ---------- drag Dot onto the page: it turns into a highlighter ----------
+  // The page says where Dot may land with droppable({ over(x, y), drop(x, y) }).
+  let target = null, drag = null, dragged = false;
+  const place = (x, y) => { const [hx, hy] = homeCentre(); st.off = { x: x - hx, y: y - hy }; st.away = true; root.style.transform = `translate(${st.off.x}px, ${st.off.y}px)`; };
+  function droppable(t) { target = t; if (!t) pen(false); }
+  face.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || root.classList.contains("as-window")) return;
+    drag = { x: e.clientX, y: e.clientY, on: false };
+    face.setPointerCapture(e.pointerId);
+  });
+  face.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    if (!drag.on) {
+      if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+      drag.on = true; st.trip += 1; hide(); root.classList.add("dragging"); st.mood = "surprised"; draw();
+    }
+    place(e.clientX, e.clientY);
+    root.classList.toggle("pen", !!target?.over(e.clientX, e.clientY));
+  });
+  face.addEventListener("pointerup", (e) => {
+    if (!drag) return;
+    const was = drag.on; drag = null;
+    if (!was) return;
+    dragged = true; setTimeout(() => { dragged = false; }, 0);
+    root.classList.remove("dragging");
+    if (target?.over(e.clientX, e.clientY)) { st.mood = "idle"; draw(); target.drop(e.clientX, e.clientY); }
+    else { root.classList.remove("pen"); st.mood = "idle"; draw(); goHome(); }
+  });
+  // As a highlighter Dot rides just above the pointer, eyes on the line below.
+  const follow = (e) => { place(e.clientX + 26, e.clientY - 30); st.dx = -1; st.dy = 1; st.lookUntil = Date.now() + 500; draw(); };
+  function pen(on) {
+    root.classList.toggle("pen", on); root.classList.toggle("penning", on);
+    document[on ? "addEventListener" : "removeEventListener"]("pointermove", follow);
+  }
+
+  // ---------- the Dot window: Dot bursts into dots that become a window ----------
+  /** open({ x, y, quote, first: Promise<{ok,text,error}>, ask(question) => Promise<…> }) → close() */
+  function open({ x, y, quote, first, ask }) {
+    pen(false);
+    const [fx, fy] = centre();
+    const w = Math.min(500, innerWidth - 24), maxH = Math.min(620, innerHeight * 0.78);
+    const left = Math.max(12, Math.min(x + 24, innerWidth - w - 12));
+    const top = Math.max(12, Math.min(y - 60, innerHeight - maxH - 12));
+    const el = document.createElement("section");
+    el.className = "dot-win"; el.setAttribute("role", "dialog"); el.setAttribute("aria-label", "Dot explains");
+    el.style.cssText = `left:${left}px;top:${top}px;width:${w}px;max-height:${maxH}px`;
+    el.innerHTML = `<header class="dw-head"><span class="buddy-name">Dot</span><button type="button" class="buddy-x" aria-label="Close">×</button></header>
+      <blockquote class="dw-quote"></blockquote><div class="dw-log" aria-live="polite"></div>
+      <form class="dw-ask"><input type="text" placeholder="Ask a follow-up" aria-label="Ask a follow-up" autocomplete="off"><button type="submit" class="btn small-btn">Ask</button></form>`;
+    el.querySelector(".dw-quote").textContent = quote;
+    const log = el.querySelector(".dw-log"), form = el.querySelector(".dw-ask"), input = form.querySelector("input");
+    document.body.append(el);
+    root.classList.add("as-window"); hide();
+    const r = el.getBoundingClientRect(), ox = fx - r.left, oy = fy - r.top, R = Math.hypot(r.width, r.height);
+    if (!reduced()) {
+      for (let i = 0; i < 64; i++) { // the dots multiply and fly out to make the window
+        const d = document.createElement("i"); d.className = "dw-spark";
+        d.style.cssText = `left:${fx}px;top:${fy}px`;
+        document.body.append(d);
+        const tx = r.left + Math.random() * r.width - fx, ty = r.top + Math.random() * r.height - fy;
+        d.animate([{ transform: "translate(0,0) scale(1)", opacity: 1 }, { transform: `translate(${tx}px,${ty}px) scale(.6)`, opacity: 0.9, offset: 0.7 }, { transform: `translate(${tx}px,${ty}px) scale(0)`, opacity: 0 }],
+          { duration: 620, delay: i * 4, easing: "cubic-bezier(.2,.7,.2,1)" }).finished.then(() => d.remove());
+      }
+      el.animate([{ clipPath: `circle(10px at ${ox}px ${oy}px)`, opacity: 0.4 }, { clipPath: `circle(${R}px at ${ox}px ${oy}px)`, opacity: 1 }],
+        { duration: 560, delay: 180, easing: "cubic-bezier(.3,.7,.2,1)", fill: "backwards" });
+    }
+    const add = (cls, text) => { const p = document.createElement("div"); p.className = cls; p.append(...format(text)); log.append(p); p.scrollIntoView({ block: "nearest" }); return p; };
+    async function answer(promise) {
+      const pending = add("dw-wait", "Reading the paper");
+      form.querySelector("button").disabled = true;
+      const res = await promise.catch(() => ({ ok: false, error: "Could not ask the model. Is the app still running?" }));
+      pending.remove(); form.querySelector("button").disabled = false;
+      add(res.ok ? "dw-a" : "dw-a err", res.ok ? res.text : res.error);
+      input.focus();
+    }
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const q = input.value.trim();
+      if (!q || form.querySelector("button").disabled) return;
+      input.value = ""; add("dw-q", q); answer(ask(q));
+    });
+    let closed = false;
+    async function close() {
+      if (closed) return; closed = true;
+      document.removeEventListener("keydown", onKey);
+      if (!reduced()) {
+        const b = el.getBoundingClientRect();
+        const shrink = el.animate([{ clipPath: `circle(${R}px at ${fx - b.left}px ${fy - b.top}px)` }, { clipPath: `circle(10px at ${fx - b.left}px ${fy - b.top}px)`, opacity: 0.3 }],
+          { duration: 380, easing: "cubic-bezier(.6,0,.8,.4)", fill: "forwards" });
+        await Promise.race([shrink.finished, wait(420)]); // a busy or hidden tab can stall animations
+      }
+      el.remove(); root.classList.remove("as-window");
+      st.mood = "happy"; draw(); setTimeout(() => { st.mood = "idle"; draw(); goHome(); }, 500);
+    }
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", onKey);
+    el.querySelector(".buddy-x").addEventListener("click", close);
+    answer(first);
+    return close;
+  }
+  // Model text as paragraphs and lists; small models add Markdown marks even when asked not to.
+  function format(text) {
+    const out = [];
+    let list = null;
+    for (const raw of text.split(/\n+/)) {
+      const line = raw.replace(/\*\*(.+?)\*\*/g, "$1").replace(/(^|\s)\*(\S.*?)\*/g, "$1$2").replace(/^#+\s*/, "").trim();
+      if (!line) continue;
+      const item = line.match(/^(?:[-*•]|\d+[.)])\s+(.*)/);
+      if (item) { if (!list) out.push(list = document.createElement("ul")); const li = document.createElement("li"); li.textContent = item[1]; list.append(li); continue; }
+      list = null;
+      const p = document.createElement("p"); p.textContent = line; out.push(p);
+    }
+    return out;
+  }
+
   document.body.append(root);
   setMuted(st.muted);
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
-  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam };
+  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, open, format };
 })();
