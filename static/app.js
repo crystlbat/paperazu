@@ -15,7 +15,7 @@ function h(tag, attrs = {}, ...kids) {
 }
 
 // calls that wait on the local model: Dot shows it is working while they run
-const MODEL_CALL = /\/(explain|ask|test-connection)$|^\/graph\/(index|search|suggest)$/;
+const MODEL_CALL = /\/(explain|ask|test-connection)$|\/check\/\w+$|^\/graph\/(index|search|suggest)$/;
 
 async function api(path, opts = {}) {
   const working = MODEL_CALL.test(path);
@@ -571,10 +571,23 @@ async function renderSettings(section = "connection") {
     greet("settings", "Paste the URL and key that Unsloth shows, then press Test connection.", { pop: false });
   }
   else if (section === "primer") drawPrimerSettings(body, s);
+  else if (section === "checker") drawCheckerSettings(body, s);
   else body.append(
     h("h2", {}, SETTINGS_SECTIONS.find(([id]) => id === section)?.[1] ?? "Settings"),
     h("p", { class: "lede" }, "You can change these settings from phase 8."));
   if (section === "primer") buddy.say(AI_SUMMARY_TIP, { mood: "idle", pop: false });
+}
+
+function drawCheckerSettings(body, s) {
+  const [a, b] = [h("span", { class: "status" }), h("span", { class: "status" })];
+  const words = h("input", { type: "number", min: 20, max: 60, step: 5, value: s.hint_words,
+    onchange: () => saveSetting("hint_words", Number(words.value), a) });
+  const hints = h("select", { onchange: () => saveSetting("checker_hints", hints.value === "1", b) },
+    h("option", { value: "1", selected: s.checker_hints }, "The verdict and a hint"), h("option", { value: "0", selected: !s.checker_hints }, "The verdict only"));
+  body.append(h("h2", {}, "Checker"),
+    h("p", { class: "lede" }, "Check my notes sends your notes for one step, and the paper, to the model on your Mac. It says correct, partial, wrong or missing for each field, and points to a page instead of giving the answer."),
+    row("Hint length, in words (20 to 60)", words, a),
+    row("Show", hints, b));
 }
 
 function drawPrimerSettings(body, s) {

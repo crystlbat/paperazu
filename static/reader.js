@@ -20,8 +20,9 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) openR
 async function renderReader(paperId, startPage) {
   const [paper, saved] = await Promise.all([api(`/papers/${paperId}?open=true`).catch(() => null),
     api(`/papers/${paperId}/notes`).catch(() => null)]);
-  const [fw, aiData, cfg] = await Promise.all([api(`/framework?template=${paper?.template ?? "paper"}`),
-    api(`/papers/${paperId}/primer`).catch(() => null), api("/settings").catch(() => ({}))]);
+  const [fw, aiData, cfg, checks] = await Promise.all([api(`/framework?template=${paper?.template ?? "paper"}`),
+    api(`/papers/${paperId}/primer`).catch(() => null), api("/settings").catch(() => ({})),
+    api(`/papers/${paperId}/checks`).catch(() => ({ steps: {} }))]);
   if (!paper || !saved) {
     view.className = "page page-library";
     view.append(h("div", { class: "library" }, h("h1", {}, "Paper not found"),
@@ -61,6 +62,12 @@ async function renderReader(paperId, startPage) {
   // AI summary: what the model wrote for each step before you read, and the job that makes it
   const ai = { data: aiData ?? { steps: {}, progress: { state: "not_made" } }, mode: cfg.primer_panel ?? "after_writing",
     go: (n) => pdf.go(n), live: null,
+    checks: checks.steps, hints: cfg.checker_hints !== false,
+    async check(st) { // send the last keystrokes first; the server checks what is saved
+      await queue.flush();
+      return api(`/papers/${paperId}/check/${st.id}`, { method: "POST" })
+        .catch((e) => ({ ok: false, error: e.body?.detail?.errors?.step_id || "Could not reach the app. Is it still running?" }));
+    },
     async make() {
       ai.live = ai.live ?? streamPrimer(paperId, (e) => { ai.data.progress = e; ai.paint?.(); }).then(async () => {
         ai.data = (await api(`/papers/${paperId}/primer`).catch(() => null)) ?? ai.data;
@@ -383,9 +390,50 @@ function notebook(st, note, timer, changed, ai) {
     timerView(st, note, timer),
     ai ? aiSummary(st, note, ai) : null,
     ...st.fields.map((f) => fieldView(st, f, note.fields[f.id], set(f.id))),
+    ai ? checkBar(st, ai) : null,
     gateView(st, note, changed),
     oldFields(st, note.fields),
   ].filter(Boolean);
+}
+
+// ---------- Checker: verdicts next to each field, hints under it ----------
+const VERDICT = { correct: "Correct", partial: "Partial", wrong: "Wrong", missing: "Missing" };
+const tally = (c) => Object.entries(c.fields.reduce((t, f) => ({ ...t, [f.verdict]: (t[f.verdict] ?? 0) + 1 }), {}))
+  .map(([v, n]) => `${n} ${v}`).join(", ");
+
+function checkBar(st, ai) {
+  if (!AI_STEP(st)) return null;
+  const box = h("section", { class: "chk-bar", "aria-label": "Check my notes" });
+  const paint = () => {
+    const list = ai.checks[st.id] ?? [], last = list[0];
+    const btn = h("button", { type: "button", class: "btn", onclick: async () => {
+      btn.disabled = true; btn.textContent = "Checking your notes";
+      const r = await ai.check(st);
+      if (r.ok) { (ai.checks[st.id] ??= []).unshift(r); paint(); buddy.react?.(r.fields.every((f) => f.verdict === "correct") ? "yes" : "no"); }
+      else { paint(); box.append(h("p", { class: "status err" }, r.error)); }
+    } }, last ? "Check again" : "Check my notes");
+    box.replaceChildren(
+      h("div", { class: "chk-row" }, btn,
+        h("span", { class: "help" }, last ? `Checked ${ago(last.created_at).toLowerCase()}: ${tally(last)}.` : "Your model compares your notes with the paper and gives hints, not answers.")),
+      last?.overall ? h("p", { class: "chk-overall" }, pageLinks(last.overall, ai.go)) : null,
+      list.length > 1 ? h("details", { class: "chk-history" }, h("summary", {}, `Earlier checks (${list.length - 1})`),
+        h("ol", {}, list.slice(1).map((c) => h("li", {}, h("span", {}, ago(c.created_at)), h("span", { class: "help" }, tally(c)))))) : null);
+    queueMicrotask(() => verdicts(box.parentElement, last, ai));
+  };
+  paint();
+  return box;
+}
+
+// put the latest verdict beside each field's label, and its hint under the field
+function verdicts(root, check, ai) {
+  if (!root) return;
+  root.querySelectorAll(".chk-chip, .chk-hint").forEach((el) => el.remove());
+  for (const f of check?.fields ?? []) {
+    const wrap = root.querySelector(`[data-field="${CSS.escape(f.field_id)}"]`);
+    if (!wrap) continue;
+    wrap.querySelector(":scope > label, :scope > legend")?.append(h("span", { class: `chk-chip ${f.verdict}` }, VERDICT[f.verdict]));
+    if (ai.hints && f.hint) wrap.append(h("p", { class: `chk-hint ${f.verdict}` }, pageLinks(f.hint, ai.go)));
+  }
 }
 
 // ---------- AI summary in the notebook ----------
@@ -429,7 +477,12 @@ function aiSummary(st, note, ai) {
   const sub = h("span", { class: "ai-sum-sub" }, "Read your own first, then open");
   const det = h("details", { open: ai.mode === "open" },
     h("summary", { onclick: (e) => {
-      if (!det.open && locked()) { e.preventDefault(); sub.textContent = "Write something in this step first, then open it."; sub.classList.add("warn"); }
+      if (!det.open && locked() && !det.dataset.anyway) {
+        e.preventDefault();
+        sub.replaceChildren("Try writing your own first. ",
+          h("button", { type: "button", class: "linklike", onclick: (ev) => { ev.preventDefault(); ev.stopPropagation(); det.dataset.anyway = "1"; det.open = true; sub.textContent = "Read your own first, then open"; sub.classList.remove("warn"); } }, "Open anyway"));
+        sub.classList.add("warn");
+      }
     } }, h("span", { class: "ai-sum-title" }, "AI summary"), sub),
     h("div", { class: "ai-sum-body" }, st.fields.map((f) => {
       const x = data.fields.find((y) => y.field_id === f.id);
@@ -531,6 +584,7 @@ function fieldView(st, f, value, set) {
     wrap = h("fieldset", { class: `nb-field is-${f.type}`, "aria-describedby": helpId }, h("legend", {}, f.label), help, control);
   }
   wrap.classList.toggle("is-filled", filled(value));
+  wrap.dataset.field = f.id;
   return wrap;
 }
 

@@ -25,6 +25,9 @@ class Settings(BaseModel):
     primer_sentences: int = Field(2, ge=1, le=3)
     primer_auto: bool = False  # make it right after upload
     primer_panel: Literal["after_writing", "click", "open"] = "after_writing"
+    # checker
+    hint_words: int = Field(40, ge=20, le=60)
+    checker_hints: bool = True  # False = show the verdict only
 
     @field_validator("base_url")
     @classmethod

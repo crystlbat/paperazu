@@ -128,9 +128,10 @@ def schema_for(step: Step) -> dict[str, Any]:
     return out
 
 
-def _complete(s: Settings, messages: list[dict[str, str]], schema: dict[str, Any] = SCHEMA) -> str:
+def _complete(s: Settings, messages: list[dict[str, str]], schema: dict[str, Any] = SCHEMA, name: str = "primer") -> str:
+    """One JSON reply from the model (the checker uses this too). Raises PrimerError with a message for the user."""
     global _json_schema_ok
-    fmt: dict[str, Any] = ({"type": "json_schema", "json_schema": {"name": "primer", "schema": schema}}
+    fmt: dict[str, Any] = ({"type": "json_schema", "json_schema": {"name": name, "schema": schema}}
                            if _json_schema_ok else {"type": "json_object"})
     try:
         r = llm.client(s).chat.completions.create(model=llm.pick_model(s) or "default", messages=messages,
@@ -143,7 +144,7 @@ def _complete(s: Settings, messages: list[dict[str, str]], schema: dict[str, Any
     except APIStatusError as e:
         if _json_schema_ok and e.status_code in (400, 422, 500, 501):
             _json_schema_ok = False
-            return _complete(s, messages, schema)
+            return _complete(s, messages, schema, name)
         raise PrimerError(e.message)
     except APIError as e:
         raise PrimerError(e.message)

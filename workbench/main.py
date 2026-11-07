@@ -16,7 +16,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import db, framework, graph, library, llm, notes, primer, settings, themes
+from . import checker, db, framework, graph, library, llm, notes, primer, settings, themes
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -242,6 +242,28 @@ def make_primer(paper_id: str) -> StreamingResponse:
                 return
             time.sleep(0.5)
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+
+@app.post("/papers/{paper_id}/check/{step_id}")
+def check_notes(paper_id: str, step_id: str) -> dict[str, Any]:
+    """Checks the saved notes for one step against the paper. Runs on the local model only."""
+    try:
+        out = checker.check(settings.get_all(), paper_id, step_id)
+    except KeyError:
+        raise HTTPException(422, detail={"errors": {"step_id": "The checker does not cover this step."}})
+    except checker.CheckError as e:
+        return {"ok": False, "error": str(e)}
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return {"ok": True, **out}
+
+
+@app.get("/papers/{paper_id}/checks")
+def get_checks(paper_id: str) -> dict[str, Any]:
+    out = checker.history(paper_id)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return {"steps": out}
 
 
 class AskIn(BaseModel):
