@@ -3,12 +3,16 @@
    only yellow thing here, because it is where you are. Dashed = AI suggests, solid = you linked. */
 .page-graph { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: minmax(0, 1fr); }
 .g-stage { position: relative; min-width: 0; min-height: 0; overflow: hidden;
-  background: var(--desk) radial-gradient(var(--dot) 1.1px, transparent 1.4px) 0 0 / 22px 22px; }
+  background: radial-gradient(ellipse 60% 55% at 50% 50%, color-mix(in srgb, var(--marker) 7%, transparent), transparent 70%),
+    var(--desk) radial-gradient(var(--dot) 1.1px, transparent 1.4px) 0 0 / 22px 22px; }
 .g-svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; user-select: none; }
 .g-svg.panning { cursor: grabbing; }
 
 .g-edge { stroke: var(--pencil); transition: opacity .2s, stroke .2s; }
-.g-edge.suggest { stroke-dasharray: 5 6; opacity: .7; animation: g-flow 1.6s linear infinite; }
+.g-edge.suggest { stroke-dasharray: 4 6; opacity: .55; }
+.g-edge.suggest.near { animation: g-flow 1.6s linear infinite; } /* dashes only move on the links you are looking at */
+.g-edge.sim { stroke: var(--pencil); stroke-linecap: round; opacity: .28; }
+.g-edge.sim.near { stroke: var(--marker); opacity: .9; }
 .g-edge.link { stroke: var(--ink); }
 .g-edge.ghost { stroke: var(--ink); stroke-dasharray: 2 5; stroke-width: 2; stroke-linecap: round; animation: g-flow .9s linear infinite; }
 @keyframes g-flow { to { stroke-dashoffset: -22; } }
@@ -16,9 +20,14 @@
 .g-node { cursor: pointer; outline: none; transition: opacity .2s; }
 .g-node .halo { fill: var(--marker); opacity: 0; transition: opacity .2s; }
 .g-node .label { fill: var(--ink); font: var(--fw-strong) 13px/1 var(--sans); paint-order: stroke; stroke: var(--desk); stroke-width: 4px; stroke-linejoin: round; }
-.g-node.paper .body { fill: var(--sheet); stroke: var(--ink); stroke-width: 1.5; }
-.g-node.paper .track { fill: none; stroke: var(--rule); stroke-width: 3; }
-.g-node.paper .prog { fill: none; stroke: var(--green); stroke-width: 3; stroke-linecap: round; }
+.g-node.paper .body { fill: var(--sheet); }
+.g-node.paper .rim { fill: none; stroke: color-mix(in srgb, var(--ink) 25%, transparent); stroke-width: 1; }
+.g-node.paper .track { fill: none; stroke: var(--rule); stroke-width: 4; }
+.g-node.paper .prog { fill: none; stroke: var(--green); stroke-width: 4; stroke-linecap: round; }
+.g-node.paper .cover { transition: transform .25s cubic-bezier(.3,.7,.2,1.3); transform-box: fill-box; transform-origin: center; }
+.g-node.paper:hover .cover, .g-node.paper.sel .cover { transform: scale(1.08); }
+.g-node.paper .label { font: 400 19px/1 var(--serif); stroke-width: 5px; }
+.g-node.paper .sub { fill: var(--pencil); font: var(--fw-ui) 12px/1 var(--sans); paint-order: stroke; stroke: var(--desk); stroke-width: 4px; stroke-linejoin: round; }
 .g-node.paper .glyph { fill: var(--ink); font: var(--fw-strong) 13px/1 var(--sans); font-variant-numeric: tabular-nums; }
 .g-node.idea .body { fill: var(--ink); }
 .g-node.idea .label { fill: var(--paper); stroke: none; }
@@ -53,7 +62,8 @@
   background: color-mix(in srgb, var(--desk) 85%, transparent); padding: 6px 10px; border-radius: 10px; }
 .g-legend span { display: inline-flex; align-items: center; gap: 7px; }
 .g-legend i { display: inline-block; }
-.lg-paper { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--ink); background: var(--sheet); }
+.lg-paper { width: 14px; height: 14px; border-radius: 50%; border: 2.5px solid var(--rule); background: #2448c8; }
+.lg-sim { width: 20px; height: 0; border-top: 3px solid var(--pencil); border-radius: 2px; opacity: .5; }
 .lg-idea { width: 20px; height: 10px; border-radius: 6px; background: var(--ink); }
 .lg-solid { width: 20px; height: 0; border-top: 1.75px solid var(--ink); }
 .lg-dash { width: 20px; height: 0; border-top: 1.75px dashed var(--pencil); }
@@ -96,6 +106,8 @@
 .g-meter i.on { background: var(--ink); }
 .g-tag { margin-left: 8px; font-size: var(--fs-ui); font-weight: var(--fw-ui); color: var(--pencil); border: 1px dashed var(--pencil); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
 .g-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.g-paper { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 12px; padding: 8px 12px 8px 8px; }
+.g-paper img { width: 64px; aspect-ratio: 4 / 3; object-fit: cover; object-position: top; border-radius: 6px; box-shadow: 0 0 0 1px var(--rule); display: block; }
 .g-wait { animation: blink 1.4s ease-in-out infinite; }
 .danger-text { color: var(--redpen); }
 
@@ -156,7 +168,7 @@
 @media (max-width: 760px) { .t-body { flex-direction: column; } .t-panel { flex: 0 0 auto; max-height: 45%; border-left: 0; border-top: 1px solid var(--rule); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .g-edge.suggest, .g-edge.ghost, .g-node.ghost, .g-node.sugg, .t-card, .t-link, .g-side > *, .g-note.busy::before, .g-wait { animation: none; }
+  .g-edge.suggest.near, .g-edge.ghost, .g-node.ghost, .g-node.sugg, .t-card, .t-link, .g-side > *, .g-note.busy::before, .g-wait { animation: none; }
   .g-node, .g-node .halo, .g-edge, .g-row { transition: none; }
 }
 @media (max-width: 860px) {

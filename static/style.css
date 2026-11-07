@@ -787,15 +787,18 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .tpick summary.pchip.add:hover, .tpick[open] summary.pchip.add { border-style: solid; border-color: var(--ink); color: var(--ink); }
 
 /* ---------- Reader: Steps or Note ---------- */
-.nb-mode { display: flex; gap: 4px; padding: 12px 32px 0; }
-.nb-tab { min-height: 0; padding: 6px 14px; border-radius: 999px; border: 1px solid transparent; background: none;
-  color: var(--pencil); font-weight: var(--fw-ui); cursor: pointer; box-shadow: none; }
+.nb-mode { display: inline-flex; align-self: flex-start; gap: 2px; margin: 18px 32px 0; padding: 3px; border-radius: 999px; background: var(--paper); border: 1px solid var(--rule-soft); }
+.nb-tab { min-height: 0; padding: 6px 18px; border-radius: 999px; border: 0; background: none;
+  color: var(--pencil); font-weight: var(--fw-ui); cursor: pointer; box-shadow: none; transition: background .15s, color .15s; }
 .nb-tab:hover { color: var(--ink); }
 .nb-tab[aria-selected="true"] { background: var(--ink); color: var(--sheet); }
 .nb-body[hidden], .nb-foot[hidden], .plain[hidden] { display: none; }
-.plain { flex: 1; min-height: 0; overflow: auto; padding: 16px 32px 40px; display: flex; flex-direction: column; gap: 10px; }
-.plain .help code { font-family: var(--mono); background: var(--marker); color: var(--on-marker); padding: 0 4px; border-radius: 3px; }
-.plain-text { width: 100%; min-height: 60vh; border: 0; background: none; padding: 0; box-shadow: none;
-  font: 400 17px/1.65 var(--sans, inherit); color: var(--ink); white-space: pre-wrap; }
-.plain-text:focus { outline: none; }
+.plain { flex: 1; min-height: 0; overflow: auto; padding: 18px 32px 32px; display: flex; flex-direction: column; gap: 12px; }
+.plain-hint { margin: 0; font-size: var(--fs-ui); color: var(--pencil); line-height: 1.5; }
+.plain-hint code { font-family: var(--mono); font-size: .92em; background: var(--marker); color: var(--on-marker); padding: 1px 6px; border-radius: 4px; }
+.notebook .plain-text { width: 100%; flex: 1 0 auto; min-height: 58vh; margin: 0; padding: 22px 26px;
+  background: var(--paper); border: 1px solid var(--rule-soft); border-radius: 14px; box-shadow: none;
+  font: 400 17px/1.7 var(--sans); color: var(--ink); white-space: pre-wrap; transition: border-color .15s; }
+.notebook .plain-text::placeholder { color: var(--pencil); opacity: .8; }
+.notebook .plain-text:focus, .notebook .plain-text:focus-visible { outline: none; box-shadow: none; border-color: var(--rule); }
 .plain-foot { min-height: 20px; }

@@ -103,10 +103,10 @@ async function renderReader(paperId, startPage) {
 function plainNote(paperId, page) {
   const url = `/papers/${paperId}/note`;
   const ta = h("textarea", { class: "plain-text", "aria-label": "Note",
-    placeholder: "Write anything here.\n\nTo ask about the paper, start a line with @ai, for example:\n@ai what problem does this solve?\nthen press Enter." });
+    placeholder: "Write your notes here." });
   const status = h("span", { class: "save-status", role: "status" });
   const el = h("div", { class: "plain", hidden: true },
-    h("p", { class: "help" }, "Start a line with ", h("code", {}, "@ai"), " and press Enter to ask your model about this paper."),
+    h("p", { class: "plain-hint" }, "Ask about the paper: type ", h("code", {}, "@ai what problem does this solve?"), " and press Enter. The answer appears under your question."),
     ta, h("div", { class: "plain-foot" }, status));
   let loaded = false, dirty = false, t = 0;
   const say = (text, cls = "") => { status.textContent = text; status.className = `save-status ${cls}`; };
