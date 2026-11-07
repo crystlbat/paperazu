@@ -145,3 +145,15 @@ def test_one_field_step_split_into_rows_is_joined() -> None:
     out = primer.parse(raw, step)
     assert [(f.field_id, f.summary, f.pages) for f in out.fields] == [("ideas", "Collect data [p. 5]. Clean it [p. 6].", [5, 6])]
     assert primer.schema_for(step)["properties"]["fields"]["items"]["properties"]["field_id"]["enum"] == ["ideas"]
+
+
+def test_printed_page_numbers_map_to_pdf_pages() -> None:
+    pages = [f"Title line\nBody text {i}.\n{1788 + i}" for i in range(1, 13)]  # a journal paper: p. 1789 to 1800
+    assert primer.printed_offset(pages) == 1788
+    assert primer.printed_offset(["Slide 1\nHello", "Slide 2\nMore"]) == 0
+    data = {"fields": [{"field_id": "a", "summary": "See [p. 1791] and p. 1797, page 2, in 2023 for $1790.", "pages": [1791, 2, 9999]}],
+            "where_to_look": "1797"}
+    out = primer.fix_pages(data, 12, 1788)
+    assert out["fields"][0]["pages"] == [3, 2]  # 9999 is no page at all, so it goes
+    assert out["fields"][0]["summary"] == "See [p. 3] and p. 9, page 2, in 2023 for $1790."
+    assert out["where_to_look"] == "p. 9"

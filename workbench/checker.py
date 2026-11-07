@@ -121,7 +121,7 @@ def check(s: Settings, paper_id: str, step_id: str) -> dict[str, Any] | None:
     if not any(note_text(fields.get(f.id)) for f in step.fields):
         raise CheckError("Write some notes in this step first.")
     system = system_prompt(step, s)
-    ask = f'Check my notes for the step "{step.title}" (step_id "{step.id}"). Return only JSON.\n\nMy notes:\n{notes_block(step, fields)}'
+    ask = f'Check my notes for the step "{step.title}" (step_id "{step.id}"). {primer.PAGE_RULE} Return only JSON.\n\nMy notes:\n{notes_block(step, fields)}'
     paper = primer.step_context(step, primer.drop_references(pages), library.headings(paper_id), s, system + ask + row["title"])
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": f"Paper: {row['title']}\n\n<paper>\n{paper}\n</paper>\n\n{ask}"}]
@@ -142,7 +142,7 @@ def check(s: Settings, paper_id: str, step_id: str) -> dict[str, Any] | None:
                           (paper_id, step_id, json.dumps(fields), result.model_dump_json()))
         saved = con.execute("SELECT id, created_at FROM checks WHERE id = ?", (cur.lastrowid,)).fetchone()
     con.close()
-    return {"id": saved["id"], "created_at": saved["created_at"], **result.model_dump()}
+    return {"id": saved["id"], "created_at": saved["created_at"], **primer.page_mapper(paper_id)(result.model_dump())}
 
 
 def history(paper_id: str) -> dict[str, list[dict[str, Any]]] | None:
@@ -156,6 +156,7 @@ def history(paper_id: str) -> dict[str, list[dict[str, Any]]] | None:
     finally:
         con.close()
     out: dict[str, list[dict[str, Any]]] = {}
+    fix = primer.page_mapper(paper_id) if rows else None
     for r in rows:
-        out.setdefault(r["step_id"], []).append({"id": r["id"], "created_at": r["created_at"], **json.loads(r["result"])})
+        out.setdefault(r["step_id"], []).append({"id": r["id"], "created_at": r["created_at"], **fix(json.loads(r["result"]))})
     return out

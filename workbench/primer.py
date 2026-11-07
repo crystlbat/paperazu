@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +118,68 @@ def step_context(step: Step, pages: list[str], heads: list[tuple[int, str, int]]
     return labelled(pages, keep)[:max(room, 0)]
 
 
+# ---------- page numbers ----------
+# Journal papers print their own page numbers (a paper may run 1789 to 1800). Small models cite those
+# instead of the [p. N] labels, so citations are mapped back to the PDF's pages when they are shown.
+_FOLIO = re.compile(r"^\s*(\d{1,5})\s*$")
+_REF = re.compile(r"(\[p\.?\s*|\bp\.\s*|\bpages?\s+)(\d+)", re.I)
+_BARE = re.compile(r"(?<![\w.$/])(\d{3,5})(?![\w.%/]|\.\d)")
+
+
+def printed_offset(pages: list[str]) -> int:
+    """Printed page number minus PDF page number, when most pages print one at their top or bottom; else 0."""
+    counts: Counter[int] = Counter()
+    for i, text in enumerate(pages):
+        lines = [x for x in text.strip().splitlines() if x.strip()]
+        for line in {*lines[:2], *lines[-2:]}:
+            m = _FOLIO.match(line)
+            if m and int(m.group(1)) != i + 1:
+                counts[int(m.group(1)) - i - 1] += 1
+    if not counts:
+        return 0
+    off, n = counts.most_common(1)[0]
+    return off if n >= max(2, len(pages) // 3) else 0
+
+
+def pdf_page(n: int, total: int, off: int) -> int | None:
+    """A cited page as a PDF page, or None when it is neither. In-range numbers are taken as PDF pages."""
+    if 1 <= n <= total:
+        return n
+    return n - off if off and 1 <= n - off <= total else None
+
+
+def fix_text(text: str, total: int, off: int) -> str:
+    def ref(m: re.Match[str]) -> str:
+        p = pdf_page(int(m.group(2)), total, off)
+        return f"{m.group(1)}{p}" if p else m.group(0)
+    text = _REF.sub(ref, text)
+    if off > total:  # a printed number on its own ("see 1797"): only when it cannot be a PDF page or a year
+        text = _BARE.sub(lambda m: f"p. {int(m.group(1)) - off}" if 1 <= int(m.group(1)) - off <= total else m.group(0), text)
+    return text
+
+
+def fix_pages(data: dict[str, Any], total: int, off: int) -> dict[str, Any]:
+    """Map the page numbers in a saved summary or check (its pages lists and its text) to PDF pages."""
+    for f in data.get("fields", []):
+        f["pages"] = [p for p in (pdf_page(int(x), total, off) for x in f.get("pages", [])) if p]
+        for k in ("summary", "hint"):
+            if isinstance(f.get(k), str):
+                f[k] = fix_text(f[k], total, off)
+    for k in ("where_to_look", "overall"):
+        if isinstance(data.get(k), str):
+            data[k] = fix_text(data[k], total, off)
+    return data
+
+
+def page_mapper(paper_id: str) -> Any:
+    pages = library.page_texts(paper_id) or []
+    total, off = len(pages), printed_offset(pages)
+    return lambda d: fix_pages(d, total, off)
+
+
+PAGE_RULE = "Cite pages only with the [p. N] labels in <paper>, never with page numbers printed in the paper."
+
+
 # ---------- one step ----------
 _json_schema_ok = True  # llama-server takes json_schema; if it refuses once, use json_object from then on
 
@@ -174,7 +237,7 @@ def parse(text: str, step: Step) -> StepPrimer:
 
 def make_step(s: Settings, step: Step, title: str, pages: list[str], heads: list[tuple[int, str, int]]) -> StepPrimer:
     system = system_prompt(step, s)
-    ask = f'Write the primer for the step "{step.title}" (step_id "{step.id}"). Return only JSON.'
+    ask = f'Write the primer for the step "{step.title}" (step_id "{step.id}"). {PAGE_RULE} Return only JSON.'
     paper = step_context(step, pages, heads, s, system + ask + title)
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\n{ask}"}]
@@ -264,7 +327,8 @@ def load(paper_id: str) -> dict[str, Any] | None:
         rows = con.execute("SELECT step_id, data FROM primers WHERE paper_id = ?", (paper_id,)).fetchall()
     finally:
         con.close()
-    return {"progress": progress(paper_id), "steps": {r["step_id"]: json.loads(r["data"]) for r in rows}}
+    fix = page_mapper(paper_id) if rows else None
+    return {"progress": progress(paper_id), "steps": {r["step_id"]: fix(json.loads(r["data"])) for r in rows}}
 
 
 def reset_stale() -> None:
