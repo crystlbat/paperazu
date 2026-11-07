@@ -16,7 +16,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import checker, db, export, framework, graph, library, llm, notes, primer, settings, themes
+from . import checker, db, export, guide, framework, graph, library, llm, notes, primer, settings, themes
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -276,6 +276,14 @@ def export_reflection(paper_id: str) -> dict[str, Any]:
     if out is None:
         raise HTTPException(404, detail="This paper is not in the library.")
     return {"ok": True, "markdown": out}
+
+
+@app.get("/papers/{paper_id}/guide")
+def get_guide(paper_id: str) -> dict[str, Any]:
+    out = guide.stops(paper_id)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return {"stops": out}
 
 
 @app.get("/papers/{paper_id}/checks")

@@ -113,20 +113,23 @@ async function renderReader(paperId, startPage) {
   }
   const nbEl = h("section", { class: "notebook", "aria-label": "Notebook" }, tabs, body, plain.el, foot);
   view.append(rail.el, pdf.el, splitter(view), nbEl);
-  paneToggles([["rail", rail.el, "Steps", "paneRail"], ["paper", pdf.el, "Paper", "panePaper"], ["notes", nbEl, "Notes", "paneNotes"]]);
+  const guide = guidedReading(paperId, pdf, (id) => { const st = fw.steps.find((x) => x.id === id); if (st && st !== current) open(st, false); },
+    () => panes.set("notes", false));
+  const panes = paneToggles([["rail", rail.el, "Steps", "paneRail"], ["paper", pdf.el, "Paper", "panePaper"], ["notes", nbEl, "Notes", "paneNotes"]],
+    (shut) => { if (shut.has("notes") && !shut.has("paper")) guide.offer(); else guide.stop(); });
   open(current, !greeted.has("reader")); greeted.add("reader");
   if (ai.data.progress.state === "making") ai.make(); // it was started elsewhere; follow it here
   setMode(localStorage.getItem("reader-mode") === "note" ? "note" : "steps");
 
   // Saves (and retries) can finish after you leave; Dot only speaks while this Reader is open.
   const me = openReader = {
-    leave() { timer.stop(); queue.flush(); plain.flush(); pdf.destroy(); },
+    leave() { guide.stop(); timer.stop(); queue.flush(); plain.flush(); pdf.destroy(); },
     flushOnExit() { queue.flushKeepalive(); plain.flush(true); },
   };
 }
 
 // Three icons in the top bar fold each Reader pane down to a slim strip; the strip's icon opens it again.
-function paneToggles(panes) {
+function paneToggles(panes, onChange) {
   const shut = new Set(JSON.parse(localStorage.getItem("reader-min") || "[]"));
   const btns = {};
   function set(key, min) {
@@ -139,6 +142,7 @@ function paneToggles(panes) {
       btns[k].title = `${m ? "Show" : "Fold away"} ${label.toLowerCase()}`;
     }
     localStorage.setItem("reader-min", JSON.stringify([...shut]));
+    onChange?.(shut);
   }
   for (const [k, el, label, ico] of panes) {
     btns[k] = h("button", { type: "button", class: "btn ghost tool pane-tog", "aria-label": label, onclick: () => set(k, !shut.has(k)) }, icon(ico));
@@ -147,6 +151,69 @@ function paneToggles(panes) {
   }
   $("#page-extra").append(h("div", { class: "pane-toggles", role: "group", "aria-label": "Show or fold away panes" }, ...Object.values(btns)));
   set("rail", shut.has("rail"));
+  return { set };
+}
+
+// Guided reading: with only the paper showing, Dot offers to take you to each part to read for each step,
+// hovers beside its heading and tells you what to look for. The places come from the paper's own headings.
+function guidedReading(paperId, pdf, onStep, openNotes) {
+  let stops = null, i = 0, live = 0, offered = false, on = false;
+  const label = h("p", { class: "gd-count num" });
+  const what = h("p", { class: "gd-step" });
+  const where = h("p", { class: "gd-where" });
+  const look = h("ul", { class: "gd-look" });
+  const back = h("button", { type: "button", class: "btn ghost small-btn", onclick: () => show(i - 1) }, "Back");
+  const next = h("button", { type: "button", class: "btn small-btn", onclick: () => show(i + 1) });
+  const card = h("section", { class: "guide-card", hidden: true, "aria-label": "Guided reading", "aria-live": "polite" },
+    h("div", { class: "gd-top" }, h("span", { class: "buddy-name" }, "Dot guides"), label,
+      h("button", { type: "button", class: "buddy-x", "aria-label": "Stop guided reading", onclick: () => stop() }, "×")),
+    what, where, look, h("div", { class: "gd-actions" }, back, next));
+  pdf.el.append(card);
+  const onKey = (e) => { if (e.key === "Escape" && on && !document.querySelector(".dot-win")) stop(); };
+
+  function offer() {
+    if (offered || on) return;
+    offered = true;
+    buddy.say("Just the paper now. Want me to guide you? I will take you to each part to read and tell you what to look for.",
+      { mood: "happy", actions: [{ label: "Guide me", onClick: start }, { label: "Not now" }] });
+  }
+  async function start() {
+    stops = stops ?? (await api(`/papers/${paperId}/guide`).catch(() => ({ stops: [] }))).stops;
+    if (!stops.length) return buddy.say("I could not find the parts of this paper to guide you through.", { mood: "worried" });
+    on = true; card.hidden = false;
+    document.addEventListener("keydown", onKey);
+    show(0);
+  }
+  async function show(k) {
+    if (k >= stops.length) return finish();
+    i = Math.max(0, k);
+    const s = stops[i], my = ++live;
+    label.textContent = `${i + 1} of ${stops.length}`;
+    what.textContent = `Step ${s.n}, ${s.title}. About ${s.minutes} ${s.minutes === 1 ? "minute" : "minutes"}.`;
+    look.replaceChildren(...s.look_for.map((q) => h("li", {}, q)));
+    back.disabled = i === 0;
+    next.textContent = i === stops.length - 1 ? "Finish" : "Next";
+    onStep(s.step_id);
+    const r = await pdf.point(s.heading, s.page);
+    if (my !== live || !on) return;
+    where.textContent = r.found ? `Read "${s.heading}" on page ${s.page}.` : `Read page ${s.page}. Look for the ${s.look_in.slice(0, 2).join(" or ")}.`;
+    const stage = pdf.el.querySelector(".pdf-stage").getBoundingClientRect();
+    const left = r.left - 64 > stage.left + 30; // hover in the margin left of the heading (clear of its number), or else to its right
+    await buddy.goTo(left ? r.left - 64 : Math.min(r.left + r.w + 50, stage.right - 40), r.top + r.h / 2);
+    if (my === live && on) buddy.lookAt(r.left + r.w / 2, r.top + r.h / 2, 4000);
+  }
+  function finish() {
+    stop();
+    buddy.say("That is every part. Now write it down in your own words, step by step.",
+      { mood: "happy", actions: [{ label: "Open my notes", onClick: openNotes }] });
+  }
+  function stop() {
+    if (!on) return;
+    on = false; live += 1; card.hidden = true; pdf.unmark();
+    document.removeEventListener("keydown", onKey);
+    buddy.goHome();
+  }
+  return { offer, stop };
 }
 
 // One free page of notes per paper. A line that starts with @ai, ended with Enter, asks the local model
@@ -675,6 +742,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
   const pageBox = h("div", { class: "pdf-page" });
   let textLayer = h("div", { class: "textLayer" });
   const penHint = h("p", { class: "pen-hint", hidden: true }, "Drag over the words for Dot to explain. Esc to stop.");
+  const guideMark = h("i", { class: "guide-mark", hidden: true, "aria-hidden": "true" });
   const pickBtn = (label, fn) => h("button", { type: "button", class: "btn small-btn", onmousedown: (e) => e.preventDefault(), onclick: fn }, label);
   const bubble = h("div", { class: "sel-bubble", hidden: true, role: "toolbar", "aria-label": "Selected text" },
     pickBtn("Explain", () => { const r = bubble.getBoundingClientRect(); dotExplain(picked(), r.left, r.top); clearPick(); }),
@@ -727,7 +795,8 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
     pdfjsLib.renderTextLayer({ textContentSource: await page.getTextContent(), container: layer, viewport: vp });
     if (seq !== v.seq) return;
     textLayer = layer;
-    pageBox.replaceChildren(canvas, hits, textLayer, ink, bubble);
+    pageBox.replaceChildren(canvas, hits, guideMark, textLayer, ink, bubble);
+    guideMark.hidden = true;
     bubble.hidden = true;
     sheet.replaceChildren(pageBox);
     search.paint();
@@ -744,6 +813,28 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
     bubble.hidden = false;
   }));
   document.addEventListener("selectionchange", () => { if (getSelection().isCollapsed) bubble.hidden = true; });
+
+  // Guided reading: go to a heading, mark it, scroll it near the top, and say where it is on screen.
+  async function point(heading, page) {
+    await go(page);
+    const norm = (t) => t.toLowerCase().replace(/\s+/g, " ").replace(/^[\d.]+\s+/, "").trim();
+    const want = norm(heading || "");
+    const items = (await (await v.doc.getPage(v.page)).getTextContent()).items.filter((i) => i.str?.trim());
+    const boxes = want ? items.filter((i) => { const t = norm(i.str); return t.length >= 3 && (want.startsWith(t) || t.startsWith(want)); })
+      .map((i) => itemBox(i, v.vp)) : [];
+    const b = boxes.sort((a, c) => c.h - a.h)[0]; // the biggest match is the heading, not a word in the text
+    if (b) {
+      guideMark.style.cssText = `left:${b.x - 8}px;top:${b.y - 5}px;width:${b.w + 16}px;height:${b.h + 8}px`;
+      guideMark.hidden = false; guideMark.classList.remove("on"); void guideMark.offsetWidth; guideMark.classList.add("on");
+    }
+    const y = b ? b.y : 0;
+    const top = () => pageBox.getBoundingClientRect().top;
+    stage.scrollTop += top() + y - stage.getBoundingClientRect().top - stage.clientHeight * (b ? 0.3 : 0);
+    const pr = pageBox.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+    return b ? { left: pr.left + b.x, top: pr.top + b.y, w: b.w, h: b.h, found: true }
+      : { left: Math.max(pr.left, sr.left) + 40, top: sr.top + 40, w: 0, h: 0, found: false };
+  }
+  function unmark() { guideMark.hidden = true; }
 
   // Dot explains in its own window, and takes follow-up questions there.
   async function dotExplain(words, x, y) {
@@ -777,7 +868,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
   function go(n) {
     if (!v.doc) return;
     v.page = Math.min(v.doc.numPages, Math.max(1, Math.round(n) || v.page));
-    draw();
+    return draw();
   }
   function zoom(f) { v.fit = false; v.scale = Math.min(5, Math.max(0.25, v.scale * f)); draw(); }
   function setHidden(on, auto = false) {
@@ -813,7 +904,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
   }
 
   return {
-    el, setHidden, hidden: () => v.hidden, page: () => v.page, go,
+    el, setHidden, hidden: () => v.hidden, page: () => v.page, go, point, unmark,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
     destroy() { if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
