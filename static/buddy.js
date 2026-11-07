@@ -319,6 +319,8 @@ const buddy = (() => {
   });
   // As a highlighter Dot rides just above the pointer, eyes on the line below.
   const follow = (e) => { place(e.clientX + 26, e.clientY - 30); st.dx = -1; st.dy = 1; st.lookUntil = Date.now() + 500; draw(); };
+  /** reading(on): Dot shrinks into a small yellow marker, to run along lines of the paper */
+  function reading(on) { root.classList.toggle("pen", on); root.classList.toggle("reading", on); }
   function pen(on) {
     root.classList.toggle("pen", on); root.classList.toggle("penning", on);
     document[on ? "addEventListener" : "removeEventListener"]("pointermove", follow);
@@ -473,5 +475,5 @@ const buddy = (() => {
   setMuted(st.muted);
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
-  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, open, format, draggable, tools: setTools };
+  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, reading, open, format, draggable, tools: setTools };
 })();

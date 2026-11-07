@@ -116,12 +116,16 @@ async function renderReader(paperId, startPage) {
   view.append(rail.el, pdf.el, splitter(view), nbEl);
   const guide = guidedReading(paperId, pdf, (id) => { const st = fw.steps.find((x) => x.id === id); if (st && st !== current) open(st, false); },
     () => panes.set("notes", false));
-  buddy.tools([
+  const dotTools = () => buddy.tools([
     { name: "Lens", hint: "Highlight words, I explain", pick: () => pdf.lens(),
       pic: ["..###....", ".#...#...", "#.....#..", "#.....#..", "#.....#..", ".#...#...", "..###.#..", ".......#.", "........#"] },
     { name: "Map", hint: "I guide you through the paper", pick: () => guide.start(),
       pic: ["......##.", ".....#..#", ".....#..#", "......##.", ".......#.", "...#.....", "..#......", ".#.......", "#........"] },
+    { name: pdf.watching() ? "Proactive: on" : "Proactive", hint: pdf.watching() ? "Turn off check-ins" : "I check in if you get stuck",
+      pick: () => { pdf.watch(!pdf.watching()); dotTools(); },
+      pic: [".........", "..#####..", ".#.....#.", "#..###..#", "#..###..#", "#..###..#", ".#.....#.", "..#####..", "........."] },
   ]);
+  dotTools();
   const panes = paneToggles([["rail", rail.el, "Steps", "paneRail"], ["paper", pdf.el, "Paper", "panePaper"], ["notes", nbEl, "Notes", "paneNotes"]],
     (shut) => { if (shut.has("notes") && !shut.has("paper")) guide.offer(); else guide.stop(); });
   open(current, !greeted.has("reader")); greeted.add("reader");
@@ -864,13 +868,53 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     const k = v.vp?.scale ?? 1, pad = 8;
     return [Math.max(0, x0 - pad), Math.max(0, y0 - pad), x1 + pad, y1 + pad].map((q) => Math.round((q / k) * 10) / 10);
   }
+  // The part of the page Dot is sending to the model lights up: a field of yellow dots sweeps across it.
+  function glow(rect, label) {
+    const [x0, y0, x1, y1] = px(rect);
+    const g = h("div", { class: "ctx-glow", style: `left:${x0 - 6}px;top:${y0 - 6}px;width:${x1 - x0 + 12}px;height:${y1 - y0 + 12}px` },
+      h("i", { class: "ctx-dots" }), ...(label ? [h("span", {}, label)] : []));
+    marksLayer.append(g);
+    return () => { g.classList.add("out"); setTimeout(() => g.remove(), 420); };
+  }
+  // Dot reads a box like a finger under the lines: it runs along each line and the words it passes light up.
+  // Returns { stop(), done }; `passes` rounds over the box (Infinity: until stopped), at most `most` lines a round.
+  function readAlong(rect, passes = Infinity, most = 40) {
+    let on = true;
+    const [x0, y0, x1, y1] = px(rect), box = pageBox.getBoundingClientRect();
+    const lines = [];
+    [...textLayer.querySelectorAll("span")].map((sp) => [sp, sp.getBoundingClientRect()])
+      .filter(([sp, r]) => sp.textContent.trim() && r.width > 0 && r.left + r.width / 2 - box.left >= x0 && r.left + r.width / 2 - box.left <= x1
+        && r.top + r.height / 2 - box.top >= y0 && r.top + r.height / 2 - box.top <= y1)
+      .sort((a, b) => a[1].top - b[1].top || a[1].left - b[1].left)
+      .forEach(([sp, r]) => { const l = lines.at(-1); if (l && Math.abs(l.top - r.top) < r.height * 0.6) l.spans.push(sp); else lines.push({ top: r.top, spans: [sp] }); });
+    const lit = (sp) => {
+      sp.classList.remove("dot-read"); void sp.offsetWidth; sp.classList.add("dot-read");
+      sp.addEventListener("animationend", () => sp.classList.remove("dot-read"), { once: true });
+    };
+    const done = (async () => {
+      if (!lines.length) return;
+      buddy.reading(true);
+      for (let n = 0; on && n < passes; n++) {
+        for (const { spans } of lines.slice(0, most)) {
+          if (!on) break;
+          const rs = spans.map((sp) => sp.getBoundingClientRect()), a = rs[0].left, z = Math.max(...rs.map((r) => r.right));
+          const y = Math.max(...rs.map((r) => r.bottom)) + 10, ms = Math.round(Math.min(1400, Math.max(450, (z - a) * 3.2)));
+          await buddy.goTo(a, y, 220);
+          spans.forEach((sp, i) => setTimeout(() => on && lit(sp), (ms * (rs[i].left - a)) / Math.max(1, z - a)));
+          await buddy.goTo(z, y, ms);
+        }
+      }
+      buddy.reading(false);
+    })();
+    return { stop() { on = false; buddy.reading(false); }, done };
+  }
   async function dotExplain(words, x, y, rect) {
     if (!words) return;
     await buddy.goTo(x, y);
     let said = "";
     const post = (path, body) => api(`/papers/${paperId}/${path}`, { method: "POST", body: JSON.stringify(body) });
     buddy.open({ x, y, quote: words, area: el.getBoundingClientRect(), save: saveToNote,
-      first: post("explain", { words, page: v.page, ...(rect && { rect }) }).then((r) => { said = r.text || ""; return r; }),
+      first: post("explain", { words, page: v.page, ...(rect && { rect }) }).finally(rect ? glow(rect, "Dot is reading this") : () => {}).then((r) => { said = r.text || ""; return r; }),
       ask: (q) => post("ask", { page: v.page,
         question: `${q}\n\n(This is about the part I marked: "${words.slice(0, 300)}". You explained: "${said.slice(0, 400)}")`.slice(0, 1000) })
         .then((r) => { if (r.ok) said = r.text; return r; }) });
@@ -994,8 +1038,10 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       const wait = `AI is looking at this box (${Date.now()})`;
       ta.setRangeText(`\n${wait}\n`, ta.selectionStart, ta.selectionStart, "end");
       grow(ta); await save();
+      const off = glow(m.rect, "Dot is reading this"), finger = readAlong(m.rect);
       const r = await api(`/papers/${paperId}/marks/${m.id}/ask`, { method: "POST", body: JSON.stringify({ question: q[1].trim().slice(0, 600) }) })
         .catch(() => ({ ok: false, error: "Could not ask the model. Is the app still running?" }));
+      off(); finger.stop(); buddy.goHome();
       const answer = r.ok ? `AI: ${r.text}` : `AI could not answer: ${r.error}`;
       const i = ta.value.indexOf(wait);
       if (i >= 0) ta.setRangeText(answer, i, i + wait.length, "preserve"); else ta.value += `\n${answer}\n`;
@@ -1052,6 +1098,73 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     lens();
   }
 
+  // ---------- Proactive: Dot notices when you stay on one part a long time, and offers help ----------
+  const TICK = 5000, STUCK_MS = Number(localStorage.getItem("dot-stuck-ms")) || 120_000, AWAY_MS = 180_000; // the override is for testing
+  let watchOn = localStorage.getItem("dot-proactive") === "1", seen = { key: "", ms: 0 }, lastHere = Date.now(), pointer = null, asking = false;
+  const asked = new Set(), watchStop = new AbortController(), opt = { passive: true, signal: watchStop.signal };
+  ["pointermove", "keydown", "wheel"].forEach((t) => document.addEventListener(t, () => { lastHere = Date.now(); }, opt));
+  document.addEventListener("input", () => { seen.ms = 0; }, opt); // writing notes is progress
+  pageBox.addEventListener("pointermove", (e) => { pointer = [e.clientX, e.clientY]; }, opt);
+  pageBox.addEventListener("pointerleave", () => { pointer = null; }, opt);
+  // the box you are reading: under the pointer if it is on the page, else the one nearest the middle of the view
+  function readingBlock() {
+    const box = pageBox.getBoundingClientRect(), s = stage.getBoundingClientRect();
+    const [x, y] = pointer ?? [s.left + s.width / 2, s.top + s.height / 2];
+    let best = null, bd = Infinity;
+    for (const b of blocks) {
+      const [x0, y0, x1, y1] = px(b);
+      if (box.top + y1 < s.top || box.top + y0 > s.bottom) continue; // not on screen
+      const d = Math.max(0, box.top + y0 - y, y - box.top - y1) + (x >= box.left + x0 && x <= box.left + x1 ? 0 : 150);
+      if (d < bd) { bd = d; best = b; }
+    }
+    return best;
+  }
+  function textIn(b) {
+    const [x0, y0, x1, y1] = px(b), box = pageBox.getBoundingClientRect();
+    return [...textLayer.querySelectorAll("span")].filter((sp) => {
+      const r = sp.getBoundingClientRect(), cx = r.left + r.width / 2 - box.left, cy = r.top + r.height / 2 - box.top;
+      return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
+    }).map((sp) => sp.textContent).join(" ").normalize("NFKC").replace(/\s+/g, " ").trim();
+  }
+  function tick() {
+    if (!watchOn || asking || v.hidden || document.hidden || !v.vp) return;
+    if (document.querySelector(".dot-win, .mk-card") || search.penning()) { seen.ms = 0; return; } // busy with Dot already
+    const b = readingBlock();
+    if (!b) return;
+    const key = `${v.page}:${b.join()}`;
+    if (key !== seen.key) { seen = { key, ms: 0 }; return; }
+    if (Date.now() - lastHere < AWAY_MS) seen.ms += TICK; // time away from the screen does not count
+    if (seen.ms >= STUCK_MS * (asked.has(key) ? 3 : 1)) offer(b, key);
+  }
+  const watchTimer = setInterval(tick, TICK);
+  async function offer(b, key) {
+    asking = true; asked.add(key); seen.ms = 0;
+    const [, y0, x1] = px(b), box = pageBox.getBoundingClientRect(), x = box.left + x1, y = box.top + y0;
+    const off = glow(b, "Stuck here?");
+    await readAlong(b, 1, 3).done; // Dot reads the first lines with you, then asks
+    const text = textIn(b), done = () => { asking = false; off(); clearTimeout(gone); };
+    const gone = setTimeout(() => { done(); buddy.hide(); }, 45_000); // no answer: let it go quietly
+    buddy.say("You have been on this part for a few minutes. Want a hand?", { mood: "surprised", actions: [
+      { label: "Explain it", onClick: () => { done(); dotExplain(text.slice(0, 600) || "this part", x, y, b); } },
+      { label: "Quiz me", onClick: () => { done(); quiz(text, x, y); } },
+      { label: "I'm fine", onClick: done },
+    ] });
+  }
+  // Dot asks one question about the part; your reply in its window gets checked
+  function quiz(text, x, y) {
+    const part = text.slice(0, 500) || `page ${v.page}`;
+    const post = (question) => api(`/papers/${paperId}/ask`, { method: "POST", body: JSON.stringify({ page: v.page, question: question.slice(0, 1000) }) });
+    let q = "";
+    buddy.open({ x, y, quote: part, area: el.getBoundingClientRect(), save: saveToNote,
+      first: post(`Ask me one short question that checks whether I understood this part. Only the question, not the answer. The part: "${part}"`)
+        .then((r) => { q = r.text || ""; return r; }),
+      ask: (a) => post(`You asked me "${q.slice(0, 250)}" about this part: "${part.slice(0, 300)}". My answer: "${a}". Is it right? Say what is right and what is missing, in 2 to 4 sentences.`) });
+  }
+  function watch(on) {
+    watchOn = on; localStorage.setItem("dot-proactive", on ? "1" : "0"); seen = { key: "", ms: 0 };
+    buddy.say(on ? "Proactive is on. I will check in if you stay on one part for a couple of minutes." : "Proactive is off. I will wait until you call me.", { mood: on ? "happy" : "idle" });
+  }
+
   function go(n) {
     if (!v.doc) return;
     v.page = Math.min(v.doc.numPages, Math.max(1, Math.round(n) || v.page));
@@ -1091,10 +1204,10 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
 
   return {
-    el, setHidden, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu,
+    el, setHidden, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
-    destroy() { buddy.tools(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
+    destroy() { clearInterval(watchTimer); watchStop.abort(); buddy.tools(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
   };
 }
 
