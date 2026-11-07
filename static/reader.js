@@ -764,6 +764,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     h("button", { type: "button", class: "pen-stop", onclick: () => { endPen(); buddy.goHome(); } }, "Stop"));
   const guideMark = h("i", { class: "guide-mark", hidden: true, "aria-hidden": "true" });
   const marksLayer = h("div", { class: "marks-layer" });
+  const trackLayer = h("div", { class: "track-layer" }); // Proactive: where you are reading, and what you have read
   const pickBtn = (label, fn) => h("button", { type: "button", class: "btn small-btn", onmousedown: (e) => e.preventDefault(), onclick: fn }, label);
   const bubble = h("div", { class: "sel-bubble", hidden: true, role: "toolbar", "aria-label": "Selected text" },
     pickBtn("Explain", () => {
@@ -820,7 +821,8 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     pdfjsLib.renderTextLayer({ textContentSource: await page.getTextContent(), container: layer, viewport: vp });
     if (seq !== v.seq) return;
     textLayer = layer;
-    pageBox.replaceChildren(canvas, hits, guideMark, textLayer, marksLayer, ink, bubble);
+    pageBox.replaceChildren(canvas, hits, guideMark, textLayer, marksLayer, trackLayer, ink, bubble);
+    drawTrack();
     guideMark.hidden = true;
     drawMarks(); loadBlocks(v.page);
     bubble.hidden = true;
@@ -1126,14 +1128,56 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
     }).map((sp) => sp.textContent).join(" ").normalize("NFKC").replace(/\s+/g, " ").trim();
   }
+  // A small Dot rides in the margin beside the part you are reading; parts you stayed on keep a rail.
+  const READ_MS = 10_000, trailKey = `dot-trail:${paperId}`;
+  const trail = new Set(JSON.parse(localStorage.getItem(trailKey) || "[]"));
+  const here = h("div", { class: "track-here", hidden: true }, h("i", {}, h("b"), h("b")));
+  let hereKey = "";
+  function drawTrack() {
+    trackLayer.replaceChildren(here);
+    trackLayer.hidden = !watchOn;
+    if (!watchOn || !v.vp) return;
+    for (const k of trail) {
+      const [pg, r] = k.split(":");
+      if (pg === String(v.page)) trackLayer.append(rail("track-read", r.split(",").map(Number)));
+    }
+    hereKey = ""; track();
+  }
+  function rail(cls, b) {
+    const [x0, y0, , y1] = px(b);
+    return h("div", { class: cls, style: `left:${Math.max(2, x0 - 14)}px;top:${y0}px;height:${y1 - y0}px` });
+  }
+  function track() {
+    if (!watchOn || v.hidden || !v.vp) return;
+    const b = readingBlock();
+    if (!b) { here.hidden = true; return; }
+    const key = `${v.page}:${b.join()}`;
+    if (key === hereKey) return;
+    hereKey = key;
+    const [x0, y0, , y1] = px(b);
+    here.style.cssText = `left:${Math.max(2, x0 - 14)}px;top:${y0}px;height:${y1 - y0}px`;
+    here.hidden = false;
+  }
+  let trackRaf = 0;
+  const trackSoon = () => { if (!trackRaf) trackRaf = requestAnimationFrame(() => { trackRaf = 0; track(); }); };
+  stage.addEventListener("scroll", trackSoon, opt);
+  pageBox.addEventListener("pointermove", trackSoon, opt);
+  function readIt(key) {
+    if (trail.has(key)) return;
+    trail.add(key); localStorage.setItem(trailKey, JSON.stringify([...trail]));
+    const [pg, r] = key.split(":");
+    if (pg === String(v.page)) trackLayer.append(rail("track-read fresh", r.split(",").map(Number)));
+  }
   function tick() {
     if (!watchOn || asking || v.hidden || document.hidden || !v.vp) return;
+    track();
     if (document.querySelector(".dot-win, .mk-card") || search.penning()) { seen.ms = 0; return; } // busy with Dot already
     const b = readingBlock();
     if (!b) return;
     const key = `${v.page}:${b.join()}`;
     if (key !== seen.key) { seen = { key, ms: 0 }; return; }
     if (Date.now() - lastHere < AWAY_MS) seen.ms += TICK; // time away from the screen does not count
+    if (seen.ms >= READ_MS) readIt(key);
     if (seen.ms >= STUCK_MS * (asked.has(key) ? 3 : 1)) offer(b, key);
   }
   const watchTimer = setInterval(tick, TICK);
@@ -1162,6 +1206,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
   function watch(on) {
     watchOn = on; localStorage.setItem("dot-proactive", on ? "1" : "0"); seen = { key: "", ms: 0 };
+    drawTrack();
     buddy.say(on ? "Proactive is on. I will check in if you stay on one part for a couple of minutes." : "Proactive is off. I will wait until you call me.", { mood: on ? "happy" : "idle" });
   }
 

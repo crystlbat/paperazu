@@ -1111,3 +1111,16 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 @keyframes dot-read { 18%, 55% { background-size: 100% 100%; opacity: 1; } 100% { background-size: 100% 100%; opacity: 0; } }
 .buddy.reading .buddy-face { scale: .42; rotate: 0deg; }
 @media (prefers-reduced-motion: reduce) { .textLayer span.dot-read { animation: none; } }
+
+/* Proactive tracker: a small Dot in the margin beside the part you are reading, and a rail on each part you stayed on */
+.track-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.track-read { position: absolute; width: 5px; background: radial-gradient(circle, rgb(31 32 35 / .5) 1.4px, transparent 1.8px) 0 0 / 5px 6px repeat-y; }
+.track-read.fresh { animation: track-fill .9s ease-out both; transform-origin: top; }
+@keyframes track-fill { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+.track-here { position: absolute; width: 5px; border-radius: 3px; background: var(--marker); box-shadow: 0 0 0 3px rgb(255 227 71 / .25);
+  transition: top .45s cubic-bezier(.3,.7,.2,1), height .45s cubic-bezier(.3,.7,.2,1), left .45s cubic-bezier(.3,.7,.2,1); }
+.track-here i { position: absolute; left: 50%; top: -9px; translate: -50% 0; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--marker); box-shadow: 0 4px 10px -4px rgb(0 0 0 / .45); display: flex; gap: 3px; align-items: center; justify-content: center; }
+.track-here b { width: 3px; height: 5px; border-radius: 2px; background: #1f2023; animation: track-blink 5s infinite; }
+@keyframes track-blink { 0%, 94%, 100% { scale: 1 1; } 97% { scale: 1 .15; } }
+@media (prefers-reduced-motion: reduce) { .track-here, .track-read.fresh, .track-here b { transition: none; animation: none; } }
