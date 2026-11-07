@@ -644,6 +644,11 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
   const hits = h("div", { class: "pdf-hits", "aria-hidden": "true" });
   const ink = h("canvas", { class: "pdf-ink", "aria-hidden": "true" });
   const pageBox = h("div", { class: "pdf-page" });
+  let textLayer = h("div", { class: "textLayer" });
+  const pickBtn = (label, fn) => h("button", { type: "button", class: "btn small-btn", onmousedown: (e) => e.preventDefault(), onclick: fn }, label);
+  const bubble = h("div", { class: "sel-bubble", hidden: true, role: "toolbar", "aria-label": "Selected text" },
+    pickBtn("Explain", () => { search.explain(picked()); clearPick(); }),
+    pickBtn("Find in paper", () => { search.find(picked()); clearPick(); }));
   const stage = h("div", { class: "pdf-stage" }, sheet);
   const closed = h("div", { class: "pdf-closed", hidden: true },
     h("div", { class: "closed-card" },
@@ -688,10 +693,28 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
     ink.style.width = canvas.style.width; ink.style.height = canvas.style.height;
     if (shown && shown !== v.page) canvas.classList.add(v.page > shown ? "turn-next" : "turn-prev"); // zoom and resize redraws stay still
     shown = v.page;
-    pageBox.replaceChildren(canvas, hits, ink);
+    const layer = h("div", { class: "textLayer", style: `--scale-factor:${vp.scale}` });
+    pdfjsLib.renderTextLayer({ textContentSource: await page.getTextContent(), container: layer, viewport: vp });
+    if (seq !== v.seq) return;
+    textLayer = layer;
+    pageBox.replaceChildren(canvas, hits, textLayer, ink, bubble);
+    bubble.hidden = true;
     sheet.replaceChildren(pageBox);
     search.paint();
   }
+  // Select text with the mouse (formulas too), then Explain or Find it.
+  const picked = () => getSelection().toString().normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, 600);
+  function clearPick() { bubble.hidden = true; getSelection().removeAllRanges(); }
+  pageBox.addEventListener("mouseup", () => setTimeout(() => {
+    const sel = getSelection();
+    if (sel.isCollapsed || !textLayer.contains(sel.anchorNode) || !picked()) { bubble.hidden = true; return; }
+    const r = sel.getRangeAt(0).getBoundingClientRect(), box = pageBox.getBoundingClientRect();
+    bubble.style.left = `${Math.min(r.right - box.left, box.width - 220)}px`;
+    bubble.style.top = `${r.bottom - box.top + 8}px`;
+    bubble.hidden = false;
+  }));
+  document.addEventListener("selectionchange", () => { if (getSelection().isCollapsed) bubble.hidden = true; });
+
   function go(n) {
     if (!v.doc) return;
     v.page = Math.min(v.doc.numPages, Math.max(1, Math.round(n) || v.page));
@@ -769,7 +792,9 @@ function wordsIn(items, vp, r) {
     while (z < n && /\w/.test(s[z])) z++;
     parts.push(s.slice(a, z));
   }
-  return flat(parts.join(" ")).replace(/^\W+|\W+$/g, "").split(" ").slice(0, 12).join(" ");
+  const text = flat(parts.join(" ")).normalize("NFKC");
+  // plain words: trim stray punctuation and keep it short for search; a formula keeps its symbols
+  return /[=∑∏∫←→≤≥∈∼~^_]/.test(text) ? text.slice(0, 600) : text.replace(/^\W+|\W+$/g, "").split(" ").slice(0, 12).join(" ");
 }
 
 function circleSearch({ v, go, ink, hits, pane, paperId }) {
@@ -893,7 +918,7 @@ function circleSearch({ v, go, ink, hits, pane, paperId }) {
       const r = await api(`/papers/${paperId}/explain`, { method: "POST", body: JSON.stringify({ words, page }) });
       box.replaceChildren(...(r.ok ? [
         h("p", { class: "cs-ai-label" }, "AI explanation"),
-        h("p", { class: "cs-ai-text" }, r.text),
+        h("p", { class: "cs-ai-text" }, r.text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/(^|\s)\*(\S.*?)\*/g, "$1$2")), // small models add Markdown anyway
         h("p", { class: "help" }, r.whole
           ? `Your model read the whole paper (${r.total} pages) in ${r.seconds} seconds.`
           : `The paper is too long for your model's context, so it read pages ${r.pages[0]} to ${r.pages[1]} of ${r.total}.`),
@@ -928,5 +953,13 @@ function circleSearch({ v, go, ink, hits, pane, paperId }) {
     jump = false;
   }
 
-  return { button, panel, paint, close, isOpen: () => on };
+  return {
+    button, panel, paint, close, isOpen: () => on,
+    find(words) { open(); input.value = words; return find(words); },
+    async explain(words) {
+      open(); input.value = words; await find(words);
+      results.querySelectorAll(".cs-sum").forEach((p) => { if (p.textContent === "Not in this paper.") p.remove(); }); // a formula rarely matches word for word
+      results.querySelector(".cs-ask")?.click();
+    },
+  };
 }

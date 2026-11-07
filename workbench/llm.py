@@ -55,7 +55,9 @@ EXPLAIN_SYSTEM = (
     "You help a student read a research paper. The student marked some words. Explain what they mean "
     "as they are used in this paper, in simple English, in 3 to 5 short sentences. Say what the words "
     "mean and why they matter here. Do not summarize the paper's results. If the paper does not define "
-    "them, say so and give the usual meaning. No headings, no lists."
+    "them, say so and give the usual meaning. If the marked text is a formula or notation (it may look "
+    "jumbled after copying out of the PDF), say what each symbol stands for in this paper and what the "
+    "formula says as a whole. No headings, no lists."
 )
 
 

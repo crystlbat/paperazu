@@ -201,7 +201,7 @@ async def put_notes(paper_id: str, step_id: str, request: Request) -> dict[str, 
 
 class ExplainIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    words: str = Field(min_length=1, max_length=300)
+    words: str = Field(min_length=1, max_length=600)
     page: int = Field(1, ge=1)  # the page the words were marked on, 1-based
 
 

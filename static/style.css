@@ -426,6 +426,18 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .cs-btn[aria-pressed="true"] { background: var(--marker); border-color: var(--marker); color: var(--on-marker); }
 .pdf-page { position: relative; }
 .pdf-hits, .pdf-ink { position: absolute; left: 0; top: 0; pointer-events: none; }
+.pdf-hits { z-index: 1; }
+.pdf-ink { z-index: 3; }
+/* PDF.js text layer: invisible text over the page, so you can select it */
+.textLayer { position: absolute; inset: 0; overflow: hidden; line-height: 1; text-align: initial; z-index: 2;
+  text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; }
+.textLayer span, .textLayer br { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+.textLayer ::selection { background: rgb(255 227 71 / .55); color: transparent; }
+.textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: -1; cursor: default; user-select: none; }
+.textLayer .endOfContent.active { top: 0; }
+.is-circling .textLayer { pointer-events: none; }
+.sel-bubble { position: absolute; z-index: 4; display: flex; gap: 6px; padding: 6px; border-radius: 10px;
+  background: var(--sheet); border: 1px solid var(--rule); box-shadow: 0 12px 30px -12px rgb(30 32 35 / .45); }
 .pdf-hits i { position: absolute; background: rgb(255 227 71 / .55); mix-blend-mode: multiply; border-radius: 2px; animation: pop .25s cubic-bezier(.3,.7,.2,1) both; }
 .pdf-sheet canvas.pdf-ink { background: none; box-shadow: none; transition: opacity .45s; }
 .pdf-sheet .pdf-ink.fade { opacity: 0; }
