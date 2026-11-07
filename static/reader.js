@@ -106,8 +106,8 @@ function plainNote(paperId, page) {
     placeholder: "Write your notes here." });
   const status = h("span", { class: "save-status", role: "status" });
   const el = h("div", { class: "plain", hidden: true },
-    h("p", { class: "plain-hint" }, "Ask about the paper: type ", h("code", {}, "@ai what problem does this solve?"), " and press Enter. The answer appears under your question."),
-    ta, h("div", { class: "plain-foot" }, status));
+    ta, h("div", { class: "plain-foot" },
+      h("p", { class: "plain-hint" }, "Start a line with ", h("b", {}, "@ai"), " and press Enter to ask about this paper."), status));
   let loaded = false, dirty = false, t = 0;
   const say = (text, cls = "") => { status.textContent = text; status.className = `save-status ${cls}`; };
 
