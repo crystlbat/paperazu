@@ -6,7 +6,7 @@ Date: 2026-11-07. Status: approved in chat ("all of that please"), 2026-11-07.
 
 The reader today has three fixed columns: the steps rail, the paper, and the notebook (Steps and Note tabs). The user finds this "clanky and static". What they want is a paper-aware companion that comes along while they read: the paper is the main thing, Dot does the AI work right on the paper, and everything else does its part and then shrinks back.
 
-Two live sketches in `.superpowers/brainstorm/24622-1794092239/content/` are the agreed picture. `flow-v5.html`: no text box on screen; Dot pulls the canvas open; Dot runs down the page; the paragraphs that answer light up, lift off the page and shrink into one-line cards on a canvas beside the paper, each tied by a thread to its lines; the answer is built from those cards. `cursor-v9.html`: Dot follows your cursor; clicking a paragraph pops out five icons around Dot; Dot changes shape for each job (marker, magnifying glass, input pill) and changes back to its face after.
+Two live sketches in `.superpowers/brainstorm/24622-1794092239/content/` are the agreed picture. `flow-v5.html`: no text box on screen; Dot pulls the canvas open; Dot runs down the page; the paragraphs that answer light up, lift off the page and shrink into one-line cards on a canvas beside the paper, each tied by a thread to its lines; the answer is built from those cards. `cursor-v12.html`: Dot follows your cursor; clicking a paragraph pops out five icons around Dot; Dot changes shape for each job (marker, magnifying glass, input pill) and changes back to its face after.
 
 ## Goals
 
@@ -91,7 +91,7 @@ My call: the canvas opens in three ways: Dot's menu gets a "Canvas" item; asking
 `buddy.js` gets:
 - `follow(on)`: trail the cursor (lerp each frame, offset just below-right of the pointer). Off during drags, text selection, Lens, the pen, open inputs, and when the pointer leaves the reader. Reduced motion: Dot does not follow; it appears at the click instead.
 - `options({ x, y, items }) → Promise<key|null>`: the arc of icon buttons around Dot (icons are inline SVG; names shown on hover and as `aria-label`). Keyboard: arrow keys move between icons, Enter picks, Escape closes.
-- `shape(name)`: `face` (default), `marker`, `lens`, `squash`, `pill`. CSS classes on the Dot root, with springy transitions, as in `cursor-v9.html`.
+- `shape(name)`: `face` (default), `marker`, `lens`, `squash`, `pill`. CSS classes on the Dot root, with springy transitions, as in `cursor-v12.html`.
 - `prompt({ x, y, placeholder }) → Promise<string|null>`: Dot becomes the input pill at that spot. Enter sends. There is always a visible way back: a Back button (return-arrow icon) at the end of the pill, a click anywhere outside it, or Escape; all three cancel and Dot changes back to its face and follows again.
 
 The tools menu (Lens, Map, Proactive, Clear trail, Canvas) opens on right-click or long press on Dot on the reader (my call); on every other screen a click still opens it as now.
@@ -104,7 +104,9 @@ The note's Dot replies use a new `llm.note_reply(s, lines, boxed_text, image, ti
 
 While the model works: Dot glides down the visible page with the `ctx-glow` scan from the existing code. When the answer arrives: for each source, light the paragraph (existing `dot-read` style), clone its text-layer spans into a floating box, animate to the card's landing spot while shrinking, swap to the gist card, draw the thread. Click anywhere to skip to the end state.
 
-Closing things feeds Dot (cursor-v9.html). Closing a card (its x) or closing the canvas crumbles each card into dots in its own colours; the card squashes flat and fades, and the dots fly on curved, staggered paths into Dot, which swells open while they arrive, then bounces as it swallows. Closing the canvas keeps the cards: when it opens again Dot bounces and spits them back out to where they were. My call: a card's x only puts the card away (it comes back with the canvas); deleting for good is a separate "Delete" in the card's right-click menu, with the same animation. Reduced motion: cards just fade.
+Opening and notes (cursor-v12.html). The canvas opens as a circle growing out of Dot (a clip-path reveal centred on Dot), with two yellow rings rippling out and a wave of lit grid dots running across the canvas; Dot bounces. Closing the canvas shrinks the circle back into Dot. New notes unroll out of Dot from left to right and type themselves in with a blinking yellow caret. Threads draw themselves from the paper to the card. When Dot answers inside a note, its small face appears under your line with three hopping dots, then the reply types in word by word. Hovering a card tilts it slightly toward the pointer and lifts it, and a spark runs along its threads from the paper to the card. Spat-out cards fly on an arc and wobble as they land.
+
+Closing things feeds Dot (cursor-v12.html). Closing a card (its x) or closing the canvas crumbles each card into dots in its own colours; the card squashes flat and fades, and the dots fly on curved, staggered paths into Dot, which swells open while they arrive, then bounces as it swallows. Closing the canvas keeps the cards: when it opens again Dot bounces and spits them back out to where they were. My call: a card's x only puts the card away (it comes back with the canvas); deleting for good is a separate "Delete" in the card's right-click menu, with the same animation. Reduced motion: cards just fade.
 
 ## Left to the builder
 
