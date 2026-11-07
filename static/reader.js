@@ -116,6 +116,12 @@ async function renderReader(paperId, startPage) {
   view.append(rail.el, pdf.el, splitter(view), nbEl);
   const guide = guidedReading(paperId, pdf, (id) => { const st = fw.steps.find((x) => x.id === id); if (st && st !== current) open(st, false); },
     () => panes.set("notes", false));
+  buddy.tools([
+    { name: "Lens", hint: "Highlight words, I explain", pick: () => pdf.lens(),
+      pic: ["..###....", ".#...#...", "#.....#..", "#.....#..", "#.....#..", ".#...#...", "..###.#..", ".......#.", "........#"] },
+    { name: "Map", hint: "I guide you through the paper", pick: () => guide.start(),
+      pic: ["......##.", ".....#..#", ".....#..#", "......##.", ".......#.", "...#.....", "..#......", ".#.......", "#........"] },
+  ]);
   const panes = paneToggles([["rail", rail.el, "Steps", "paneRail"], ["paper", pdf.el, "Paper", "panePaper"], ["notes", nbEl, "Notes", "paneNotes"]],
     (shut) => { if (shut.has("notes") && !shut.has("paper")) guide.offer(); else guide.stop(); });
   open(current, !greeted.has("reader")); greeted.add("reader");
@@ -215,7 +221,7 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
     document.removeEventListener("keydown", onKey);
     buddy.goHome();
   }
-  return { offer, stop };
+  return { offer, stop, start: () => (on ? show(i) : start()) };
 }
 
 // One free page of notes per paper. A line that starts with @ai, ended with Enter, asks the local model
@@ -865,15 +871,23 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       const c = pageBox.querySelector("canvas")?.getBoundingClientRect();
       return !v.hidden && !!c && x >= c.left && x <= c.right && y >= c.top && y <= c.bottom;
     },
-    drop: () => {
-      clearPick(); buddy.pen(true); penHint.hidden = false;
-      search.startPen((words, x, y) => {
-        endPen();
-        if (words) return dotExplain(words, x, y);
-        buddy.goHome(); buddy.say("No words there. Pictures and scanned pages have no text to read.", { mood: "worried" });
-      });
-    },
+    drop: () => lens(),
   });
+  function lens() {
+    clearPick(); buddy.pen(true); penHint.hidden = false;
+    search.startPen((words, x, y) => {
+      endPen();
+      if (words) return dotExplain(words, x, y);
+      buddy.goHome(); buddy.say("No words there. Pictures and scanned pages have no text to read.", { mood: "worried" });
+    });
+  }
+  // Lens from Dot's menu: Dot flies to the paper first, then follows the pointer as a highlighter
+  async function lensFromMenu() {
+    if (v.hidden) return buddy.say("Show the paper first, then pick Lens.", { mood: "worried" });
+    const r = stage.getBoundingClientRect();
+    await buddy.goTo(r.left + r.width / 2, r.top + r.height / 2);
+    lens();
+  }
 
   function go(n) {
     if (!v.doc) return;
@@ -914,10 +928,10 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
 
   return {
-    el, setHidden, hidden: () => v.hidden, page: () => v.page, go, point, unmark,
+    el, setHidden, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
-    destroy() { if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
+    destroy() { buddy.tools(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
   };
 }
 

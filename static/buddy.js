@@ -196,6 +196,7 @@ const buddy = (() => {
   ];
   face.addEventListener("click", () => {
     if (dragged) { dragged = false; return; } // the end of a drag is not a click
+    if (tools) return toggleTools();
     if (!bubble.hidden) return hide();
     if (st.muted) setMuted(false);
     if (!reduced()) { st.mood = "surprised"; draw(); }
@@ -395,6 +396,39 @@ const buddy = (() => {
     answer(first);
     return close;
   }
+  // ---------- tools: clicking Dot fans out a few dotted choices the page offers ----------
+  let tools = null;
+  const toolsEl = document.createElement("div");
+  toolsEl.className = "buddy-tools"; toolsEl.hidden = true; toolsEl.setAttribute("role", "menu");
+  root.insertBefore(toolsEl, face);
+  /** A 9 x 9 dot picture from rows of "#" and "." */
+  function dotPic(rows) {
+    const g = document.createElement("span"); g.className = "tool-pic"; g.setAttribute("aria-hidden", "true");
+    rows.join("").split("").forEach((c) => { const d = document.createElement("i"); if (c === "#") d.className = "on"; g.append(d); });
+    return g;
+  }
+  /** setTools([{ name, hint, pic: rows, pick() }]) or null to go back to tips */
+  function setTools(list) { tools = list; closeTools(); }
+  function closeTools() { toolsEl.hidden = true; root.classList.remove("tools-open"); }
+  function toggleTools() {
+    if (!toolsEl.hidden) return closeTools();
+    hide();
+    toolsEl.replaceChildren(...tools.map((t, i) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "buddy-tool"; b.setAttribute("role", "menuitem"); b.style.setProperty("--k", i);
+      const name = document.createElement("span"); name.className = "tool-name"; name.textContent = t.name;
+      const hint = document.createElement("span"); hint.className = "tool-hint"; hint.textContent = t.hint;
+      b.append(dotPic(t.pic), name, hint);
+      b.addEventListener("click", (e) => { e.stopPropagation(); closeTools(); t.pick(); });
+      return b;
+    }));
+    toolsEl.hidden = false; root.classList.add("tools-open");
+    st.mood = "happy"; draw(); setTimeout(() => { st.mood = "idle"; draw(); }, 600);
+    toolsEl.querySelector("button")?.focus();
+  }
+  document.addEventListener("pointerdown", (e) => { if (!toolsEl.hidden && !root.contains(e.target)) closeTools(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !toolsEl.hidden) { closeTools(); face.focus(); } });
+
   // Drag a floating card by its handle (buttons inside the handle still click). Kept on screen.
   function draggable(el, handle) {
     handle.style.cursor = "grab"; handle.style.touchAction = "none";
@@ -436,5 +470,5 @@ const buddy = (() => {
   setMuted(st.muted);
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
-  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, open, format, draggable };
+  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, open, format, draggable, tools: setTools };
 })();
