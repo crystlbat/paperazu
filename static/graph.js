@@ -526,7 +526,7 @@ async function renderGraph() {
     tree?.remove();
     const data = await api(`/papers/${p.id}/outline`).catch(() => null);
     if (!data || !st.alive) return;
-    const CARD = 300, COL = 352, GAP = 14, PAD = 24;
+    const CW = 240, CH = 132, RING = 270, PAD = 24; // card size, gap between rings, room round the edge
     const kind = data.source === "slides" ? ["Deck", "Sections", "Topics", "Slides"] : ["Paper", "Sections", "Subsections", "Parts and figures"];
     const back = h("button", { type: "button", class: "btn ghost", onclick: () => closeTree() }, "Back to the graph");
     const holder = h("div", { class: "t-scroll" });
@@ -543,68 +543,93 @@ async function renderGraph() {
     back.focus();
     let seq = 0, count = 0;
     (function tag(n) { n.key = seq++; count++; n.children.forEach(tag); })(data.tree);
-    // big trees start with their deepest groups folded, so the first view is the outline, not 100 cards
+    // The tree blooms from the middle: only the sections show at first, and opening a card unfolds its parts.
     const closed = new Set();
-    if (count > 40) (function fold(n) { if (n.level >= 3 && n.children.length) closed.add(n.key); n.children.forEach(fold); })(data.tree);
+    (function fold(n) { if (n.level >= 2 && n.children.length) closed.add(n.key); n.children.forEach(fold); })(data.tree);
     let sel = data.tree.key;
     const byKey = new Map();
     (function index(n) { byKey.set(n.key, n); n.children.forEach(index); })(data.tree);
     const blurb = (n) => n.lead || (n.children.length ? `Inside: ${n.children.map((c) => c.title).join(", ")}` : "");
-    const tall = (n) => (n.kind === "figure" ? 84 : !blurb(n) ? 72 : blurb(n).length < 70 ? 120 : 168);
+    const shown = new Set(); // cards already on screen; only new ones bloom
+    let from = new Map(); // where each new card grows from
+    let prev = new Map(); // where cards already on screen were, so they glide to their new place
 
+    // Radial layout. Each card takes the angle it needs: its own width on its ring, or all its open
+    // parts side by side, whichever is wider. Parts sit centred on their parent; the first ring grows
+    // until every section fits round the middle, and spare room is shared out between the sections.
     function layout() {
-      let y = PAD;
+      const kids = (n) => (closed.has(n.key) ? [] : n.children);
+      let depth = 1;
+      (function d(n) { depth = Math.max(depth, n.level); kids(n).forEach(d); })(data.tree);
+      let r1 = 250;
+      const radius = (lv) => (lv === 1 ? 0 : r1 + (lv - 2) * RING);
+      const wide = (n) => Math.max((CW + 16) / radius(n.level), kids(n).reduce((a, k) => a + wide(k), 0));
+      const sum = () => data.tree.children.reduce((a, k) => a + wide(k), 0);
+      while (sum() > 2 * Math.PI) r1 += 20;
+      const size = 2 * (radius(depth) + PAD + CW / 2);
+      const c = size / 2;
       const out = [];
-      (function place(n, parent) {
-        const kids = closed.has(n.key) ? [] : n.children;
-        const me = { n, parent, x: PAD + (n.level - 1) * COL, y: 0, hgt: tall(n) };
+      function place(n, parent, ang) {
+        const r = radius(n.level);
+        const me = { n, parent, ang, x: c + r * Math.cos(ang), y: c + r * Math.sin(ang) };
         out.push(me);
-        if (!kids.length) { me.y = y; y += me.hgt + GAP; }
-        else {
-          const ys = kids.map((c) => place(c, me));
-          const mid = (ys[0].y + ys[ys.length - 1].y + ys[ys.length - 1].hgt) / 2;
-          me.y = n.level === 1 ? PAD : Math.max(ys[0].y, mid - me.hgt / 2); // the root stays in view at the top
-          y = Math.max(y, me.y + me.hgt + GAP);
-        }
-        return me;
-      })(data.tree, null);
-      return { items: out, h: y + PAD };
+        let a = ang - kids(n).reduce((t, k) => t + wide(k), 0) / 2;
+        for (const k of kids(n)) { place(k, me, a + wide(k) / 2); a += wide(k); }
+      }
+      const root = { n: data.tree, parent: null, ang: -Math.PI / 2, x: c, y: c };
+      out.push(root);
+      const secs = kids(data.tree), gap = (2 * Math.PI - sum()) / Math.max(secs.length, 1);
+      let a = -Math.PI / 2 - (wide(secs[0] ?? data.tree) + gap) / 2; // the first section sits at the top; reading runs clockwise
+      for (const k of secs) { place(k, root, a + (wide(k) + gap) / 2); a += wide(k) + gap; }
+      return { items: out, size, c };
     }
 
     function card(it) {
       const n = it.n;
-      const title = n.level === 1 ? (data.source === "slides" ? "The whole deck" : "The whole paper") : n.title;
-      const meta = n.level === 1 ? `${data.pages} pages` : `Page ${n.page}${n.children.length ? `, ${n.children.length} parts` : ""}`;
-      const el = h("button", { type: "button", class: `t-card l${n.level} ${n.kind}${n.key === sel ? " on" : ""}`,
-        style: `left:${it.x}px;top:${it.y}px;width:${CARD}px;height:${it.hgt}px;--d:${n.level * 60}ms`,
-        "aria-pressed": String(n.key === sel), onclick: () => choose(n.key) },
+      const root = n.level === 1;
+      const title = root ? (data.source === "slides" ? "The whole deck" : "The whole paper") : n.title;
+      const hidden = closed.has(n.key) ? n.children.length : 0;
+      const meta = root ? `${data.pages} pages` : `Page ${n.page}${hidden ? `, ${hidden} parts to open` : ""}`;
+      const isNew = !shown.has(n.key);
+      const f = isNew ? from.get(n.key) : null;
+      const style = [`left:${it.x - (root ? 90 : CW / 2)}px`, `top:${it.y - (root ? 90 : CH / 2)}px`];
+      if (!root) style.push(`width:${CW}px`, `height:${CH}px`);
+      if (f) style.push(`--fx:${f.x - it.x}px`, `--fy:${f.y - it.y}px`, `--d:${Math.min(born++, 16) * 28}ms`);
+      return h("button", { type: "button", class: `t-card l${n.level} ${n.kind}${n.key === sel ? " on" : ""}${isNew ? " born" : ""}${hidden ? " shut" : ""}`,
+        style: style.join(";"), "data-key": n.key, "aria-pressed": String(n.key === sel),
+        "aria-expanded": n.children.length && !root ? String(!hidden) : null, onclick: () => choose(n.key, false, true) },
         h("span", { class: "t-title" }, title),
-        blurb(n) ? h("span", { class: "t-lead" }, blurb(n)) : null,
-        h("span", { class: "t-meta" }, meta));
-      return el;
+        !root && blurb(n) ? h("span", { class: "t-lead" }, blurb(n)) : null,
+        h("span", { class: "t-meta" }, meta),
+        hidden ? h("span", { class: "t-badge", "aria-hidden": "true" }, `+${hidden}`) : null);
     }
 
+    let centred = false, born = 0;
     function paint() {
-      const { items, h: height } = layout();
-      const maxLevel = Math.max(...items.map((i) => i.n.level));
-      const width = PAD * 2 + (maxLevel - 1) * COL + CARD;
-      const svg = sv("svg", { class: "t-svg", width, height });
+      const { items, size, c } = layout();
+      if (!centred) items.forEach((it) => from.set(it.n.key, { x: c, y: c })); // the first view opens out of the middle
+      born = 0;
+      const svg = sv("svg", { class: "t-svg", width: size, height: size });
       for (const it of items) if (it.parent) {
-        const a = it.parent, x1 = a.x + CARD, y1 = a.y + a.hgt / 2, y2 = it.y + it.hgt / 2, mx = (x1 + it.x) / 2;
-        svg.append(sv("path", { class: `t-link l${it.n.level}`, d: `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${it.x} ${y2}` }));
+        const a = it.parent, pa = a.parent ? a.ang : it.ang, k = RING * 0.45; // petal curve: leave and arrive heading outward
+        svg.append(sv("path", { class: `t-link l${it.n.level}${shown.has(it.n.key) ? "" : " born"}`, pathLength: 1,
+          d: `M${a.x} ${a.y} C${a.x + k * Math.cos(pa)} ${a.y + k * Math.sin(pa)} ${it.x - k * Math.cos(it.ang)} ${it.y - k * Math.sin(it.ang)} ${it.x} ${it.y}` }));
       }
-      const layer = h("div", { class: "t-layer", style: `width:${width}px;height:${height}px` }, svg);
-      for (const it of items) {
-        layer.append(card(it));
-        const n = it.n;
-        if (n.children.length && n.level > 1) {
-          const shut = closed.has(n.key);
-          layer.append(h("button", { type: "button", class: "t-fold", style: `left:${it.x + CARD - 11}px;top:${it.y + it.hgt / 2 - 11}px`,
-            "aria-label": `${shut ? "Show" : "Hide"} the ${n.children.length} parts under ${n.title}`, "aria-expanded": String(!shut),
-            onclick: () => toggle(n.key) }, shut ? String(n.children.length) : "−"));
-        }
-      }
+      const layer = h("div", { class: "t-layer", style: `width:${size}px;height:${size}px` }, svg);
+      const oldSize = holder.firstChild?.offsetWidth ?? size, d = (size - oldSize) / 2; // the canvas grows on every side
+      const glide = [];
+      items.forEach((it) => {
+        const el = layer.appendChild(card(it)), was = prev.get(it.n.key);
+        if (was && shown.has(it.n.key)) { glide.push([el, el.style.left, el.style.top]); el.style.left = `${parseFloat(was[0]) + d}px`; el.style.top = `${parseFloat(was[1]) + d}px`; }
+      });
+      const sx = holder.scrollLeft, sy = holder.scrollTop;
       holder.replaceChildren(layer);
+      if (!centred) { centred = true; holder.scrollTo(c - holder.clientWidth / 2, c - holder.clientHeight / 2); }
+      else holder.scrollTo(sx + d, sy + d); // the middle stays put as the tree grows
+      items.forEach((it) => shown.add(it.n.key));
+      from = new Map(); prev = new Map();
+      if (glide.length) { void layer.offsetWidth; glide.forEach(([el, l, t]) => { el.style.left = l; el.style.top = t; }); }
+      return items;
     }
 
     function paintPanel() {
@@ -621,17 +646,32 @@ async function renderGraph() {
             h("span", {}, c.title), h("span", { class: "t-meta" }, `p${c.page}`)))))) : null].filter(Boolean));
     }
 
-    function choose(key, reveal) {
+    // Picking a card opens it; picking the open, picked card again folds it.
+    function choose(key, reveal, fromCard) {
+      const n = byKey.get(key);
+      if (reveal) for (let p2 = parentOf(key); p2; p2 = parentOf(p2.key)) closed.delete(p2.key);
+      if (fromCard && n.children.length && n.level > 1) {
+        if (closed.has(key)) closed.delete(key);
+        else if (sel === key) fold(n);
+      }
       sel = key;
-      if (reveal) for (let n = parentOf(key); n; n = parentOf(n.key)) closed.delete(n.key);
+      bloomFrom();
       tree.classList.add("settled"); paint(); paintPanel();
-      if (reveal) holder.querySelector(".t-card.on")?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+      holder.querySelector(".t-card.on")?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    }
+    function fold(n) { closed.add(n.key); (function drop(m) { shown.delete(m.key); m.children.forEach(drop); })(n); shown.add(n.key); }
+    // New cards grow out of their parent's current place.
+    function bloomFrom() {
+      const pos = new Map([...holder.querySelectorAll(".t-card")].map((el) =>
+        [Number(el.dataset.key), { x: el.offsetLeft + el.offsetWidth / 2, y: el.offsetTop + el.offsetHeight / 2 }]));
+      from = new Map();
+      prev = new Map([...holder.querySelectorAll(".t-card")].map((el) => [Number(el.dataset.key), [el.style.left, el.style.top]]));
+      (function walk(n, at) { if (!shown.has(n.key) && at) from.set(n.key, at); n.children.forEach((k) => walk(k, pos.get(n.key) ?? at)); })(data.tree, null);
     }
     function parentOf(key) {
       for (const n of byKey.values()) if (n.children.some((c) => c.key === key)) return n;
       return null;
     }
-    function toggle(key) { closed.has(key) ? closed.delete(key) : closed.add(key); tree.classList.add("settled"); paint(); }
     paint(); paintPanel();
   }
   function closeTree() { tree?.remove(); tree = null; stage.classList.remove("tree-open"); side.hidden = false; }
