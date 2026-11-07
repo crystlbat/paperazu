@@ -96,6 +96,30 @@ const STATUSES = [["all", "All"], ["not_started", "Not started"], ["in_progress"
   ["notes_done", "Notes done"], ["reflection_done", "Reflection done"]];
 const SORTS = [["date", "Presentation date"], ["opened", "Last opened"], ["title", "Title"], ["progress", "Progress"]];
 const PRIMER = { not_made: "Not made", making: "Making", ready: "Ready", failed: "Failed" };
+
+// Start (or follow) the AI summary for a paper. The server streams progress as Server-Sent Events;
+// onEvent gets {state, done, total, step, error} each time. Resolves with the last event.
+async function streamPrimer(id, onEvent) {
+  buddy.busy(1);
+  let last = { state: "failed", error: "Could not reach the app. Is it still running?" };
+  try {
+    const r = await fetch(`/papers/${id}/primer`, { method: "POST" });
+    if (!r.ok) throw new Error(String(r.status));
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for (const part of parts) if (part.startsWith("data: ")) { last = JSON.parse(part.slice(6)); onEvent?.(last); }
+    }
+  } catch { onEvent?.(last); } finally { buddy.busy(-1); }
+  return last;
+}
+const primerLabel = (e) => (e.state === "making" ? (e.total ? `AI summary: step ${Math.min(e.done + 1, e.total)} of ${e.total}` : "AI summary: starting")
+  : `AI summary ${PRIMER[e.state]?.toLowerCase() ?? ""}`);
 const AI_SUMMARY_TIP = "A short summary of the paper, written by the AI model on your Mac. It is split into the reading steps and stays closed until you write your own notes.";
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -137,6 +161,11 @@ async function renderLibrary() {
   enablePageDrop(page);
   libraryGreeting(list);
   libRedraw = async () => { themeList = (await api("/themes")).themes; await draw(await loadPapers()); };
+  // a summary still being made (you came back mid-way): follow it so its chip counts up
+  for (const p of list.papers.filter((x) => x.primer_status === "making")) {
+    streamPrimer(p.id, (e) => { const el = document.querySelector(`[data-primer="${p.id}"]`); if (el) el.textContent = primerLabel(e); })
+      .then(() => { if (location.hash.startsWith("#library") || !location.hash) libRedraw(); });
+  }
 }
 let libRedraw = async () => {};
 
@@ -347,7 +376,7 @@ function paperRow(p, s, fws, isNext, i = 0) {
       ? chip(`Talk ${fmtDate(p.presentation_date)}, ${relDays(p.presentation_date)}`, isNext ? "next" : "")
       : h("button", { type: "button", class: "pchip add", onclick: () => detailsDialog(p, s, false) }, "+ Set talk date"),
     p.reflection_no ? chip(`Reflection ${p.reflection_no} of ${s.reflections_target}`) : null,
-    p.primer_status !== "not_made" ? chip(`AI summary ${PRIMER[p.primer_status].toLowerCase()}`, p.primer_status) : null,
+    p.primer_status !== "not_made" ? h("span", { class: `pchip ${p.primer_status}`, "data-primer": p.id }, primerLabel({ state: p.primer_status })) : null,
     p.seconds >= 60 ? chip(`${fmtSpent(p.seconds)} read`) : null,
     chip(p.last_opened ? `Opened ${ago(p.last_opened).toLowerCase()}` : "Not opened yet", "soft"),
     ...p.themes.map((id) => themeList.find((t) => t.id === id)).filter(Boolean)
@@ -376,6 +405,18 @@ function paperRow(p, s, fws, isNext, i = 0) {
       rowMenu(p, s)));
 }
 
+async function makePrimerFromLibrary(p) {
+  document.querySelectorAll("details.menu[open]").forEach((d) => { d.open = false; });
+  p.primer_status = "making"; libRedraw();
+  const end = await streamPrimer(p.id, (e) => {
+    const el = document.querySelector(`[data-primer="${p.id}"]`);
+    if (el) { el.textContent = primerLabel(e); el.className = `pchip ${e.state}`; }
+  });
+  if (end.state === "ready") buddy.say(`The AI summary for "${p.title}" is ready. It stays closed in each step until you write your own notes.`, { mood: "happy" });
+  else buddy.say(end.error || "The AI summary failed. Try again.", { mood: "worried" });
+  libRedraw();
+}
+
 function rowMenu(p, s) {
   const later = (label, phase) => h("button", { type: "button", disabled: true, title: `Comes in phase ${phase}` }, label);
   return h("details", { class: "menu" },
@@ -386,7 +427,9 @@ function rowMenu(p, s) {
         await api(`/papers/${p.id}`, { method: "PATCH", body: JSON.stringify({ template: p.template === "slides" ? "paper" : "slides" }) });
         libRedraw();
       } }, p.template === "slides" ? "Read as a research paper" : "Read as lecture slides"),
-      later("Make AI summary again", 5), later("Export Markdown", 7), later("Export reflection outline", 7),
+      h("button", { type: "button", disabled: p.primer_status === "making", onclick: () => makePrimerFromLibrary(p) },
+        p.primer_status === "ready" ? "Make AI summary again" : "Make AI summary"),
+      later("Export Markdown", 7), later("Export reflection outline", 7),
       h("hr", {}),
       h("button", { type: "button", class: "danger", onclick: () => deleteDialog(p) }, "Delete")));
 }
@@ -527,10 +570,27 @@ async function renderSettings(section = "connection") {
     drawConnection(body, s);
     greet("settings", "Paste the URL and key that Unsloth shows, then press Test connection.", { pop: false });
   }
+  else if (section === "primer") drawPrimerSettings(body, s);
   else body.append(
     h("h2", {}, SETTINGS_SECTIONS.find(([id]) => id === section)?.[1] ?? "Settings"),
     h("p", { class: "lede" }, "You can change these settings from phase 8."));
   if (section === "primer") buddy.say(AI_SUMMARY_TIP, { mood: "idle", pop: false });
+}
+
+function drawPrimerSettings(body, s) {
+  const st = () => h("span", { class: "status" });
+  const [a, b, c] = [st(), st(), st()];
+  const panel = h("select", { onchange: () => saveSetting("primer_panel", panel.value, a) },
+    [["after_writing", "Closed until I write something in the step"], ["click", "Closed, open with a click"], ["open", "Always open"]]
+      .map(([v, t]) => h("option", { value: v, selected: s.primer_panel === v }, t)));
+  const sentences = h("select", { onchange: () => saveSetting("primer_sentences", Number(sentences.value), b) },
+    [1, 2, 3].map((n) => h("option", { value: n, selected: s.primer_sentences === n }, `${n} ${n === 1 ? "sentence" : "sentences"}`)));
+  const auto = h("input", { type: "checkbox", class: "switch", checked: s.primer_auto, onchange: () => saveSetting("primer_auto", auto.checked, c) });
+  body.append(h("h2", {}, "AI summary"),
+    h("p", { class: "lede" }, AI_SUMMARY_TIP),
+    row("AI summary panel", panel, a),
+    row("Length of each part", sentences, b),
+    row("Make it right after I add a paper", auto, c));
 }
 
 // Save one setting at once; show "Saved" or the error next to the control.

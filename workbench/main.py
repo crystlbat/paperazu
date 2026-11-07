@@ -1,5 +1,7 @@
 """FastAPI app: API routes plus the one-page frontend."""
+import json
 import os
+import time
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -8,13 +10,13 @@ from typing import Any
 
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import db, framework, graph, library, llm, notes, settings, themes
+from . import db, framework, graph, library, llm, notes, primer, settings, themes
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -25,6 +27,7 @@ PORT = int(os.environ.get("PORT", "8765"))
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     db.init()
     library.pick_missing_templates()
+    primer.reset_stale()
     yield
 
 
@@ -89,6 +92,8 @@ async def add_paper(request: Request) -> dict[str, Any]:
         paper_id = library.create(await request.body(), unquote(request.headers.get("x-filename", "")))
     except ValueError as e:
         raise HTTPException(400, detail=str(e))
+    if settings.get_all().primer_auto:
+        primer.start(paper_id)
     return _paper_or_404(paper_id)
 
 
@@ -212,6 +217,31 @@ def explain(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if pages is None:
         raise HTTPException(404, detail="This paper is not in the library.")
     return llm.explain(settings.get_all(), req.words.strip(), paper["title"], pages, req.page - 1)
+
+
+@app.get("/papers/{paper_id}/primer")
+def get_primer(paper_id: str) -> dict[str, Any]:
+    out = primer.load(paper_id)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return out
+
+
+@app.post("/papers/{paper_id}/primer")
+def make_primer(paper_id: str) -> StreamingResponse:
+    """Starts the AI summary (unless it is running) and streams its progress as Server-Sent Events.
+    The work goes on in the background if you leave the page."""
+    _paper_or_404(paper_id)
+    primer.start(paper_id)
+
+    def events() -> Any:
+        while True:
+            p = primer.progress(paper_id)
+            yield f"data: {json.dumps(p)}\n\n"
+            if p["state"] != "making":
+                return
+            time.sleep(0.5)
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 class AskIn(BaseModel):

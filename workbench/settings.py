@@ -1,7 +1,7 @@
 """Settings: .env gives first defaults, the SQLite settings table overrides them."""
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -21,6 +21,10 @@ class Settings(BaseModel):
     max_output_tokens: int = Field(1024, ge=64, le=16384)
     timeout_s: int = Field(180, ge=5, le=1800)
     reflections_target: int = Field(6, ge=1, le=50)
+    # AI summary (the primer)
+    primer_sentences: int = Field(2, ge=1, le=3)
+    primer_auto: bool = False  # make it right after upload
+    primer_panel: Literal["after_writing", "click", "open"] = "after_writing"
 
     @field_validator("base_url")
     @classmethod

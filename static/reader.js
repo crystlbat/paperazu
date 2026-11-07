@@ -20,7 +20,8 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) openR
 async function renderReader(paperId, startPage) {
   const [paper, saved] = await Promise.all([api(`/papers/${paperId}?open=true`).catch(() => null),
     api(`/papers/${paperId}/notes`).catch(() => null)]);
-  const fw = await api(`/framework?template=${paper?.template ?? "paper"}`);
+  const [fw, aiData, cfg] = await Promise.all([api(`/framework?template=${paper?.template ?? "paper"}`),
+    api(`/papers/${paperId}/primer`).catch(() => null), api("/settings").catch(() => ({}))]);
   if (!paper || !saved) {
     view.className = "page page-library";
     view.append(h("div", { class: "library" }, h("h1", {}, "Paper not found"),
@@ -57,13 +58,25 @@ async function renderReader(paperId, startPage) {
   const next = h("button", { type: "button", class: "btn", onclick: () => open(fw.steps[idx() + 1]) }, "Next step");
   const idx = () => fw.steps.indexOf(current);
 
+  // AI summary: what the model wrote for each step before you read, and the job that makes it
+  const ai = { data: aiData ?? { steps: {}, progress: { state: "not_made" } }, mode: cfg.primer_panel ?? "after_writing",
+    go: (n) => pdf.go(n), live: null,
+    async make() {
+      ai.live = ai.live ?? streamPrimer(paperId, (e) => { ai.data.progress = e; ai.paint?.(); }).then(async () => {
+        ai.data = (await api(`/papers/${paperId}/primer`).catch(() => null)) ?? ai.data;
+        ai.live = null;
+        if (openReader === me) open(current, false);
+      });
+      ai.paint?.();
+    } };
+
   function open(st, pop = true) {
     timer.stop();
     queue.flush(); // the notes live in memory; this sends the last keystrokes now instead of in 500 ms
     current = st;
     rail.mark(st.id);
     pdf.autoHide(st.paper_hidden);
-    body.replaceChildren(...notebook(st, notes[st.id], timer, () => queue.touch(st.id)));
+    body.replaceChildren(...notebook(st, notes[st.id], timer, () => queue.touch(st.id), ai));
     body.querySelectorAll("textarea").forEach(grow);
     body.scrollTop = 0;
     [...body.children].forEach((el, i) => el.style.setProperty("--i", i)); // staggered entrance
@@ -89,6 +102,7 @@ async function renderReader(paperId, startPage) {
   view.append(rail.el, pdf.el, splitter(view),
     h("section", { class: "notebook", "aria-label": "Notebook" }, tabs, body, plain.el, foot));
   open(current, !greeted.has("reader")); greeted.add("reader");
+  if (ai.data.progress.state === "making") ai.make(); // it was started elsewhere; follow it here
   setMode(localStorage.getItem("reader-mode") === "note" ? "note" : "steps");
 
   // Saves (and retries) can finish after you leave; Dot only speaks while this Reader is open.
@@ -353,7 +367,7 @@ function timerView(st, note, timer) {
 }
 
 // ---------- notebook ----------
-function notebook(st, note, timer, changed) {
+function notebook(st, note, timer, changed, ai) {
   const meter = writtenMeter(st, note);
   const set = (fid) => (value) => { note.fields[fid] = value; changed(); meter.paint(); };
   const where = st.paper_hidden
@@ -365,11 +379,70 @@ function notebook(st, note, timer, changed) {
       h("span", { class: "num n" }, `Step ${st.n}`),
       h("h2", { class: "step-title" }, h("span", { class: "hl swipe" }, st.title))),
     h("div", { class: "step-meta" }, where, meter.el),
+    ai ? whereToLook(st, ai) : null,
     timerView(st, note, timer),
+    ai ? aiSummary(st, note, ai) : null,
     ...st.fields.map((f) => fieldView(st, f, note.fields[f.id], set(f.id))),
     gateView(st, note, changed),
     oldFields(st, note.fields),
   ].filter(Boolean);
+}
+
+// ---------- AI summary in the notebook ----------
+const AI_STEP = (st) => st.n >= 1 && st.n <= 7 && !st.paper_hidden && st.look_in.length > 0; // the steps the server summarises
+// "[p. 4]", "p. 4" and "page 4" become buttons that turn the PDF to that page
+function pageLinks(text, go) {
+  const out = [];
+  let at = 0;
+  for (const m of text.matchAll(/\[p\.?\s*(\d+)\]|\bp\.\s*(\d+)\b|\bpages?\s+(\d+)\b/gi)) {
+    const n = Number(m[1] ?? m[2] ?? m[3]);
+    out.push(text.slice(at, m.index), h("button", { type: "button", class: "pg-link", title: `Show page ${n}`, onclick: () => go(n) }, `p. ${n}`));
+    at = m.index + m[0].length;
+  }
+  out.push(text.slice(at));
+  return out;
+}
+
+function whereToLook(st, ai) {
+  const w = ai.data.steps[st.id]?.where_to_look;
+  return w ? h("p", { class: "ai-where" }, h("span", { class: "ai-where-label" }, "Where to look"), " ", pageLinks(w, ai.go)) : null;
+}
+
+function aiSummary(st, note, ai) {
+  if (!AI_STEP(st)) return null;
+  const box = h("section", { class: "ai-sum", "aria-label": "AI summary" });
+  const data = ai.data.steps[st.id];
+  const paint = () => {
+    const pr = ai.data.progress;
+    if (data) return;
+    const making = pr.state === "making";
+    box.replaceChildren(
+      h("p", { class: "ai-sum-title" }, "AI summary"),
+      h("p", { class: "ai-sum-sub" }, making ? (pr.total ? `Your model is writing it: step ${Math.min(pr.done + 1, pr.total)} of ${pr.total}${pr.step ? `, ${pr.step}` : ""}.` : "Your model is starting.")
+        : pr.state === "failed" && pr.error ? pr.error : "Your model can write a short summary of each step, with page links. It stays closed until you write your own notes."),
+      making ? h("div", { class: "ai-bar" }, h("i", { style: `width:${pr.total ? (100 * pr.done) / pr.total : 4}%` }))
+        : h("button", { type: "button", class: "btn ghost", onclick: () => ai.make() }, pr.state === "failed" ? "Try again" : "Make AI summary"));
+  };
+  if (!data) { ai.paint = paint; paint(); return box; }
+  ai.paint = null;
+  const locked = () => ai.mode === "after_writing" && !Object.values(note.fields).some(filled);
+  const sub = h("span", { class: "ai-sum-sub" }, "Read your own first, then open");
+  const det = h("details", { open: ai.mode === "open" },
+    h("summary", { onclick: (e) => {
+      if (!det.open && locked()) { e.preventDefault(); sub.textContent = "Write something in this step first, then open it."; sub.classList.add("warn"); }
+    } }, h("span", { class: "ai-sum-title" }, "AI summary"), sub),
+    h("div", { class: "ai-sum-body" }, st.fields.map((f) => {
+      const x = data.fields.find((y) => y.field_id === f.id);
+      if (!x) return null;
+      const cited = /\[p\.?\s*\d+\]|\bp\.\s*\d+|\bpages?\s+\d+/i.test(x.summary);
+      return h("div", { class: "ai-f" }, h("p", { class: "ai-f-label" }, f.label),
+        h("p", { class: "ai-f-text" }, [pageLinks(x.summary, ai.go), !cited && x.pages?.length ? [" ", x.pages.length > 3 // a long list reads as a range
+          ? [pageLinks(`[p. ${Math.min(...x.pages)}]`, ai.go), " to ", pageLinks(`[p. ${Math.max(...x.pages)}]`, ai.go)]
+          : x.pages.map((n) => pageLinks(`[p. ${n}]`, ai.go))] : []].flat(4)));
+    }).filter(Boolean)),
+    h("p", { class: "help" }, "Written by the model on your Mac from this paper. Check it against the pages."));
+  box.append(det);
+  return box;
 }
 
 const filled = (v) => (typeof v === "string" ? !!v.trim() : Array.isArray(v) ? v.some(filled) : !!v);
@@ -598,7 +671,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1) {
   }
 
   return {
-    el, setHidden, hidden: () => v.hidden, page: () => v.page,
+    el, setHidden, hidden: () => v.hidden, page: () => v.page, go,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
     destroy() { document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },

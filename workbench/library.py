@@ -152,6 +152,16 @@ def page_texts(paper_id: str) -> list[str] | None:
         return [page.get_text() for page in doc]
 
 
+def headings(paper_id: str) -> list[tuple[int, str, int]]:
+    """(level, title, page) for each heading: the PDF's own outline, else guessed from the text."""
+    path = db.PAPERS_DIR / f"{paper_id}.pdf"
+    if not paper_id.isalnum() or not path.exists():
+        return []
+    with pymupdf.open(path) as doc:
+        toc = [(lvl, t.strip(), max(1, pg)) for lvl, t, pg in doc.get_toc(simple=True) if t.strip()]
+        return toc or _guess_headings(doc)
+
+
 # ---------- section tree ----------
 # L1 the paper, L2 sections, L3 subsections, L4 sub-subsections and the figures and tables.
 
