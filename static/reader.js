@@ -111,8 +111,9 @@ async function renderReader(paperId, startPage) {
     plain.el.hidden = m !== "note";
     if (m === "note") plain.show(); else plain.flush();
   }
-  view.append(rail.el, pdf.el, splitter(view),
-    h("section", { class: "notebook", "aria-label": "Notebook" }, tabs, body, plain.el, foot));
+  const nbEl = h("section", { class: "notebook", "aria-label": "Notebook" }, tabs, body, plain.el, foot);
+  view.append(rail.el, pdf.el, splitter(view), nbEl);
+  paneToggles([["rail", rail.el, "Steps", "paneRail"], ["paper", pdf.el, "Paper", "panePaper"], ["notes", nbEl, "Notes", "paneNotes"]]);
   open(current, !greeted.has("reader")); greeted.add("reader");
   if (ai.data.progress.state === "making") ai.make(); // it was started elsewhere; follow it here
   setMode(localStorage.getItem("reader-mode") === "note" ? "note" : "steps");
@@ -122,6 +123,30 @@ async function renderReader(paperId, startPage) {
     leave() { timer.stop(); queue.flush(); plain.flush(); pdf.destroy(); },
     flushOnExit() { queue.flushKeepalive(); plain.flush(true); },
   };
+}
+
+// Three icons in the top bar fold each Reader pane down to a slim strip; the strip's icon opens it again.
+function paneToggles(panes) {
+  const shut = new Set(JSON.parse(localStorage.getItem("reader-min") || "[]"));
+  const btns = {};
+  function set(key, min) {
+    if (min) shut.add(key); else shut.delete(key);
+    if (shut.has("paper") && shut.has("notes")) shut.delete(key === "paper" ? "notes" : "paper"); // keep one to read or write in
+    for (const [k, el, label] of panes) {
+      const m = shut.has(k);
+      el.classList.toggle("is-min", m); view.classList.toggle(`min-${k}`, m);
+      btns[k].setAttribute("aria-pressed", String(!m));
+      btns[k].title = `${m ? "Show" : "Fold away"} ${label.toLowerCase()}`;
+    }
+    localStorage.setItem("reader-min", JSON.stringify([...shut]));
+  }
+  for (const [k, el, label, ico] of panes) {
+    btns[k] = h("button", { type: "button", class: "btn ghost tool pane-tog", "aria-label": label, onclick: () => set(k, !shut.has(k)) }, icon(ico));
+    el.prepend(h("button", { type: "button", class: "pane-strip", title: `Show ${label.toLowerCase()}`, onclick: () => set(k, false) },
+      icon(ico), h("span", { class: "strip-label" }, label)));
+  }
+  $("#page-extra").append(h("div", { class: "pane-toggles", role: "group", "aria-label": "Show or fold away panes" }, ...Object.values(btns)));
+  set("rail", shut.has("rail"));
 }
 
 // One free page of notes per paper. A line that starts with @ai, ended with Enter, asks the local model
@@ -212,6 +237,10 @@ const ICONS = {
   questions: '<path d="M9.5 17.5h5M10.5 20.5h3M12 3.5a6 6 0 0 0-3.4 10.9c.4.3.6.7.6 1.2v.4h5.6v-.4c0-.5.2-.9.6-1.2A6 6 0 0 0 12 3.5z"/>',
   review: '<path d="M4.5 12a7.5 7.5 0 0 1 13-5.1M19.5 12a7.5 7.5 0 0 1-13 5.1"/><path d="M17.5 3.5v3.4h-3.4M6.5 20.5v-3.4h3.4"/>',
   check: '<path pathLength="1" d="M6.5 12.5l3.6 3.6L17.5 8.5"/>',
+  // the three Reader panes: a window outline with the pane's part filled in
+  paneRail: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><rect x="5" y="6.5" width="3.5" height="11" rx=".8" fill="currentColor" stroke="none"/>',
+  panePaper: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><rect x="8.5" y="6.5" width="7" height="11" rx=".8" fill="currentColor" stroke="none"/>',
+  paneNotes: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><rect x="15.5" y="6.5" width="3.5" height="11" rx=".8" fill="currentColor" stroke="none"/>',
   prev: '<path d="M14.5 6 8.5 12l6 6"/>',
   next: '<path d="M9.5 6l6 6-6 6"/>',
   minus: '<path d="M6 12h12"/>',

@@ -205,7 +205,25 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .path li .title { font-size: var(--fs-title); font-weight: var(--fw-title); line-height: var(--lh-title); }
 
 /* ---------- reader ---------- */
-.page-read { display: grid; grid-template-columns: 232px minmax(0, 1fr) 9px var(--nb-w, minmax(360px, 36%)); grid-template-rows: minmax(0, 1fr); }
+.page-read { display: grid; grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: var(--c-rail, 232px) var(--c-paper, minmax(0, 1fr)) var(--c-split, 9px) var(--c-notes, var(--nb-w, minmax(360px, 36%))); }
+/* folded panes: a slim strip with the pane's icon */
+.page-read.min-rail { --c-rail: 52px; }
+.page-read.min-paper { --c-paper: 52px; --c-split: 0px; --c-notes: minmax(0, 1fr); }
+.page-read.min-notes { --c-notes: 52px; --c-split: 0px; }
+.page-read.min-paper .split, .page-read.min-notes .split { visibility: hidden; }
+.is-min { padding: 0 !important; overflow: hidden !important; }
+.is-min > :not(.pane-strip) { display: none !important; }
+.pane-strip { display: none; }
+.is-min > .pane-strip { display: flex; flex-direction: column; align-items: center; gap: 14px; width: 100%; height: 100%; padding: 16px 0;
+  background: none; border: 0; color: var(--pencil); cursor: pointer; }
+.pane-strip:hover { color: var(--ink); background: var(--paper); }
+.pane-strip:focus-visible { outline: 2px solid var(--marker); outline-offset: -4px; }
+.strip-label { writing-mode: vertical-rl; font-size: var(--fs-ui); font-weight: var(--fw-ui); letter-spacing: .02em; }
+.pane-toggles { display: flex; gap: 2px; margin-left: auto; padding: 3px; border: 1px solid var(--rule-soft); border-radius: 10px; }
+.pane-tog { padding: 5px 7px; color: var(--pencil); }
+.pane-tog[aria-pressed="true"] { color: var(--ink); }
+.pane-tog[aria-pressed="false"] { opacity: .55; }
 .rail { display: flex; flex-direction: column; padding: 16px 12px 24px; border-right: 1px solid var(--rule); overflow: auto; }
 .rail-head { display: flex; align-items: center; gap: 12px; padding: 4px 8px 16px; margin-bottom: 10px; border-bottom: 1px solid var(--rule-soft); }
 .rail-ring svg { display: block; rotate: -90deg; }
@@ -546,6 +564,9 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
   .topbar .chip { margin-left: auto; }
   .page-extra { order: 3; flex-basis: 100%; }
   .page-extra:empty { display: none; }
+  .pane-toggles { display: none; }
+  .is-min > .pane-strip { flex-direction: row; justify-content: center; padding: 10px; }
+  .strip-label { writing-mode: horizontal-tb; }
   .library { padding: 28px 20px 48px; }
   .lib-head h1 { font-size: 44px; }
   .lib-empty { grid-template-columns: 1fr; gap: 40px; }
