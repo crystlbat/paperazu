@@ -1,21 +1,27 @@
 # Paper mode and Dot's canvas
 
-Date: 2026-11-07. Status: draft for approval.
+Date: 2026-11-07. Status: approved in chat ("all of that please"), 2026-11-07.
 
 ## Why
 
 The reader today has three fixed columns: the steps rail, the paper, and the notebook (Steps and Note tabs). The user finds this "clanky and static". What they want is a paper-aware companion that comes along while they read: the paper is the main thing, Dot does the AI work right on the paper, and everything else does its part and then shrinks back.
 
-The moving sketch in `.superpowers/brainstorm/` (flow-v5.html) is the agreed picture: no text box on screen; you tap Dot, a speech bubble grows out of it for your question; Dot runs down the page; the paragraphs that answer light up, lift off the page and shrink into one-line cards on a canvas beside the paper, each tied by a thread to its lines; the answer is built from those cards.
+Two live sketches in `.superpowers/brainstorm/24622-1794092239/content/` are the agreed picture. `flow-v5.html`: no text box on screen; Dot pulls the canvas open; Dot runs down the page; the paragraphs that answer light up, lift off the page and shrink into one-line cards on a canvas beside the paper, each tied by a thread to its lines; the answer is built from those cards. `cursor-v6.html`: Dot follows your cursor; clicking a paragraph pops out five icons around Dot; Dot changes shape for each job (marker, magnifying glass, input pill) and changes back to its face after.
 
 ## Goals
 
 1. **Paper mode is the default.** On opening a paper you see only the paper and Dot. The steps rail and the notebook are not on screen.
 2. **Canvas mode opens beside the paper.** The canvas slides in from the right and the paper slides left to make room. Closing it tucks it away and returns to paper mode. One canvas per paper, saved, so it is as you left it next time.
-3. **Asking goes through Dot.** No permanent text box. Tap Dot, a speech bubble grows from Dot, type, Enter. The bubble folds back into Dot.
+3. **Dot follows you.** In paper mode Dot trails the cursor with a little lag and outlines the paragraph under it. Clicking a paragraph (a click, not a drag; dragging still selects text as now) stops Dot and pops out five icon buttons in an arc around it, each with its name on hover:
+   - **Highlight** (marker icon). Dot turns into a tilted marker and runs along each line of the selection, leaving a yellow stroke. Highlights are saved. On a paragraph that is already highlighted, the icon becomes **Remove highlight**.
+   - **Ask** (magnifier icon). Dot stretches into an input pill right there. On Enter it turns into a magnifying glass and sweeps the page while the model works; then the sources fly to the canvas as in goal 4.
+   - **Note** (pencil icon). Dot stretches into the input pill; the text becomes a note card on the canvas tied to the selection (goal 6).
+   - **Add more** (down-arrow icon). Dot squashes and rides down the selection box, which springs down over the next paragraph while a wave of yellow dots pours through it, and a badge counts what was added ("+1", "+2"). The icons pop back out.
+   - **Back** (return-arrow icon). Icons fold away; Dot follows again.
+   After every job Dot changes back into its face and follows the cursor. Escape always cancels back to following. No permanent text box anywhere. Clicking where there is no paragraph (margin, empty canvas) offers only Ask, Note and Back, about the paper as a whole.
 4. **Answers show their sources on the paper.** Dot glides down the page while the model works. When the answer arrives, its source paragraphs light up, a copy of each lifts off the page, flies to the canvas, and shrinks into a short gist card (a one-line summary plus "p. N"). A dotted thread links each card to its paragraph. The answer card appears and is threaded to its source cards.
-5. **Follow-ups start from what you tap.** Tap a card (answer, source, or your own note), and Dot's bubble opens on that card. The question and reply become a new card that branches off it with a thread. Tap Dot itself for a fresh question with no link. The card you tapped, and the chain of cards above it, are the context the model gets.
-6. **Your notes live on the canvas.** Double-click empty canvas to write a note card. Drag cards to move them. Drag from a card's edge handle onto another card to connect them. Delete with a small x on the card.
+5. **Follow-ups start from what you click.** Click an answer or source card, and Dot stretches into the input on that card. The question and reply become a new answer card that branches off it with a thread. The card you clicked, and the chain of cards above it, are the context the model gets.
+6. **Your notes live on the canvas, and Dot works inside them.** A note is a small running page tied to the lines it was made from. You keep adding to it: click the note and Dot stretches into the input on it. Plain text is added as your line. A question, or a request such as "explain this formula", is answered by Dot right inside the note, under your line, in Dot's style. Dot gets the note's selected area as text and as a picture (so formulas read right, as Explain does now), plus the earlier lines of the note. Example: select equation (1), Note, type "explain this formula", and the explanation appears in the note. Notes can also be made with no selection by double-clicking empty canvas. Drag cards to move them. Drag from a card's edge handle onto another card to connect them. Delete with a small x on the card.
 7. **The canvas and the paper talk to each other.** Hover a card with a source and its paragraph lights up on the page. Click it and the paper turns to that page and scrolls there. A source on another page shows the thread ending at the canvas edge with "p. N".
 8. **Steps and notes still exist, smaller.** They become chips (Steps 0/10, Notes) in the reader's top bar. Clicking one opens that panel as a drawer over the side of the paper; it closes when you click outside or press Escape. Nothing about how step notes are stored changes.
 
@@ -23,7 +29,7 @@ The moving sketch in `.superpowers/brainstorm/` (flow-v5.html) is the agreed pic
 
 - The Library screen redesign "centred around the bot". The user wants it, but it is a separate project, designed after this one ships.
 - Voice. Still waiting on a go-ahead for any new dependency.
-- Moving existing margin notes (marks) or step notes onto the canvas. They stay where they are. (A later project could import them.)
+- Moving existing margin notes (marks) or step notes onto the canvas. They stay where they are and keep working (drag Dot onto the page to trace one). New notes go to the canvas. (A later project could import the old ones.)
 - A whole-paper "map" on the canvas made up front by the model. The user's phrase "after the training and research" is read as: the model already has the paper as context. No training code; Unsloth on a Mac only runs models.
 
 ## Anti-goals (would make this a failure even if it works)
@@ -48,7 +54,7 @@ The moving sketch in `.superpowers/brainstorm/` (flow-v5.html) is the agreed pic
 
 A new endpoint answers a question with sources: `POST /papers/{id}/canvas/ask` with `{question, page, from_card?}`.
 
-The server builds a numbered list of paragraphs. A new `marks.paragraphs(paper_id, page)` returns `[(rect, text)]` using the same grouping as `marks.blocks()` (refactor so both share it). Ids like `p3-b7` exist only inside one ask: they are the index in that list, used in the prompt and mapped straight back to page and rect on the server. Ids are never stored; cards store page and rect. The list comes from for a window of pages the page you are on, plus up to 2 pages picked by a new `graph.pages_for(s, paper_id, question)` that ranks only this paper's chunks. If the paper is not indexed or the embedding model is missing (`GraphError`), it falls back to the pages next to the current one, within the budget `llm.paper_text` uses. It asks the model for JSON: `{answer, sources: [{block: "p3-b7", gist}]}`, gist being at most about 12 words. The server checks every block id exists, drops the ones that do not, and returns each source with its page and rect in PDF points, ready for the page to light up.
+The server builds a numbered list of paragraphs. A new `marks.paragraphs(paper_id, page)` returns `[(rect, text)]` using the same grouping as `marks.blocks()` (refactor so both share it). Ids like `p3-b7` exist only inside one ask: they are the index in that list, used in the prompt and mapped straight back to page and rect on the server. Ids are never stored; cards store page and rect. The pages used are the page you are on, plus up to 2 pages picked by a new `graph.pages_for(s, paper_id, question)` that ranks only this paper's chunks. If the paper is not indexed or the embedding model is missing (`GraphError`), it falls back to the pages next to the current one, within the budget `llm.paper_text` uses. It asks the model for JSON: `{answer, sources: [{block: "p3-b7", gist}]}`, gist being at most about 12 words. The server checks every block id exists, drops the ones that do not, and returns each source with its page and rect in PDF points, ready for the page to light up.
 
 If `from_card` is given, the prompt includes that card's text and the chain of cards it branches from (up to 6), so follow-ups have context.
 
@@ -60,14 +66,15 @@ My call: answer length stays at the current "at most 6 short sentences"; at most
 
 New tables, both with `ON DELETE CASCADE` on the paper:
 
-- `canvas_cards`: id, paper_id, kind (`answer`, `source`, `note`), question (for answers: your words, shown as the card's first line), text, x, y, w, page (nullable), rect x0..y1 (nullable), parent (nullable card id), created_at.
+- `canvas_cards`: id, paper_id, kind (`answer`, `source`, `note`), question (for answers: your words, shown as the card's first line), text (answers and sources), entries (notes: JSON list of `{who: "me"|"dot", text}`), x, y, w, page (nullable), rect x0..y1 (nullable; for a note, the union of its selected paragraphs), parent (nullable card id), created_at.
+- `highlights`: id, paper_id, page, x0, y0, x1, y1 (PDF points). Drawn on the page as the yellow marker stroke under each line in the box.
 - `canvas_links`: id, paper_id, from_card, to_card. Only for links you draw yourself.
 
 Threads from `parent` and from `canvas_links` are both drawn, in different styles. A source card's parent is its answer card. A follow-up is one answer card whose parent is the card you tapped. Deleting a card deletes its links; cards whose parent it was keep living with parent set to empty (my call).
 
-Card positions are canvas coordinates in CSS pixels. REST: `GET /papers/{id}/canvas`, `POST/PUT/DELETE /papers/{id}/canvas/cards[/{cid}]`, `POST/DELETE /papers/{id}/canvas/links[/{lid}]`. The ask endpoint saves the cards it makes and returns them.
+Card positions are canvas coordinates in CSS pixels. REST: `GET /papers/{id}/canvas`, `POST/PUT/DELETE /papers/{id}/canvas/cards[/{cid}]`, `POST/DELETE /papers/{id}/canvas/links[/{lid}]`, `POST /papers/{id}/canvas/cards/{cid}/say` (add a line to a note; if it is a question, Dot's reply is added too and returned), `GET/POST/DELETE /papers/{id}/highlights[/{hid}]`. The ask endpoint saves the cards it makes and returns them.
 
-The Markdown export gains a "Canvas" section: notes and answers in the order they were made, each answer with its question and its sources as "p. N".
+The Markdown export gains a "Canvas" section: notes and answers in the order they were made, each answer with its question and its sources as "p. N", each note with its lines, Dot's lines marked "Dot:".
 
 ### Placing cards
 
@@ -79,9 +86,19 @@ The canvas is a plain HTML layer with an SVG layer for threads, panned by draggi
 
 My call: the canvas opens in three ways: Dot's menu gets a "Canvas" item; asking a question opens it (Dot pulls it open like a curtain, as in the sketch); and a small tab on the right edge of the paper opens it by hand. Whether the canvas is open is remembered per paper.
 
-### Dot's bubble
+### Dot on the reader: follow, options, shapes
 
-`buddy.js` gets a small input bubble: `buddy.prompt({ x, y, placeholder }) → Promise<string|null>` that grows from Dot (or from a card when following up), Enter sends, Escape cancels. Tapping Dot (a click without a drag) while on the reader opens it. Today a click on Dot opens the tools menu. My call: on the reader, a tap opens the bubble, and a long press or right-click opens the tools menu; on every other screen a tap still opens the menu as now.
+`buddy.js` gets:
+- `follow(on)`: trail the cursor (lerp each frame, offset just below-right of the pointer). Off during drags, text selection, Lens, the pen, open inputs, and when the pointer leaves the reader. Reduced motion: Dot does not follow; it appears at the click instead.
+- `options({ x, y, items }) → Promise<key|null>`: the arc of icon buttons around Dot (icons are inline SVG; names shown on hover and as `aria-label`). Keyboard: arrow keys move between icons, Enter picks, Escape closes.
+- `shape(name)`: `face` (default), `marker`, `lens`, `squash`, `pill`. CSS classes on the Dot root, with springy transitions, as in `cursor-v6.html`.
+- `prompt({ x, y, placeholder }) → Promise<string|null>`: Dot becomes the input pill at that spot. Enter sends. There is always a visible way back: a Back button (return-arrow icon) at the end of the pill, a click anywhere outside it, or Escape; all three cancel and Dot changes back to its face and follows again.
+
+The tools menu (Lens, Map, Proactive, Clear trail, Canvas) opens on right-click or long press on Dot on the reader (my call); on every other screen a click still opens it as now.
+
+Questions vs plain lines in a note (my call): a line is sent to Dot when it ends with "?", starts with a verb such as explain, summarize, compare, define, why, how, what (case-insensitive), or starts with "@ai" as margin notes do now. Everything else is kept as your own line. A small "Ask Dot" hint shows in the pill while typing a line that will be sent, so it is never a surprise.
+
+The note's Dot replies use a new `llm.note_reply(s, lines, boxed_text, image, title, pages, page)`, built like `ask_box` (picture of the area, retry without it on a text-only model).
 
 ### Motion
 
