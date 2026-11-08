@@ -207,7 +207,10 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 
 /* ---------- reader ---------- */
 .page-read { position: relative; overflow: hidden; display: grid; grid-template-rows: minmax(0, 1fr);
-  grid-template-columns: var(--c-paper, minmax(0, 1fr)) var(--c-canvas, 0px); }
+  grid-template-columns: var(--c-paper, minmax(0, 1fr)) var(--c-canvas, minmax(0, 0fr));
+  transition: grid-template-columns 1s cubic-bezier(.3,.7,.2,1); }
+.page-read.no-slide { transition: none; }
+.page-read.canvas-open { --c-paper: minmax(0, 1.15fr); --c-canvas: minmax(0, 1fr); } /* the paper slides left; the canvas takes the rest */
 .rail { display: flex; flex-direction: column; padding: 16px 12px 24px; border-right: 1px solid var(--rule); overflow: auto; }
 .rail-head { display: flex; align-items: center; gap: 12px; padding: 4px 8px 16px; margin-bottom: 10px; border-bottom: 1px solid var(--rule-soft); }
 .rail-ring svg { display: block; rotate: -90deg; }
@@ -1083,6 +1086,11 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 /* ---------- Dot in reading mode: it follows, changes shape, offers options and becomes the input ---------- */
 .buddy { --k: 1; }
 .buddy.follows { --k: .4; }
+/* in the reader Dot is the yellow character of the mockup: yellow body, dark eyes (the same look as its marker shape) */
+.buddy.follows .buddy-face { background: var(--marker); box-shadow: 0 8px 20px -8px rgb(0 0 0 / .55); }
+.buddy.follows .buddy-grid i { background: rgb(31 32 35 / .08); }
+.buddy.follows .buddy-grid i.on { background: #1f2023; box-shadow: none; }
+.buddy.follows .buddy-grid i.trail { background: rgb(31 32 35 / .3); }
 .buddy-face { scale: var(--k); transition: scale .4s cubic-bezier(.3,1.3,.4,1), rotate .4s cubic-bezier(.3,1.3,.4,1), border-radius .4s, padding .4s cubic-bezier(.3,1.3,.4,1), background .25s, box-shadow .25s, transform .25s cubic-bezier(.3,1.4,.4,1), opacity .2s; }
 .buddy.follows.hop .buddy-face, .buddy.follows.done .buddy-face { animation: float 5s ease-in-out infinite; }
 .buddy.sh-lens .buddy-face { scale: var(--k); border-radius: 50%; padding: 24px 12px; box-shadow: 0 0 0 4px var(--marker), 0 10px 24px -8px rgb(0 0 0 / .5); }
@@ -1151,8 +1159,6 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
   .drawer-left, .drawer-right { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .drawer, .drawer.open { transition: none; } }
-.canvas-host { position: relative; min-width: 0; overflow: hidden; }
-.canvas-host[hidden] { display: none; }
 .buddy.wobble .buddy-face { animation: shake .45s ease-in-out 1; }
 @media (prefers-reduced-motion: reduce) { .buddy.wobble .buddy-face { animation: none; } }
 
@@ -1179,3 +1185,84 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
   box-shadow: 0 12px 28px -12px rgb(0 0 0 / .6); --ink: #f4f4ef; color: var(--ink); }
 .hl-chip .btn:not(.ghost) { background: #f4f4ef; color: #1f2023; border-color: transparent; }
 @media (prefers-reduced-motion: reduce) { .p-near, .sel-box, .sel-box b { transition: none; } .sel-box.grow::after { animation: none; } }
+
+/* ---------- the canvas: cards, threads, and what happens when it opens and closes ---------- */
+@property --r { syntax: "<length>"; inherits: false; initial-value: 0px; }
+.canvas-host { position: relative; min-width: 0; overflow: hidden; cursor: grab;
+  background: var(--paper) radial-gradient(var(--dot) 1.1px, transparent 1.4px) 0 0 / 22px 22px; box-shadow: -1px 0 0 var(--rule); }
+.canvas-host[hidden] { display: none; }
+.canvas-host:not(.on) { visibility: hidden; }
+.canvas-host.panning { cursor: grabbing; }
+.cv-board { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.cv-wave { position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: radial-gradient(var(--marker) 1.7px, transparent 2.2px) 0 0 / 22px 22px;
+  -webkit-mask-image: radial-gradient(circle at var(--ox, 50%) var(--oy, 50%), transparent calc(var(--r) - 90px), #000 var(--r), transparent calc(var(--r) + 6px));
+  mask-image: radial-gradient(circle at var(--ox, 50%) var(--oy, 50%), transparent calc(var(--r) - 90px), #000 var(--r), transparent calc(var(--r) + 6px)); }
+.cv-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 0 48px; text-align: center; color: var(--pencil);
+  font: var(--fw-ui) var(--fs-ui)/1.5 var(--sans); pointer-events: none; }
+.cv-empty[hidden] { display: none; }
+.cv-tab { position: absolute; right: 0; top: 42%; z-index: 7; padding: 14px 7px; border: 1px solid var(--rule); border-right: 0; border-radius: 10px 0 0 10px;
+  background: var(--sheet); color: var(--ink); cursor: pointer; writing-mode: vertical-rl; font: var(--fw-ui) var(--fs-ui) var(--sans);
+  box-shadow: 0 8px 20px -12px rgb(20 22 25 / .5); transition: background .15s, color .15s, padding .15s; }
+.cv-tab:hover { padding-right: 11px; }
+.cv-tab:focus-visible { outline: 2px solid var(--marker); outline-offset: 2px; }
+.cv-tab.on { background: var(--marker); border-color: var(--marker); color: var(--on-marker); }
+.cv-tab[hidden] { display: none; }
+.cv-svg { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 6; overflow: visible; pointer-events: none; transition: opacity .25s; }
+.cv-svg.off { opacity: 0; }
+.cv-thread { fill: none; stroke-linecap: round; }
+.cv-parent { stroke: color-mix(in srgb, var(--marker) 78%, #b39700); stroke-width: 2.5; stroke-dasharray: 7 6; filter: drop-shadow(0 0 1px rgb(0 0 0 / .35)); }
+.cv-link { stroke: var(--pencil); stroke-width: 2; opacity: .75; }
+.cv-paper { stroke: var(--ink); stroke-width: 1.6; opacity: .55; }
+.cv-edge { opacity: .35; stroke-dasharray: 2 6; }
+.cv-spark { fill: none; stroke: var(--marker); stroke-width: 5; stroke-linecap: round; filter: drop-shadow(0 0 5px var(--marker)); }
+.cv-tag { font: 600 12px var(--sans); fill: var(--ink); paint-order: stroke; stroke: var(--paper); stroke-width: 4px; stroke-linejoin: round; }
+.cv-card { position: absolute; padding: 12px 34px 14px 14px; border-radius: 12px; font: var(--fw-ui) var(--fs-ui)/1.45 var(--sans);
+  user-select: none; touch-action: none; cursor: grab;
+  transform: perspective(700px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) translateY(var(--lift, 0px));
+  transition: transform .14s ease-out, box-shadow .2s; box-shadow: 0 1px 0 rgb(0 0 0 / .06), 0 10px 22px -14px rgb(20 22 25 / .5); }
+.cv-card:hover { --lift: -3px; box-shadow: 0 18px 30px -14px rgb(20 22 25 / .55); }
+.cv-card.drag { --lift: -6px; transition: none; cursor: grabbing; z-index: 2; }
+.cv-card:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.cv-card.cv-target { box-shadow: 0 0 0 3px var(--marker), 0 18px 30px -14px rgb(20 22 25 / .55); }
+.cv-answer { background: var(--marker); color: var(--on-marker); }
+.cv-source { background: var(--device); color: var(--device-ink); cursor: pointer; }
+.cv-source:hover { cursor: pointer; }
+.cv-note { background: var(--sheet); color: var(--ink); border: 2px dashed var(--marker); padding: 10px 32px 12px 12px; }
+.cv-body p { margin: 0 0 6px; }
+.cv-body > :last-child { margin-bottom: 0; }
+.cv-body ul { margin: 0 0 6px; padding-left: 18px; }
+.cv-q { font-weight: var(--fw-strong); }
+.cv-where { color: var(--device-dim); font-size: var(--fs-caption); }
+.cv-line { margin: 0 0 6px; }
+.cv-line.dot { color: var(--pencil); }
+.cv-face { display: inline-block; width: 15px; height: 15px; margin-right: 7px; vertical-align: -3px; border-radius: 4px;
+  background: radial-gradient(circle, var(--marker) 1.5px, transparent 1.9px) 0 0 / 5px 5px, var(--device); }
+.cv-x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: none; color: inherit;
+  font-size: 18px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .15s, background .15s; }
+.cv-card:hover .cv-x, .cv-x:focus-visible { opacity: .75; }
+.cv-x:hover { opacity: 1; background: rgb(128 128 128 / .25); }
+.cv-x:focus-visible { outline: 2px solid currentColor; }
+@media (hover: none) { .cv-x { opacity: .75; } }
+.cv-handle { position: absolute; right: -8px; top: 50%; width: 15px; height: 15px; margin-top: -7px; border-radius: 50%; background: var(--sheet);
+  border: 2px solid var(--ink); cursor: crosshair; opacity: 0; transition: opacity .15s, scale .15s, background .15s; }
+.cv-card:hover .cv-handle, .cv-card.cv-target .cv-handle { opacity: 1; }
+.cv-handle:hover { scale: 1.3; background: var(--marker); }
+.cv-fx { position: fixed; inset: 0; z-index: 45; pointer-events: none; }
+.cv-crumb { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; }
+.cv-ring { position: absolute; width: 24px; height: 24px; margin: -12px 0 0 -12px; border: 2px solid var(--marker); border-radius: 50%; }
+.cv-ghost { transition: none; pointer-events: none; }
+.cv-menu { position: fixed; z-index: 80; min-width: 130px; padding: 6px; border-radius: 10px; background: #1f2023; border: 1px solid rgb(255 255 255 / .12);
+  box-shadow: 0 12px 28px -12px rgb(0 0 0 / .6); }
+.cv-menu button { display: block; width: 100%; padding: 7px 12px; border: 0; border-radius: 7px; background: none; color: #f4f4ef; text-align: left; cursor: pointer;
+  font: var(--fw-ui) var(--fs-ui) var(--sans); }
+.cv-menu button:hover, .cv-menu button:focus-visible { background: var(--marker); color: var(--on-marker); outline: none; }
+@media (max-width: 860px) {
+  .canvas-host { position: absolute; inset: 0; z-index: 5; box-shadow: none; }
+  .page-read.canvas-open { --c-paper: minmax(0, 1fr); --c-canvas: minmax(0, 0fr); }
+  .cv-tab { top: 30%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-read, .cv-card, .cv-svg, .cv-tab { transition: none; }
+  .cv-card:hover { --lift: 0px; }
+}

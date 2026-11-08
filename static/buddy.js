@@ -600,6 +600,8 @@ const buddy = (() => {
     });
   }
 
+  /** hold(on): keep Dot where it is (no following) for a whole menu session; call hold(false) to let it trail again */
+  function hold(on) { st.ui = Math.max(0, st.ui + (on ? 1 : -1)); }
   /** put(x, y): Dot's centre is at (x, y) at once (no trailing with reduced motion: it appears where you clicked) */
   function put(x, y) { root.style.transition = "none"; place(x, y); void root.offsetWidth; root.style.transition = ""; }
   /** nudge(): a small shake, for "nothing more here" */
@@ -656,5 +658,5 @@ const buddy = (() => {
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
   return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, reading, open, format, draggable, tools: setTools,
-    follow: followMode, options, shape, prompt, gulp, burp, toolsOn, skip, centre, put, nudge, wait: waitSkippable };
+    follow: followMode, options, shape, prompt, gulp, burp, toolsOn, skip, centre, put, hold, nudge, wait: waitSkippable };
 })();

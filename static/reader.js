@@ -92,7 +92,7 @@ async function renderReader(paperId, startPage) {
     current = st;
     rail.mark(st.id);
     pdf.autoHide(st.paper_hidden);
-    canvasHost.hidden = !!st.paper_hidden; // Self-test: the canvas hides with the paper
+    canvasHost.hidden = !!st.paper_hidden; canvas.lock(!!st.paper_hidden); // Self-test: the canvas goes with the paper
     body.replaceChildren(...notebook(st, notes[st.id], timer, () => queue.touch(st.id), ai));
     body.querySelectorAll("textarea").forEach(grow);
     body.scrollTop = 0;
@@ -116,6 +116,7 @@ async function renderReader(paperId, startPage) {
   });
   const canvasHost = h("section", { class: "canvas-host", "aria-label": "Canvas" });
   view.append(pdf.el, canvasHost, drawers.steps.el, drawers.notes.el);
+  const canvas = canvasPanel(canvasHost, paperId, pdf);
   const guide = guidedReading(paperId, pdf, (id) => { const st = fw.steps.find((x) => x.id === id); if (st && st !== current) open(st, false); },
     () => drawers.open("notes"));
   const dotTools = () => buddy.tools([
@@ -126,6 +127,8 @@ async function renderReader(paperId, startPage) {
     { name: pdf.watching() ? "Proactive: on" : "Proactive", hint: pdf.watching() ? "Turn off check-ins" : "I check in if you get stuck",
       pick: () => { pdf.watch(!pdf.watching()); dotTools(); },
       pic: [".........", "..#####..", ".#.....#.", "#..###..#", "#..###..#", "#..###..#", ".#.....#.", "..#####..", "........."] },
+    { name: "Canvas", hint: "Open or put away your cards", pick: () => (canvasHost.hidden ? buddy.say("The paper is closed for this step, so the canvas is too.") : canvas.toggle()),
+      pic: ["####.....", "#..#.....", "####.....", "...#.....", "...##....", "....#####", ".....#..#", ".....#..#", ".....####"] },
     ...(pdf.watching() ? [{ name: "Clear trail", hint: "Forget which parts you read", pick: () => pdf.clearTrail(),
       pic: [".........", "#.......#", ".#.....#.", "..#...#..", "...#.#...", "..#...#..", ".#.....#.", "#.......#", "........."] }] : []),
   ]);
@@ -136,7 +139,7 @@ async function renderReader(paperId, startPage) {
 
   // Saves (and retries) can finish after you leave; Dot only speaks while this Reader is open.
   const me = openReader = {
-    leave() { guide.stop(); timer.stop(); queue.flush(); plain.flush(); drawers.destroy(); buddy.follow(false); buddy.toolsOn("click"); pdf.destroy(); },
+    leave() { guide.stop(); timer.stop(); queue.flush(); plain.flush(); drawers.destroy(); canvas.destroy(); buddy.follow(false); buddy.toolsOn("click"); pdf.destroy(); },
     flushOnExit() { queue.flushKeepalive(); plain.flush(true); },
   };
 }
@@ -790,7 +793,10 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     if (sel && sel.page !== v.page && !job) clearSel(); else drawSel();
     sheet.replaceChildren(pageBox);
     search.paint();
+    viewCb?.();
   }
+  let viewCb = null; // the canvas redraws its threads when the page, zoom or scroll changes
+  stage.addEventListener("scroll", () => viewCb?.(), { passive: true });
   // Select text with the mouse (formulas too): Dot, which trails the pointer, offers what it can do with the words.
   const picked = () => getSelection().toString().normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, 600);
   function clearPick() { getSelection().removeAllRanges(); }
@@ -1271,13 +1277,21 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     return { page: sel.page, rect, text: textIn(rect).slice(0, 3000) };
   };
 
+  // Dot comes to the click: reduced motion puts it there at once; otherwise a short walk if it is not already beside the pointer
+  async function toClick(x, y) {
+    if (reducedMotion()) { buddy.put(x + 36, y + 34); return; }
+    const [cx, cy] = buddy.centre();
+    if (Math.hypot(cx - x - 36, cy - y - 34) > 60) await buddy.goTo(x + 36, y + 34, 260);
+  }
+
   // ----- Dot's options on a paragraph (or on the page, off any paragraph) -----
   async function paragraphMenu(x, y, b) {
     job = true; near.hidden = true;
     sel = b ? { page: v.page, blocks: [b] } : null;
     drawSel();
-    if (reducedMotion()) buddy.put(x + 36, y + 29); // no trailing: Dot appears where you clicked
+    buddy.hold(true); // Dot stays with this paragraph until you are done
     try {
+      await toClick(x, y);
       for (;;) {
         const [cx, cy] = buddy.centre();
         const pick = await buddy.options({ x: cx, y: cy, items: sel ? ITEMS : ITEMS.filter((i) => ["ask", "note", "back"].includes(i.key)) });
@@ -1286,7 +1300,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
         else if (pick === "ask" || pick === "note") await hooks[pick === "ask" ? "onAsk" : "onNote"]?.(selection(), { x: cx, y: cy });
         break;
       }
-    } finally { job = false; clearSel(); await buddy.shape("face"); }
+    } finally { job = false; clearSel(); buddy.hold(false); await buddy.shape("face"); }
   }
 
   // ----- Dot's options on chosen words: it is already beside the pointer, so the options come out of it there -----
@@ -1299,7 +1313,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     const area = toPoints(rr.left - box.left, rr.top - box.top, rr.right - box.left, rr.bottom - box.top);
     const tight = rnd(rects.reduce(union));
     job = true; near.hidden = true;
-    if (reducedMotion()) buddy.put(x + 36, y + 29); // no trailing: Dot appears where you let go
+    await toClick(x, y);
     const [cx, cy] = buddy.centre();
     let pick;
     try { pick = await buddy.options({ x: cx, y: cy, items: WORDS }); } finally { job = false; }
@@ -1317,12 +1331,21 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     if (!nx || sel.page !== v.page) { buddy.nudge(); return; } // nothing more on this page
     await anim(async () => {
       await buddy.shape("squash");
-      const box = pageBox.getBoundingClientRect();
-      const edge = (r) => { const [, , x1, y1] = px(r); return [Math.min(box.left + x1 - 10, innerWidth - 40), Math.min(box.top + y1 + 2, innerHeight - 40)]; };
+      const box = () => pageBox.getBoundingClientRect();
+      // Dot rides the middle of the box's bottom edge; the page scrolls to keep that edge in view
+      const edge = (r) => { const [x0, , x1, y1] = px(r); return [box().left + (x0 + x1) / 2, box().top + y1 + 4]; };
+      const see = async (r) => {
+        const over = edge(r)[1] - (stage.getBoundingClientRect().bottom - 110);
+        if (over <= 0) return;
+        stage.scrollBy({ top: over, behavior: fast() ? "auto" : "smooth" });
+        for (let last = -1, i = 0; !fast() && i < 30 && stage.scrollTop !== last; i++) { last = stage.scrollTop; await buddy.wait(50); } // until the scroll settles
+      };
+      await see(sel.blocks.reduce(union));
       await buddy.goTo(...edge(sel.blocks.reduce(union)), fast() ? 1 : 250);
       sel.blocks.push(nx);
       selBox.classList.remove("grow"); void selBox.offsetWidth;
       drawSel(); selBox.classList.add("grow");
+      await see(sel.blocks.reduce(union));
       await buddy.goTo(...edge(sel.blocks.reduce(union)), fast() ? 1 : 550);
       await buddy.shape("face");
       if (!fast()) await buddy.wait(150);
@@ -1460,7 +1483,22 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
 
   return {
-    el, hooks, selection, setHidden, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
+    el, hooks, selection, setHidden,
+    onView: (f) => { viewCb = f; },
+    // a paragraph's box on screen, or null when that page is not shown or the box is scrolled out of sight
+    toScreen(n, r) {
+      if (n !== v.page || !v.vp || v.hidden) return null;
+      const b = pageBox.getBoundingClientRect(), s = stage.getBoundingClientRect(), [x0, y0, x1, y1] = px(r);
+      const out = new DOMRect(b.left + x0, b.top + y0, x1 - x0, y1 - y0);
+      return out.bottom < s.top || out.top > s.bottom ? null : out;
+    },
+    light: (n, r) => (n === v.page && v.vp && !v.hidden ? glow(r) : () => {}), // returns the function that puts the glow out
+    async reveal(n, r) {
+      await go(n);
+      const b = pageBox.getBoundingClientRect(), s = stage.getBoundingClientRect();
+      stage.scrollTop += b.top + px(r)[1] - s.top - stage.clientHeight * 0.3;
+      const off = glow(r); setTimeout(off, 1800);
+    }, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
     destroy() { clearInterval(watchTimer); watchStop.abort(); buddy.tools(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
