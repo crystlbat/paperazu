@@ -732,15 +732,9 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     h("button", { type: "button", class: "pen-stop", onclick: () => { endPen(); buddy.goHome(); } }, "Stop"));
   const guideMark = h("i", { class: "guide-mark", hidden: true, "aria-hidden": "true" });
   const marksLayer = h("div", { class: "marks-layer" });
+  const hlLayer = h("div", { class: "hl-layer", "aria-hidden": "true" }); // saved highlights, under the text
+  const selLayer = h("div", { class: "sel-layer", "aria-hidden": "true" }); // the paragraph outline and the chosen box
   const trackLayer = h("div", { class: "track-layer" }); // Proactive: where you are reading, and what you have read
-  const pickBtn = (label, fn) => h("button", { type: "button", class: "btn small-btn", onmousedown: (e) => e.preventDefault(), onclick: fn }, label);
-  const bubble = h("div", { class: "sel-bubble", hidden: true, role: "toolbar", "aria-label": "Selected text" },
-    pickBtn("Explain", () => {
-      const r = bubble.getBoundingClientRect(), s = getSelection().getRangeAt(0).getBoundingClientRect(), box = pageBox.getBoundingClientRect();
-      dotExplain(picked(), r.left, r.top, toPoints(s.left - box.left, s.top - box.top, s.right - box.left, s.bottom - box.top));
-      clearPick();
-    }),
-    pickBtn("Find in paper", () => { search.find(picked()); clearPick(); }));
   const stage = h("div", { class: "pdf-stage" }, sheet);
   const closed = h("div", { class: "pdf-closed", hidden: true },
     h("div", { class: "closed-card" },
@@ -789,26 +783,18 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     pdfjsLib.renderTextLayer({ textContentSource: await page.getTextContent(), container: layer, viewport: vp });
     if (seq !== v.seq) return;
     textLayer = layer;
-    pageBox.replaceChildren(canvas, hits, guideMark, textLayer, marksLayer, trackLayer, ink, bubble);
+    pageBox.replaceChildren(canvas, hlLayer, hits, guideMark, textLayer, marksLayer, selLayer, trackLayer, ink);
     drawTrack();
     guideMark.hidden = true;
-    drawMarks(); loadBlocks(v.page);
-    bubble.hidden = true;
+    drawMarks(); loadBlocks(v.page); drawHl();
+    if (sel && sel.page !== v.page && !job) clearSel(); else drawSel();
     sheet.replaceChildren(pageBox);
     search.paint();
   }
-  // Select text with the mouse (formulas too), then Explain or Find it.
+  // Select text with the mouse (formulas too): Dot, which trails the pointer, offers what it can do with the words.
   const picked = () => getSelection().toString().normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, 600);
-  function clearPick() { bubble.hidden = true; getSelection().removeAllRanges(); }
-  pageBox.addEventListener("mouseup", (e) => !e.target.closest?.(".sel-bubble") && setTimeout(() => {
-    const sel = getSelection();
-    if (sel.isCollapsed || !textLayer.contains(sel.anchorNode) || !picked()) { bubble.hidden = true; return; }
-    const r = sel.getRangeAt(0).getBoundingClientRect(), box = pageBox.getBoundingClientRect();
-    bubble.style.left = `${Math.min(r.right - box.left, box.width - 220)}px`;
-    bubble.style.top = `${r.bottom - box.top + 8}px`;
-    bubble.hidden = false;
-  }));
-  document.addEventListener("selectionchange", () => { if (getSelection().isCollapsed) bubble.hidden = true; });
+  function clearPick() { getSelection().removeAllRanges(); }
+  pageBox.addEventListener("mouseup", (e) => { if (e.button === 0 && !e.target.closest?.(NOT_PAGE)) setTimeout(() => wordsMenu(e.clientX, e.clientY), 0); });
 
   // Guided reading: go to a heading, mark it, scroll it near the top, and say where it is on screen.
   async function point(heading, page) {
@@ -1199,6 +1185,242 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     buddy.say(on ? "Proactive is on. I will check in if you stay on one part for a couple of minutes." : "Proactive is off. I will wait until you call me.", { mood: on ? "happy" : "idle" });
   }
 
+
+  // ---------- reading mode: click a paragraph for Dot's options; highlight by hand ----------
+  // The reader sets hooks.onAsk(selection, at) and hooks.onNote(selection, at); until then Ask and Note only close the menu.
+  const hooks = { onAsk: null, onNote: null };
+  let hls = [], sel = null, job = false, animating = false, skipAnim = false, chip = null;
+  const near = h("div", { class: "p-near", hidden: true });
+  const selBox = h("div", { class: "sel-box", hidden: true }, h("b"));
+  selLayer.append(near, selBox);
+  api(`/papers/${paperId}/highlights`).then((r) => { hls = r.highlights; drawHl(); }).catch(() => {});
+  const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const fast = () => skipAnim || reducedMotion(); // a click, or reduced motion, jumps animations to their end
+  const rnd = (r) => r.map((q) => Math.round(q * 10) / 10);
+  // an animation runs inside anim(): a click anywhere skips it to its end state
+  async function anim(fn) {
+    animating = true; skipAnim = false;
+    try { await fn(); } finally { animating = false; skipAnim = false; }
+  }
+  document.addEventListener("pointerdown", () => { if (animating) { skipAnim = true; buddy.skip(); } }, { capture: true, signal: watchStop.signal });
+
+  const ICON = {
+    suggest: '<svg viewBox="0 0 24 24"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>',
+    ask: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
+    note: '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+    more: '<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>',
+    back: '<svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
+    explain: '<svg viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2V16h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3Z"/></svg>',
+    mark: '<svg viewBox="0 0 24 24"><path d="m4 20 3-1 10-10-2-2L5 17Z"/><path d="m14 6 2-2 4 4-2 2"/><path d="M4 21h8"/></svg>',
+    find: '<svg viewBox="0 0 24 24"><path d="M3 6h12"/><path d="M3 11h6"/><path d="M3 16h6"/><circle cx="16" cy="15" r="4"/><path d="m21 20-2.2-2.2"/></svg>',
+  };
+  const ITEMS = [["suggest", "Suggest highlights"], ["ask", "Ask"], ["note", "Note"], ["more", "Add more"], ["back", "Back"]]
+    .map(([key, label]) => ({ key, label, icon: ICON[key] }));
+  // chosen words: Explain, Highlight and Find in paper are Dot's options too (there is no separate popup)
+  const WORDS = [["explain", "Explain"], ["mark", "Highlight"], ["find", "Find in paper"], ["ask", "Ask"], ["note", "Note"], ["back", "Back"]]
+    .map(([key, label]) => ({ key, label, icon: ICON[key] }));
+
+  function setBox(el, r) {
+    const [x0, y0, x1, y1] = px(r);
+    el.style.cssText = `left:${x0 - 8}px;top:${y0 - 6}px;width:${x1 - x0 + 16}px;height:${y1 - y0 + 12}px`;
+  }
+  const blockAt = (cx, cy, slack = 4) => {
+    const box = pageBox.getBoundingClientRect(), lx = cx - box.left, ly = cy - box.top;
+    return blocks.filter((b) => { const [x0, y0, x1, y1] = px(b); return lx >= x0 - slack && lx <= x1 + slack && ly >= y0 - slack && ly <= y1 + slack; })
+      .sort((a, b) => (a[2] - a[0]) * (a[3] - a[1]) - (b[2] - b[0]) * (b[3] - b[1]))[0] ?? null; // the smallest box that holds the point
+  };
+  // the paragraph is free to click: not while Lens, the pen, the Map, a note or another job has Dot
+  const clickable = () => !v.hidden && !!v.vp && !job && !search.penning() && !search.isOpen() && !openMark
+    && !document.querySelector(".guide-card:not([hidden]), .dot-win, .mk-card, .hl-chip, .buddy.pen, .buddy.penning, .buddy.dragging, .buddy-opts, .buddy-pill");
+  const NOT_PAGE = ".mk-pin, .mk-card, .hl-chip, .buddy-opts, .guide-card, .pen-hint, .track-here";
+
+  pageBox.addEventListener("pointermove", (e) => {
+    if (!clickable() || e.target.closest?.(NOT_PAGE)) { near.hidden = true; return; }
+    const b = blockAt(e.clientX, e.clientY, 2);
+    if (!b) { near.hidden = true; return; }
+    setBox(near, b); near.hidden = false;
+  }, opt);
+  pageBox.addEventListener("pointerleave", () => { near.hidden = true; }, opt);
+
+  let down = null;
+  pageBox.addEventListener("pointerdown", (e) => { down = e.button === 0 ? { x: e.clientX, y: e.clientY, t: performance.now(), tgt: e.target } : null; });
+  pageBox.addEventListener("pointerup", (e) => {
+    const d = down; down = null;
+    if (!d || e.button !== 0 || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6 || performance.now() - d.t > 300) return;
+    if (d.tgt.closest?.(NOT_PAGE)) return;
+    const x = e.clientX, y = e.clientY;
+    setTimeout(() => { // a click leaves no selection; a double-click selects a word and is not ours
+      if (!getSelection().isCollapsed || !clickable()) return;
+      const hl = hlAt(x, y);
+      if (hl) showChip(hl, x, y); else paragraphMenu(x, y, blockAt(x, y));
+    }, 0);
+  });
+
+  // ----- the chosen box -----
+  function drawSel() {
+    if (!sel || sel.page !== v.page || !v.vp) { selBox.hidden = true; return; }
+    setBox(selBox, sel.blocks.reduce(union));
+    selBox.hidden = false;
+    selBox.querySelector("b").textContent = sel.blocks.length > 1 ? `+${sel.blocks.length - 1}` : "";
+    selBox.classList.toggle("more", sel.blocks.length > 1);
+  }
+  function clearSel() { sel = null; selBox.hidden = true; selBox.classList.remove("more", "grow"); }
+  const selection = () => {
+    if (!sel) return null;
+    const rect = rnd(sel.blocks.reduce(union));
+    return { page: sel.page, rect, text: textIn(rect).slice(0, 3000) };
+  };
+
+  // ----- Dot's options on a paragraph (or on the page, off any paragraph) -----
+  async function paragraphMenu(x, y, b) {
+    job = true; near.hidden = true;
+    sel = b ? { page: v.page, blocks: [b] } : null;
+    drawSel();
+    if (reducedMotion()) buddy.put(x + 36, y + 29); // no trailing: Dot appears where you clicked
+    try {
+      for (;;) {
+        const [cx, cy] = buddy.centre();
+        const pick = await buddy.options({ x: cx, y: cy, items: sel ? ITEMS : ITEMS.filter((i) => ["ask", "note", "back"].includes(i.key)) });
+        if (pick === "more") { await addMore(); continue; }
+        if (pick === "suggest") await suggestHere();
+        else if (pick === "ask" || pick === "note") await hooks[pick === "ask" ? "onAsk" : "onNote"]?.(selection(), { x: cx, y: cy });
+        break;
+      }
+    } finally { job = false; clearSel(); await buddy.shape("face"); }
+  }
+
+  // ----- Dot's options on chosen words: it is already beside the pointer, so the options come out of it there -----
+  async function wordsMenu(x, y) {
+    const sl = getSelection();
+    if (!textLayer || sl.isCollapsed || !sl.rangeCount || !textLayer.contains(sl.anchorNode) || !picked() || !clickable()) return;
+    const words = picked(), rects = selectionRects();
+    if (!rects.length) return;
+    const rr = sl.getRangeAt(0).getBoundingClientRect(), box = pageBox.getBoundingClientRect();
+    const area = toPoints(rr.left - box.left, rr.top - box.top, rr.right - box.left, rr.bottom - box.top);
+    const tight = rnd(rects.reduce(union));
+    job = true; near.hidden = true;
+    if (reducedMotion()) buddy.put(x + 36, y + 29); // no trailing: Dot appears where you let go
+    const [cx, cy] = buddy.centre();
+    let pick;
+    try { pick = await buddy.options({ x: cx, y: cy, items: WORDS }); } finally { job = false; }
+    if (pick === "mark") highlightSelection();
+    else if (pick === "explain") { clearPick(); await dotExplain(words, cx, cy, area); }
+    else if (pick === "find") { clearPick(); search.find(words); }
+    else if (pick === "ask" || pick === "note") { const at = { x: cx, y: cy }, chosen = { page: v.page, rect: tight, text: words.slice(0, 3000) }; clearPick(); await hooks[pick === "ask" ? "onAsk" : "onNote"]?.(chosen, at); }
+    else if (pick === "back") clearPick();
+  }
+
+  // ----- Add more: Dot squashes, rides the box's bottom edge, and the box grows over the next paragraph -----
+  async function addMore() {
+    const last = Math.max(...sel.blocks.map((q) => blocks.indexOf(q)));
+    const nx = blocks[last + 1];
+    if (!nx || sel.page !== v.page) { buddy.nudge(); return; } // nothing more on this page
+    await anim(async () => {
+      await buddy.shape("squash");
+      const box = pageBox.getBoundingClientRect();
+      const edge = (r) => { const [, , x1, y1] = px(r); return [Math.min(box.left + x1 - 10, innerWidth - 40), Math.min(box.top + y1 + 2, innerHeight - 40)]; };
+      await buddy.goTo(...edge(sel.blocks.reduce(union)), fast() ? 1 : 250);
+      sel.blocks.push(nx);
+      selBox.classList.remove("grow"); void selBox.offsetWidth;
+      drawSel(); selBox.classList.add("grow");
+      await buddy.goTo(...edge(sel.blocks.reduce(union)), fast() ? 1 : 550);
+      await buddy.shape("face");
+      if (!fast()) await buddy.wait(150);
+      selBox.classList.remove("grow");
+    });
+  }
+
+  // ----- saved highlights: yellow are yours, blue are Dot's suggestions -----
+  const strokeEl = (hl, r, from0 = false) => {
+    const [x0, y0, x1, y1] = px(r);
+    return h("i", { class: `hlk hlk-${hl.kind}`, style: `left:${x0 - 1}px;top:${y0 - 1}px;width:${from0 ? 0 : x1 - x0 + 2}px;height:${y1 - y0 + 2}px` });
+  };
+  function drawHl() {
+    hlLayer.replaceChildren(...hls.filter((x) => x.page === v.page && x.rects).flatMap((x) => x.rects.map((r) => strokeEl(x, r))));
+  }
+  function hlAt(cx, cy) {
+    const box = pageBox.getBoundingClientRect(), k = v.vp?.scale ?? 1, lx = (cx - box.left) / k, ly = (cy - box.top) / k;
+    return hls.findLast((x) => x.page === v.page && x.rects.some((r) => lx >= r[0] && lx <= r[2] && ly >= r[1] && ly <= r[3])) ?? null;
+  }
+  function closeChip() { chip?.remove(); chip = null; document.removeEventListener("pointerdown", chipOut, true); document.removeEventListener("keydown", chipKey, true); }
+  const chipOut = (e) => { if (!chip?.contains(e.target)) closeChip(); };
+  const chipKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); closeChip(); } };
+  function showChip(hl, x, y) {
+    closeChip();
+    const box = pageBox.getBoundingClientRect();
+    const btn = (label, fn) => h("button", { type: "button", class: "btn small-btn", onclick: () => { closeChip(); fn(); } }, label);
+    chip = h("div", { class: "hl-chip", role: "toolbar", "aria-label": hl.kind === "dot" ? "Dot's highlight" : "Your highlight",
+      style: `left:${Math.min(x - box.left, box.width - 170)}px;top:${y - box.top + 12}px` },
+      ...(hl.kind === "dot" ? [btn("Keep", async () => { const r = await api(`/papers/${paperId}/highlights/${hl.id}`, { method: "PUT" }).catch(() => null); if (r) { hl.kind = "me"; drawHl(); } })] : []),
+      btn("Remove", async () => { hls = hls.filter((q) => q !== hl); drawHl(); await api(`/papers/${paperId}/highlights/${hl.id}`, { method: "DELETE" }).catch(() => {}); }));
+    pageBox.append(chip);
+    chip.querySelector("button").focus({ preventScroll: true });
+    setTimeout(() => { document.addEventListener("pointerdown", chipOut, true); document.addEventListener("keydown", chipKey, true); }, 0);
+  }
+
+  // ----- Suggest highlights: Dot runs along the lines while the model picks, then inks each pick in blue -----
+  async function suggestHere() {
+    const s = selection();
+    if (!s) return;
+    await buddy.shape("marker");
+    const finger = readAlong(s.rect);
+    const r = await api(`/papers/${paperId}/highlights/suggest`, { method: "POST", body: JSON.stringify({ page: s.page, rect: s.rect }) })
+      .catch(() => ({ ok: false, error: "Could not ask the model. Is the app still running?" }));
+    finger.stop();
+    await buddy.shape("marker");
+    if (!r.ok) { buddy.say(r.error, { mood: "worried" }); return; }
+    if (!r.highlights.length) { buddy.say("Nothing here stood out to me."); return; }
+    await anim(async () => {
+      for (const hl of r.highlights) {
+        hls.push(hl);
+        for (const rect of hl.rects) { if (s.page !== v.page) break; await inkLine(hl, rect); }
+      }
+    });
+    drawHl();
+  }
+  async function inkLine(hl, rect) {
+    const [x0, , x1] = px(rect), box = pageBox.getBoundingClientRect(), full = x1 - x0 + 2;
+    const el = strokeEl(hl, rect, true);
+    hlLayer.append(el);
+    if (fast()) { el.style.width = `${full}px`; return; }
+    const top = box.top + px(rect)[1] - 14;
+    await buddy.goTo(box.left + x0, top, 160);
+    const ms = Math.max(250, full * 2.2);
+    el.style.transition = `width ${ms}ms linear`; void el.offsetWidth; el.style.width = `${full}px`;
+    await buddy.goTo(box.left + x1, top, ms);
+    el.style.transition = "none"; el.style.width = `${full}px`;
+  }
+
+  // ----- your own highlighter: select words, press Highlight -----
+  // the selection's line rectangles in PDF points: pieces on one line are joined, pieces in another column are not
+  function selectionRects() {
+    const sl = getSelection();
+    if (!sl.rangeCount || !v.vp) return [];
+    const box = pageBox.getBoundingClientRect(), k = v.vp.scale, W = v.vp.width / k, H = v.vp.height / k;
+    const raw = [...sl.getRangeAt(0).getClientRects()].filter((r) => r.width > 2 && r.height > 2)
+      .map((r) => [(r.left - box.left) / k, (r.top - box.top) / k, (r.right - box.left) / k, (r.bottom - box.top) / k]);
+    if (!raw.length) return [];
+    const med = raw.map((r) => r[3] - r[1]).sort((a, b) => a - b)[raw.length >> 1];
+    const lines = [];
+    for (const r of raw.filter((q) => q[3] - q[1] < med * 2.5).sort((a, b) => a[1] - b[1] || a[0] - b[0])) {
+      const l = lines.at(-1), hh = Math.min(r[3] - r[1], l ? l[3] - l[1] : 1e9);
+      if (l && Math.min(l[3], r[3]) - Math.max(l[1], r[1]) > 0.5 * hh && r[0] - l[2] < hh * 1.5) {
+        l[0] = Math.min(l[0], r[0]); l[1] = Math.min(l[1], r[1]); l[2] = Math.max(l[2], r[2]); l[3] = Math.max(l[3], r[3]);
+      } else lines.push([...r]);
+    }
+    return lines.map((r) => rnd([Math.max(0, r[0]), Math.max(0, r[1]), Math.min(W, r[2]), Math.min(H, r[3])])).filter((r) => r[0] < r[2] && r[1] < r[3]).slice(0, 60);
+  }
+  async function highlightSelection() {
+    const text = picked(), rects = selectionRects();
+    clearPick();
+    if (!rects.length) return;
+    const hl = { id: null, page: v.page, kind: "me", text, rects };
+    hls.push(hl); drawHl(); // yellow at once
+    const r = await api(`/papers/${paperId}/highlights`, { method: "POST", body: JSON.stringify({ page: hl.page, kind: "me", text, rects }) }).catch(() => null);
+    if (r) hl.id = r.id;
+    else { hls = hls.filter((q) => q !== hl); drawHl(); buddy.say("I could not save that highlight. Is the app still running?", { mood: "worried" }); }
+  }
+
   function go(n) {
     if (!v.doc) return;
     v.page = Math.min(v.doc.numPages, Math.max(1, Math.round(n) || v.page));
@@ -1238,7 +1460,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
 
   return {
-    el, setHidden, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
+    el, hooks, selection, setHidden, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
     destroy() { clearInterval(watchTimer); watchStop.abort(); buddy.tools(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },

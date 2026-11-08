@@ -255,8 +255,9 @@ const buddy = (() => {
     root.style.setProperty("--lean", `${Math.sign(x - cx) * 6}deg`);
     root.classList.add("moving");
     root.style.transform = `translate(${st.off.x}px, ${st.off.y}px)`;
-    await wait(ms);
+    const cut = await waitSkippable(ms); // a click may cut the trip short
     st.hold -= 1;
+    if (cut) root.style.setProperty("--trip", "1ms");
     root.classList.remove("moving");
   }
   function home() {
@@ -458,7 +459,12 @@ const buddy = (() => {
   // ---------- reading mode: follow the pointer, offer options, change shape, become the input ----------
   const FOLLOW = { dx: 16, dy: 14, k: 0.16 }; // the small Dot's corner trails the pointer, as in the mockup
   const pending = new Set(); // waits that a click may cut short
-  const waitSkippable = (ms) => new Promise((res) => { const t = setTimeout(done, ms); pending.add(done); function done() { clearTimeout(t); pending.delete(done); res(); } });
+  // resolves true when a click cut the wait short
+  const waitSkippable = (ms) => new Promise((res) => {
+    const t = setTimeout(() => done(false), ms), cut = () => done(true);
+    pending.add(cut);
+    function done(skipped) { clearTimeout(t); pending.delete(cut); res(skipped); }
+  });
   /** Cut every running shape change and spring short: they jump to their end state. */
   function skip() { [...pending].forEach((f) => f()); }
   const paused = () => !st.follow || reduced() || st.hold > 0 || st.ui > 0 || !mouse.in || drag?.on || face.matches(":hover")
@@ -507,7 +513,7 @@ const buddy = (() => {
     st.ui += 1;
     const wrap = document.createElement("div");
     wrap.className = "buddy-opts"; wrap.setAttribute("role", "menu");
-    const R = 58, n = items.length;
+    const n = items.length, R = n > 1 ? Math.max(58, Math.ceil(21 / Math.sin(Math.PI / (2 * (n - 1))))) : 58; // 38px buttons never overlap
     let over = false, resolve;
     const result = new Promise((r) => { resolve = r; });
     const finish = (key) => {
@@ -525,6 +531,7 @@ const buddy = (() => {
       b.innerHTML = `${it.icon || ""}<span></span>`; b.lastChild.textContent = it.label;
       const a = ((n === 1 ? -60 : -150 + (i * 180) / (n - 1)) * Math.PI) / 180;
       b.dataset.dx = Math.round(Math.cos(a) * R); b.dataset.dy = Math.round(Math.sin(a) * R);
+      b.addEventListener("mousedown", (e) => e.preventDefault()); // keep the chosen words selected
       b.addEventListener("click", (e) => { e.stopPropagation(); finish(it.key); });
       wrap.append(b); return b;
     });
@@ -593,6 +600,11 @@ const buddy = (() => {
     });
   }
 
+  /** put(x, y): Dot's centre is at (x, y) at once (no trailing with reduced motion: it appears where you clicked) */
+  function put(x, y) { root.style.transition = "none"; place(x, y); void root.offsetWidth; root.style.transition = ""; }
+  /** nudge(): a small shake, for "nothing more here" */
+  function nudge() { root.classList.remove("wobble"); void root.offsetWidth; root.classList.add("wobble"); setTimeout(() => root.classList.remove("wobble"), 480); }
+
   /** gulp(): Dot opens wide to swallow. burp(): the bounce after it spits. */
   async function gulp() { root.classList.add("gulp"); st.mood = "surprised"; draw(); if (reduced()) return; await waitSkippable(250); }
   async function burp() {
@@ -644,5 +656,5 @@ const buddy = (() => {
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
   return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, reading, open, format, draggable, tools: setTools,
-    follow: followMode, options, shape, prompt, gulp, burp, toolsOn, skip, centre, wait: waitSkippable };
+    follow: followMode, options, shape, prompt, gulp, burp, toolsOn, skip, centre, put, nudge, wait: waitSkippable };
 })();

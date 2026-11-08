@@ -427,9 +427,6 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: -1; cursor: default; user-select: none; }
 .textLayer .endOfContent.active { top: 0; }
 .is-circling .textLayer { pointer-events: none; }
-.sel-bubble[hidden] { display: none; }
-.sel-bubble { position: absolute; z-index: 5; display: flex; gap: 6px; padding: 6px; border-radius: 10px;
-  background: var(--sheet); border: 1px solid var(--rule); box-shadow: 0 12px 30px -12px rgb(30 32 35 / .45); }
 .pdf-hits i { position: absolute; background: rgb(255 227 71 / .55); mix-blend-mode: multiply; border-radius: 2px; animation: pop .25s cubic-bezier(.3,.7,.2,1) both; }
 .pdf-sheet canvas.pdf-ink { background: none; box-shadow: none; transition: opacity .45s; }
 .pdf-sheet .pdf-ink.fade { opacity: 0; }
@@ -958,14 +955,14 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
    follow without their own rules.
    device-ink #f4f4ef on #1c1d20 15.28; dim #b9bcc2 8.86; on raised #2a2c31 13.3 / 7.7
    ========================================================================== */
-.topbar, .rail, .pdf-tools, .cs-panel, .sel-bubble, .buddy-bubble {
+.topbar, .rail, .pdf-tools, .cs-panel, .buddy-bubble {
   --paper: #1c1d20; --sheet: #2a2c31; --ink: #f4f4ef; --pencil: #b9bcc2;
   --rule: #3b3e44; --rule-soft: #2e3035; --select: #34373c; --desk: #1c1d20;
   --dot: rgb(255 255 255 / .05); --green: #8ad6ac; --redpen: #ff9c87; --amber: #f0c25e;
   color-scheme: dark; color: var(--ink);
 }
 @media (prefers-color-scheme: dark) {
-  .topbar, .rail, .pdf-tools, .cs-panel, .sel-bubble { --paper: #17181b; --sheet: #26282c; --rule: #33363b; --rule-soft: #26282c; }
+  .topbar, .rail, .pdf-tools, .cs-panel { --paper: #17181b; --sheet: #26282c; --rule: #33363b; --rule-soft: #26282c; }
 }
 .topbar, .rail, .pdf-tools, .cs-panel, .buddy-bubble {
   background: var(--paper) radial-gradient(var(--dot) 1px, transparent 1.4px) 0 0 / 8px 8px;
@@ -1000,15 +997,14 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .rail-ring .arc { stroke: var(--marker); filter: drop-shadow(0 0 3px rgb(255 227 71 / .5)); }
 
 /* on the graphite, primary buttons are lit keys */
-.topbar .btn:not(.ghost), .pdf-tools .btn:not(.ghost), .cs-panel .btn:not(.ghost), .sel-bubble .btn:not(.ghost) {
+.topbar .btn:not(.ghost), .pdf-tools .btn:not(.ghost), .cs-panel .btn:not(.ghost) {
   background: var(--marker); border-color: var(--marker); color: var(--on-marker);
 }
 .topbar .btn.ghost:not([aria-pressed="true"]), .pdf-tools .btn.ghost:not([aria-pressed="true"]) { background: rgb(255 255 255 / .03); }
 .topbar .btn.ghost:not([aria-pressed="true"]):hover, .pdf-tools .btn.ghost:not([aria-pressed="true"]):hover { background: rgb(255 255 255 / .08); }
 
-/* the search panel and the selection bubble float like the Dot window */
+/* the search panel floats like the Dot window */
 .cs-panel { z-index: 5; border-color: rgb(255 255 255 / .1); box-shadow: 0 30px 70px -24px rgb(0 0 0 / .7); }
-.sel-bubble { background: #1f2023; border-color: rgb(255 255 255 / .12); }
 .cs-hit:hover, .cs-hit[aria-current], .cs-paper:hover { background: rgb(255 255 255 / .06); }
 .buddy-bubble { border-color: rgb(255 255 255 / .1); }
 
@@ -1157,3 +1153,29 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) { .drawer, .drawer.open { transition: none; } }
 .canvas-host { position: relative; min-width: 0; overflow: hidden; }
 .canvas-host[hidden] { display: none; }
+.buddy.wobble .buddy-face { animation: shake .45s ease-in-out 1; }
+@media (prefers-reduced-motion: reduce) { .buddy.wobble .buddy-face { animation: none; } }
+
+/* ---------- reading mode on the page: outline, chosen box, highlights ---------- */
+.hl-layer { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.hlk { position: absolute; border-radius: 3px; mix-blend-mode: multiply; }
+.hlk-me { background: rgb(255 227 71 / .6); }
+.hlk-dot { background: color-mix(in srgb, var(--dot-ink) 65%, transparent); }
+.sel-layer { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.p-near { position: absolute; border-radius: 6px; box-shadow: 0 0 0 2px rgb(255 227 71 / .9); transition: left .12s, top .12s, width .12s, height .12s; }
+.p-near[hidden], .sel-box[hidden] { display: none; }
+.sel-box { position: absolute; border: 2px solid var(--marker); border-radius: 8px; background: rgb(255 227 71 / .1);
+  transition: top .55s cubic-bezier(.3,1.25,.4,1), height .55s cubic-bezier(.3,1.25,.4,1), left .55s cubic-bezier(.3,1.25,.4,1), width .55s cubic-bezier(.3,1.25,.4,1); }
+.sel-box::after { content: ""; position: absolute; inset: -2px; border-radius: 8px; opacity: 0; pointer-events: none;
+  background: radial-gradient(var(--marker) 1.5px, transparent 2px) 0 0 / 9px 9px;
+  -webkit-mask: linear-gradient(to bottom, transparent, #000 50%, transparent) 0 -100% / 100% 200% no-repeat;
+  mask: linear-gradient(to bottom, transparent, #000 50%, transparent) 0 -100% / 100% 200% no-repeat; }
+.sel-box.grow::after { animation: pour .7s ease-out; }
+@keyframes pour { 0% { opacity: 1; -webkit-mask-position: 0 -100%; mask-position: 0 -100%; } 100% { opacity: 0; -webkit-mask-position: 0 200%; mask-position: 0 200%; } }
+.sel-box b { position: absolute; right: -10px; bottom: -12px; padding: 2px 7px; border-radius: 10px; background: var(--marker); color: var(--on-marker);
+  font: 700 12px/1.3 var(--sans); scale: 0; transition: scale .3s cubic-bezier(.3,1.6,.4,1); }
+.sel-box.more b { scale: 1; }
+.hl-chip { position: absolute; z-index: 6; display: flex; gap: 6px; padding: 6px; border-radius: 10px; background: #1f2023; border: 1px solid rgb(255 255 255 / .12);
+  box-shadow: 0 12px 28px -12px rgb(0 0 0 / .6); --ink: #f4f4ef; color: var(--ink); }
+.hl-chip .btn:not(.ghost) { background: #f4f4ef; color: #1f2023; border-color: transparent; }
+@media (prefers-reduced-motion: reduce) { .p-near, .sel-box, .sel-box b { transition: none; } .sel-box.grow::after { animation: none; } }
