@@ -20,13 +20,17 @@ function canvasPanel(host, paperId, pdf) {
   const cards = new Map(); // id -> { d: the card as the server has it, el }
   let links = [];          // [{ id, from_card, to_card }]
   const pan = { x: 0, y: 0 };
-  let opened = false, busy = false, skipped = false, locked = false, loaded = null, gone = false, holdThreads = false, raf = 0;
+  let opened = false, busy = false, asking = false, sweeper = null, skipped = false, locked = false, loaded = null, gone = false, holdThreads = false, raf = 0;
 
   // ----- what is on the page -----
   const board = h("div", { class: "cv-board" });
-  const empty = h("p", { class: "cv-empty", hidden: true }, "Nothing here yet. Ask Dot a question about the paper, or write a note.");
+  const hint = h("p", { class: "cv-hint" }, "Nothing here yet. Ask Dot a question about the paper, or write a note.");
+  const field = h("textarea", { class: "cv-note", rows: "3", placeholder: "Write a note", "aria-label": "Write a note", maxlength: "4000" });
+  const saveBtn = h("button", { type: "submit", class: "btn cv-save" }, "Save note");
+  const noteErr = h("p", { class: "cv-note-err", hidden: true, role: "status" });
+  const compose = h("form", { class: "cv-compose", hidden: true }, hint, field, h("div", { class: "cv-note-row" }, saveBtn), noteErr);
   const wave = h("div", { class: "cv-wave", "aria-hidden": "true" });
-  host.append(wave, empty, board);
+  host.append(wave, compose, board);
   host.inert = true;
   const fx = h("div", { class: "cv-fx", "aria-hidden": "true" }); // rings, crumbs and flying cards; above the page, below Dot
   document.body.append(fx);
@@ -47,7 +51,7 @@ function canvasPanel(host, paperId, pdf) {
   const fast = () => reduced() || skipped; // reduced motion, or a click cut this open or close short: everything goes to its end
   const play = (el, keys, o) => track(el.animate(keys, { fill: "both", ...o, duration: fast() ? 1 : o.duration, delay: fast() ? 0 : o.delay ?? 0 }));
   const snap = () => { view.classList.add("no-slide"); void view.offsetWidth; view.classList.remove("no-slide"); }; // the paper and canvas jump to where they are going
-  const skipAll = () => { if (!live.size && !busy) return; if (busy) { skipped = true; snap(); } [...live].forEach((a) => { try { a.finish(); } catch { /* already done */ } }); buddy.skip(); };
+  const skipAll = () => { if (!live.size && !busy && !asking) return; if (busy || asking) { skipped = true; snap(); } sweeper?.stop(); [...live].forEach((a) => { try { a.finish(); } catch { /* already done */ } }); buddy.skip(); };
   document.addEventListener("pointerdown", skipAll, true);
   const wait = (ms) => (fast() ? Promise.resolve() : buddy.wait(ms));
   const grab = (el, e) => { try { el.setPointerCapture(e.pointerId); } catch { /* the pointer is gone; the listeners are on the element anyway */ } };
@@ -56,13 +60,31 @@ function canvasPanel(host, paperId, pdf) {
   // ----- cards -----
   const linesOf = (r) => Math.max(1, Math.round((r[3] - r[1]) / 12));
   const face = () => h("i", { class: "cv-face", "aria-hidden": "true" });
+  const openTask = (d) => {
+    for (let i = (d.entries || []).length - 1; i >= 0; i--) {
+      const e = d.entries[i];
+      if (e.who === "dot") return null;
+      if (e.who === "me" && /(^|\n)\s*@ai\b/i.test(e.text)) return e.text.trim();
+    }
+    return null;
+  };
+  const jump = (d) => h("button", { type: "button", class: "cv-jump", onclick: (e) => { e.stopPropagation(); pdf.reveal(d.page, d.rect); } }, `Page ${d.page}`);
   function fill(c) {
     const d = c.d, body = c.el.querySelector(".cv-body");
     if (d.kind === "answer") body.replaceChildren(h("p", { class: "cv-q" }, d.question), ...buddy.format(d.text));
-    else if (d.kind === "source") body.replaceChildren(h("p", { class: "cv-where" }, `p. ${d.page}${d.rect ? ` \u00b7 from ${linesOf(d.rect)} lines` : ""}`), h("p", {}, d.text));
-    else if (d.entries.length) body.replaceChildren(...d.entries.map((e) => h("p", { class: `cv-line ${e.who}` }, e.who === "dot" ? face() : null, e.text)));
-    else body.replaceChildren(h("p", { class: "cv-line me" }, d.text));
-    c.el.setAttribute("aria-label", d.kind === "answer" ? `Answer: ${d.question}` : d.kind === "source" ? `Source, page ${d.page}. Press Enter to show it in the paper.` : "Note");
+    else if (d.kind === "source") body.replaceChildren(jump(d), h("p", {}, d.text));
+    else {
+      const task = openTask(d), taken = (d.entries || []).some((e) => e.who === "dot");
+      const status = task ? (c.fail || "Waiting for Dot.") : taken ? "Dot took this." : d.rect ? "" : "Not tied to a passage.";
+      body.replaceChildren(
+        ...(status ? [h("p", { class: "cv-status" }, status)] : []),
+        ...(d.rect ? [jump(d)] : []),
+        ...(d.entries.length ? d.entries.map((e) => h("p", { class: `cv-line ${e.who}` }, e.who === "dot" ? face() : null, e.text)) : [h("p", { class: "cv-line me" }, d.text)]));
+    }
+    c.el.classList.toggle("is-waiting", !!openTask(d));
+    c.el.classList.toggle("is-taken", !openTask(d) && (d.entries || []).some((e) => e.who === "dot"));
+    c.el.classList.toggle("has-place", !!(d.page && d.rect));
+    c.el.setAttribute("aria-label", d.kind === "answer" ? `Answer: ${d.question}. Press Enter to follow up.` : d.page && d.rect ? `Page ${d.page}. Click to show it in the paper.` : "Note");
   }
   function ensureEl(c) {
     if (c.el) return c.el;
@@ -70,7 +92,7 @@ function canvasPanel(host, paperId, pdf) {
     const x = h("button", { type: "button", class: "cv-x", "aria-label": "Put away", title: "Put away", onclick: (e) => { e.stopPropagation(); putAway(c); } }, "\u00d7");
     const handle = h("i", { class: "cv-handle", title: "Drag onto another card to link them", "aria-hidden": "true" });
     c.el = h("article", { class: `cv-card cv-${d.kind}`, "data-id": d.id, style: `left:${d.x}px;top:${d.y}px;width:${d.w}px`,
-      role: "group", ...(d.kind === "source" ? { tabindex: "0" } : {}) }, x, h("div", { class: "cv-body" }), handle);
+      role: "group", ...(d.kind !== "note" ? { tabindex: "0" } : {}) }, x, h("div", { class: "cv-body" }), handle);
     fill(c);
     wireCard(c, handle);
     return c.el;
@@ -107,16 +129,16 @@ function canvasPanel(host, paperId, pdf) {
         el.style.left = `${c.d.x}px`; el.style.top = `${c.d.y}px`;
         later();
       };
-      const up = () => {
+      const up = (ev) => {
         el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up);
         el.classList.remove("drag");
         if (moved) call(`/cards/${c.d.id}`, "PUT", { x: Math.round(c.d.x), y: Math.round(c.d.y) }).catch(() => {});
-        else if (c.d.kind === "source" && c.d.rect) pdf.reveal(c.d.page, c.d.rect);
+        else if (ev.type === "pointerup") activate(c, ev.clientX, ev.clientY);
       };
       el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
     });
     el.addEventListener("keydown", (e) => {
-      if (e.target === el && e.key === "Enter" && c.d.kind === "source" && c.d.rect) pdf.reveal(c.d.page, c.d.rect);
+      if (e.target === el && e.key === "Enter") activate(c);
     });
     el.addEventListener("contextmenu", (e) => { e.preventDefault(); menu(e.clientX, e.clientY, c); });
     // the handle on the right edge: drag it onto another card to link the two
@@ -256,6 +278,21 @@ function canvasPanel(host, paperId, pdf) {
     const c1 = side === "h" ? [p[0] + k, p[1]] : [p[0], p[1] + k], c2 = side === "h" ? [q[0] - k, q[1]] : [q[0], q[1] - k];
     return `M${p} C${c1} ${c2} ${q}`;
   }
+  // the thread curves out round the right side, so it does not run across the text of the cards between (a stack sits one under the other)
+  function around(a, b) {
+    const x = Math.max(a.x + a.w, b.x + b.w), ay = a.y + a.h / 2, by = b.y + b.h / 2, k = x + 56;
+    return `M${a.x + a.w},${ay} C${k},${ay} ${k},${by} ${b.x + b.w},${by}`;
+  }
+  const route = (a, b, ids) => (crosses(a, b, ids) ? around(a, b) : between(a, b));
+  function crosses(a, b, ids) {
+    const ac = [a.x + a.w / 2, a.y + a.h / 2], bc = [b.x + b.w / 2, b.y + b.h / 2];
+    const others = [...cards.values()].filter((o) => !ids.includes(o.d.id) && !o.d.hidden && !o.wait && o.el).map(box);
+    for (let i = 1; i < 12; i++) {
+      const x = ac[0] + (bc[0] - ac[0]) * i / 12, y = ac[1] + (bc[1] - ac[1]) * i / 12;
+      if (others.some((o) => x > o.x && x < o.x + o.w && y > o.y && y < o.y + o.h)) return true;
+    }
+    return false;
+  }
   function mkThread(key, cls) {
     const id = `cvm${paperId}-${maskN++}`;
     const path = sv("path", { class: `cv-thread ${cls}` });
@@ -289,10 +326,10 @@ function canvasPanel(host, paperId, pdf) {
     for (const [k, v] of Object.entries({ x: ox, y: oy, width: hb.width, height: hb.height })) clipRect.setAttribute(k, v);
     const specs = [], tags = [];
     for (const c of cards.values()) {
-      if (c.d.hidden) continue;
+      if (c.d.hidden || c.wait) continue;
       const p = c.d.parent != null ? cards.get(c.d.parent) : null;
-      if (p && !p.d.hidden) specs.push({ key: `p${c.d.id}`, cls: "cv-parent", grp: gIn, d: between(box(p), box(c)), cards: [p.d.id, c.d.id] });
-      if (c.d.kind === "source" && c.d.page && c.d.rect) {
+      if (p && !p.d.hidden && !p.wait) specs.push({ key: `p${c.d.id}`, cls: "cv-parent", grp: gIn, d: route(box(p), box(c), [p.d.id, c.d.id]), cards: [p.d.id, c.d.id] });
+      if ((c.d.kind === "source" || c.d.kind === "note") && c.d.page && c.d.rect) {
         const b = box(c), y0 = b.y + 16, r = pdf.toScreen(c.d.page, c.d.rect);
         if (r) { // that page is on screen: the thread reaches the paragraph
           const qx = r.right - vb.left + 4, qy = r.top + r.height / 2 - vb.top, k = Math.max(40, (b.x - qx) / 2);
@@ -305,7 +342,7 @@ function canvasPanel(host, paperId, pdf) {
     }
     for (const l of links) {
       const a = cards.get(l.from_card), b = cards.get(l.to_card);
-      if (a && b && !a.d.hidden && !b.d.hidden) specs.push({ key: `l${l.id}`, cls: "cv-link", grp: gIn, d: between(box(a), box(b)), cards: [a.d.id, b.d.id] });
+      if (a && b && !a.d.hidden && !b.d.hidden && !a.wait && !b.wait) specs.push({ key: `l${l.id}`, cls: "cv-link", grp: gIn, d: route(box(a), box(b), [a.d.id, b.d.id]), cards: [a.d.id, b.d.id] });
     }
     const seen = new Set();
     for (const s of specs) {
@@ -326,7 +363,32 @@ function canvasPanel(host, paperId, pdf) {
   }
 
   // ----- opening and closing -----
-  const updateEmpty = () => { empty.hidden = !opened || busy || [...cards.values()].some((c) => !c.d.hidden); };
+  const bareBoard = () => opened && !busy && ![...cards.values()].some((c) => !c.d.hidden);
+  const updateEmpty = () => {
+    compose.hidden = !opened || busy;
+    compose.classList.toggle("bare", bareBoard());
+    hint.hidden = !bareBoard();
+  };
+  let savingNote = false;
+  compose.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = field.value.trim();
+    if (!text) { noteErr.hidden = false; noteErr.textContent = "Write a note first."; field.focus(); return; }
+    if (savingNote) return;
+    savingNote = true; saveBtn.disabled = true; noteErr.hidden = true;
+    const spot = place(120);
+    const d = await call("/cards", "POST", { kind: "note", text: "", entries: [{ who: "me", text }], x: spot.x, y: spot.y, w: 260 }).catch(() => null);
+    savingNote = false; saveBtn.disabled = false;
+    if (!d) { noteErr.hidden = false; noteErr.textContent = "Could not save that note. Is the app still running?"; field.focus(); return; }
+    add(d);
+    field.value = "";
+    field.focus();
+    const made = cards.get(d.id);
+    if (made && openTask(made.d)) pickup(made);
+  });
+  field.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); compose.requestSubmit(); }
+  });
   const setTab = (on) => { tab.setAttribute("aria-expanded", String(on)); tab.classList.toggle("on", on); };
   const circle = (x, y, r) => `circle(${r}px at ${x}px ${y}px)`;
   const reach = (hb, x, y) => Math.ceil(Math.max(Math.hypot(x, y), Math.hypot(hb.width - x, y), Math.hypot(x, hb.height - y), Math.hypot(hb.width - x, hb.height - y))) + 4;
@@ -342,6 +404,7 @@ function canvasPanel(host, paperId, pdf) {
     links = r.links;
     for (const d of r.cards) { const c = { d, el: null }; cards.set(d.id, c); if (!d.hidden) board.append(ensureEl(c)); }
     updateEmpty(); redraw();
+    sweepTasks();
   }
   async function open(o = {}) {
     if (opened || busy || locked || gone) return;
@@ -404,9 +467,137 @@ function canvasPanel(host, paperId, pdf) {
   }
   const toggle = () => (opened ? close() : open());
 
+  // ----- Ask: Dot searches the page with its lens, then the answer's sources lift off the page onto cards -----
+  const setPan = (x, y) => { pan.x = x; pan.y = y; board.style.transform = `translate(${x}px,${y}px)`; redraw(); };
+  function panTo(nx, ny) {
+    const x0 = pan.x, y0 = pan.y;
+    if (Math.abs(nx - x0) < 1 && Math.abs(ny - y0) < 1) return Promise.resolve();
+    if (fast()) { setPan(nx, ny); return Promise.resolve(); }
+    return new Promise((done) => {
+      const t0 = performance.now();
+      const step = (t) => {
+        const k = Math.min(1, (t - t0) / 450), e = 1 - (1 - k) ** 3;
+        if (k < 1 && !skipped && !gone) { setPan(x0 + (nx - x0) * e, y0 + (ny - y0) * e); requestAnimationFrame(step); } else { setPan(nx, ny); done(); }
+      };
+      requestAnimationFrame(step);
+    });
+  }
+  // slide the canvas so a group of cards is on screen (the top first if it is too tall)
+  function showGroup(list) {
+    const W = host.clientWidth, H = host.clientHeight, m = 16;
+    const x0 = Math.min(...list.map((c) => c.d.x)), x1 = Math.max(...list.map((c) => c.d.x + c.d.w));
+    const y0 = Math.min(...list.map((c) => c.d.y)), y1 = Math.max(...list.map((c) => c.d.y + (c.el?.offsetHeight || 90)));
+    const fit = (lo, hi, p, size) => { let q = p; if (hi + q > size - m) q = size - m - hi; if (lo + q < m) q = m - lo; return q; };
+    return panTo(fit(x0, x1, pan.x, W), fit(y0, y1, pan.y, H));
+  }
+  const reveal = (c) => { c.wait = false; c.el.classList.remove("cv-wait"); };
+  const settle = (c) => c.el.getAnimations().forEach((a) => a.cancel());
+  async function pop(c) {
+    reveal(c); redraw(true);
+    await play(c.el, [{ opacity: 0, transform: "scale(.9)" }, { opacity: 1, transform: "scale(1)" }], { duration: 320, easing: "cubic-bezier(.3,.7,.2,1.2)" });
+    settle(c);
+  }
+  // the paragraph lights up, a copy of its words lifts off the page and shrinks into the card's place, and the gist card takes over
+  async function fly(c) {
+    const d = c.d, lf = fast() ? null : pdf.lift(d.page, d.rect);
+    if (!lf) return pop(c);
+    const off = pdf.light(d.page, d.rect);
+    fx.append(lf.el);
+    const cr = c.el.getBoundingClientRect(), r = lf.rect;
+    const k = Math.max(0.2, Math.min(1, cr.width / r.width));
+    const end = `translate(${cr.left + cr.width / 2 - (r.left + r.width / 2)}px,${cr.top + cr.height / 2 - (r.top + r.height / 2)}px) scale(${k})`;
+    await play(lf.el, [{ transform: "none", opacity: 1 }, { transform: end, opacity: 1, offset: 0.88 }, { transform: end, opacity: 0 }], { duration: 900, easing: "cubic-bezier(.3,.7,.2,1)" });
+    lf.el.remove(); off();
+    reveal(c); redraw(true); // the card is there now, so its thread draws itself
+    await play(c.el, [{ transform: "scale(1.05)" }, { transform: "scale(1)" }], { duration: 220 });
+    settle(c);
+  }
+  async function runAsk({ question, page, from = null, at = null }) {
+    if (asking || busy || gone) return;
+    asking = true; skipped = false;
+    buddy.hold(true); // Dot stays where the work is; it does not trail the pointer meanwhile
+    try {
+      if (!opened) await open();
+      if (!opened) return;
+      const p = at ?? place(380);
+      sweeper = pdf.sweep();
+      let r;
+      try { r = await call("/ask", "POST", { question, page, from_card: from, at: [Math.round(p.x), Math.round(p.y)] }); }
+      catch (e) { r = { ok: false, error: e.body?.detail?.errors?.question ?? "I could not reach the app. Is it still running?" }; }
+      sweeper.stop(); await sweeper.done; sweeper = null;
+      await buddy.shape("face");
+      if (!r.ok) { buddy.say(r.error, { mood: "worried" }); return; }
+      add(r.answer, { wait: true }); r.sources.forEach((d) => add(d, { wait: true }));
+      const mine = [r.answer, ...r.sources].map((d) => cards.get(d.id));
+      // the server only guesses how tall a card is: stack them again by their real heights, with a gap
+      let top = r.sources.length ? r.sources[0].y : r.answer.y;
+      for (const c of [...mine.slice(1), mine[0]]) {
+        if (!c.el) continue;
+        if (c.d.y !== top) { c.d.y = top; c.el.style.top = `${top}px`; call(`/cards/${c.d.id}`, "PUT", { y: top }).catch(() => {}); }
+        top += c.el.offsetHeight + 14;
+      }
+      redraw(true);
+      await showGroup(mine);
+      for (const c of mine.slice(1)) { if (c.d.rect && pdf.toScreen(c.d.page, c.d.rect)) await fly(c); else await pop(c); }
+      const a = mine[0];
+      reveal(a); redraw(true);
+      await play(a.el, [{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }], { duration: 380, easing: "cubic-bezier(.3,.7,.2,1)" });
+      settle(a);
+    } finally {
+      buddy.hold(false); sweeper?.stop(); sweeper = null; asking = false; skipped = false;
+      cards.forEach((c) => { if (c.wait) { reveal(c); } }); // if something broke half way, nothing stays hidden
+      redraw(true); buddy.shape("face");
+    }
+  }
+  // "Ask about this part": the words come from the selection (or the page, if none), the answer's cards from the model
+  async function ask(sel, at) {
+    if (asking || busy || locked || gone) return;
+    const q = await buddy.prompt({ x: at.x, y: at.y, placeholder: sel ? "Ask about this part..." : "Ask about this page..." });
+    if (q) await runAsk({ question: q, page: sel?.page ?? pdf.page() });
+  }
+  // click an answer or a source card: Dot offers a follow-up question that grows from it
+  async function followUp(c, x, y) {
+    if (asking || busy || gone) return;
+    const r = c.el.getBoundingClientRect();
+    const q = await buddy.prompt({ x: x ?? r.left + r.width / 2, y: y ?? r.top + r.height / 2, placeholder: "Follow up on this card..." });
+    if (!q) return;
+    await runAsk({ question: q, page: c.d.kind === "source" ? c.d.page : pdf.page(), from: c.d.id, at: { x: c.d.x + 60, y: c.d.y + (c.el.offsetHeight || 90) + 60 } });
+  }
+  function activate(c, x, y) {
+    if (c.d.page && c.d.rect) { pdf.reveal(c.d.page, c.d.rect); return; }
+    if (c.d.kind === "note") return;
+    followUp(c, x, y);
+  }
+  async function pickup(c) {
+    if (!c || c.picking || !openTask(c.d)) return;
+    c.picking = true; c.fail = ""; fill(c);
+    const r = await call(`/cards/${c.d.id}/pickup`, "POST").catch(() => null);
+    c.picking = false;
+    if (!r || r.ok === false) { c.fail = r?.error || "Dot could not take that yet. Is the app still running?"; fill(c); return; }
+    c.d = r.card; fill(c);
+    (r.sources || []).forEach((d) => add(d));
+    redraw(true);
+  }
+  function sweepTasks() { for (const c of cards.values()) if (c.d.kind === "note" && openTask(c.d)) pickup(c); }
+  const pins = h("div", { class: "cv-pins" });
+  pdf.el.append(pins);
+  function paintPins() {
+    pins.replaceChildren();
+    if (!opened) return;
+    const pane = pdf.el.getBoundingClientRect();
+    for (const c of cards.values()) {
+      if (c.d.hidden || !c.d.page || !c.d.rect) continue;
+      const r = pdf.toScreen(c.d.page, c.d.rect);
+      if (!r) continue;
+      pins.append(h("button", { type: "button", class: "cv-pin", title: "Show this note", "aria-label": `Note on page ${c.d.page}`,
+        style: `left:${r.right - pane.left + 6}px;top:${r.top - pane.top}px`,
+        onclick: () => { pdf.reveal(c.d.page, c.d.rect); showGroup([c]); } }));
+    }
+  }
+
   // dragging empty canvas pans it
   host.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || !opened || e.target.closest(".cv-card, .cv-menu, button, input, textarea")) return;
+    if (e.button !== 0 || !opened || e.target.closest(".cv-card, .cv-menu, .cv-compose, button, input, textarea")) return;
     const sx = e.clientX - pan.x, sy = e.clientY - pan.y;
     grab(host, e); host.classList.add("panning");
     const move = (ev) => { pan.x = ev.clientX - sx; pan.y = ev.clientY - sy; board.style.transform = `translate(${pan.x}px,${pan.y}px)`; later(); };
@@ -415,8 +606,8 @@ function canvasPanel(host, paperId, pdf) {
   });
 
   // a free spot near the top of what you can see, in canvas coordinates
-  function place() {
-    const w = 260, hgt = 130, vx = -pan.x + 24, vy = -pan.y + 24;
+  function place(hgt = 130) {
+    const w = 260, vx = -pan.x + 24, vy = -pan.y + 24;
     const used = [...cards.values()].filter((c) => !c.d.hidden).map((c) => ({ x: c.d.x, y: c.d.y, w: c.d.w, h: c.el?.offsetHeight || hgt }));
     const cols = Math.max(1, Math.floor((host.clientWidth - 24) / (w + 24)));
     for (let row = 0; row < 60; row++) for (let col = 0; col < cols; col++) {
@@ -425,11 +616,11 @@ function canvasPanel(host, paperId, pdf) {
     }
     return { x: Math.round(vx), y: Math.round(vy) };
   }
-  function add(d) {
+  function add(d, o = {}) {
     cards.get(d.id)?.el?.remove();
-    const c = { d, el: null };
+    const c = { d, el: null, wait: !!o.wait }; // wait: laid out but not shown yet (an answer's cards arrive one by one)
     cards.set(d.id, c);
-    if (!d.hidden) board.append(ensureEl(c));
+    if (!d.hidden) { const el = ensureEl(c); el.classList.toggle("cv-wait", c.wait); board.append(el); }
     updateEmpty(); redraw(true);
     return c.el;
   }
@@ -446,7 +637,7 @@ function canvasPanel(host, paperId, pdf) {
   loaded = load().then(() => { if (!gone && store.get() && !locked) { loaded = Promise.resolve(); open({ instant: true }); } });
 
   return {
-    open, close, toggle, isOpen: () => opened, add, place, el: host, redraw, lock, refresh, card: (id) => cards.get(id),
+    open, close, toggle, isOpen: () => opened, add, place, ask, followUp, el: host, redraw, lock, refresh, card: (id) => cards.get(id),
     destroy() {
       gone = true; closeMenu();
       document.removeEventListener("pointerdown", skipAll, true);
