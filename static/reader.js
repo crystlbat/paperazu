@@ -117,29 +117,39 @@ async function renderReader(paperId, startPage) {
   const canvasHost = h("section", { class: "canvas-host", "aria-label": "Canvas" });
   view.append(pdf.el, canvasHost, drawers.steps.el, drawers.notes.el);
   const canvas = canvasPanel(canvasHost, paperId, pdf);
+  pdf.hooks.onAsk = (s, at) => canvas.ask(s, at);
   const guide = guidedReading(paperId, pdf, (id) => { const st = fw.steps.find((x) => x.id === id); if (st && st !== current) open(st, false); },
     () => drawers.open("notes"));
+  const ico = (inner) => `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
   const dotTools = () => buddy.tools([
-    { name: "Lens", hint: "Highlight words, I explain", pick: () => pdf.lens(),
-      pic: ["..###....", ".#...#...", "#.....#..", "#.....#..", "#.....#..", ".#...#...", "..###.#..", ".......#.", "........#"] },
-    { name: "Map", hint: "I guide you through the paper", pick: () => guide.start(),
-      pic: ["......##.", ".....#..#", ".....#..#", "......##.", ".......#.", "...#.....", "..#......", ".#.......", "#........"] },
-    { name: pdf.watching() ? "Proactive: on" : "Proactive", hint: pdf.watching() ? "Turn off check-ins" : "I check in if you get stuck",
-      pick: () => { pdf.watch(!pdf.watching()); dotTools(); },
-      pic: [".........", "..#####..", ".#.....#.", "#..###..#", "#..###..#", "#..###..#", ".#.....#.", "..#####..", "........."] },
-    { name: "Canvas", hint: "Open or put away your cards", pick: () => (canvasHost.hidden ? buddy.say("The paper is closed for this step, so the canvas is too.") : canvas.toggle()),
-      pic: ["####.....", "#..#.....", "####.....", "...#.....", "...##....", "....#####", ".....#..#", ".....#..#", ".....####"] },
-    ...(pdf.watching() ? [{ name: "Clear trail", hint: "Forget which parts you read", pick: () => pdf.clearTrail(),
-      pic: [".........", "#.......#", ".#.....#.", "..#...#..", "...#.#...", "..#...#..", ".#.....#.", "#.......#", "........."] }] : []),
+    pdf.along()
+      ? { group: "With you", key: "home", name: "Go home", hint: "Back to my corner", color: "#ffe347", icon: ico('<path d="M14 4h6v6"/><path d="M20 4 11 13"/><circle class="fill" cx="7" cy="17" r="2.4"/>'), pick: () => pdf.tagAlong(false) }
+      : { group: "With you", key: "along", name: "Tag along", hint: "I follow you and help", color: "#8ecbff", icon: ico('<circle class="fill trail" cx="6" cy="16" r="2"/><circle class="fill lead" cx="15" cy="9" r="2.5"/>'), pick: () => pdf.tagAlong(true) },
+    { group: "With you", key: "watch", name: pdf.watching() ? "Proactive, on" : "Proactive", hint: pdf.watching() ? "Turn the check-ins off" : "I check in if you get stuck", color: "#7bd88f", on: pdf.watching(),
+      icon: ico('<rect class="eye fill" x="5" y="6" width="4" height="12" rx="2"/><rect class="eye fill" x="15" y="6" width="4" height="12" rx="2"/>'),
+      pick: () => { pdf.watch(!pdf.watching()); dotTools(); } },
+    ...(pdf.watching() ? [{ group: "With you", key: "clear", name: "Clear trail", hint: "Forget which parts you read", color: "#ff8a7e", icon: ico('<path d="M6 6l12 12M18 6 6 18"/>'), pick: () => pdf.clearTrail() }] : []),
+    { group: "On the page", key: "lens", name: "Lens", hint: "Highlight words, I explain", color: "#5ec8d8", icon: ico('<circle cx="10" cy="10" r="5.5"/><path d="m14.2 14.2 5 5"/>'), pick: () => pdf.lens() },
+    { group: "On the page", key: "guide", name: "Guide", hint: "I walk the paper with you", color: "#c6a0ff", icon: ico('<path class="route" d="M4 17c3 0 3-8 7-8s4 8 9 1"/><circle class="fill bug" cx="4" cy="17" r="2"/>'), pick: () => guide.start() },
+    { group: "On the page", key: "canvas", name: "Canvas", hint: "Open or put away your cards", color: "#ff9e7a", icon: ico('<rect class="card a" x="3" y="6" width="11" height="13" rx="2"/><rect class="card b" x="10" y="4" width="11" height="13" rx="2"/>'),
+      pick: () => (canvasHost.hidden ? buddy.say("The paper is closed for this step, so the canvas is too.") : canvas.toggle()) },
   ]);
   dotTools();
   open(current, !greeted.has("reader")); greeted.add("reader");
   if (ai.data.progress.state === "making") ai.make(); // it was started elsewhere; follow it here
-  buddy.follow(true); buddy.toolsOn("context"); // reading mode: Dot trails the pointer; right-click it for its tools
+  buddy.look(true); buddy.follow(false); buddy.toolsOn("click"); // reading mode: Dot rests in its corner (the Library's yellow circle); pull it out to tag along
+  pdf.hooks.onAlong = () => dotTools();
+  // at home Dot is quiet. It says one short line the first time, so you know it can come along.
+  const homeHint = setTimeout(() => {
+    try { if (localStorage.getItem("dot-home-hint")) return; localStorage.setItem("dot-home-hint", "1"); } catch { /* private window: say it each time */ }
+    if (!pdf.along()) buddy.say("Pull me out when you want me along.", { mood: "happy" });
+  }, 1500);
+  pdf.hooks.onCanvasChanged = () => canvas.refresh?.();
+  pdf.hooks.onNoteSaved = async (m) => { const ok = await plain.append(`Note, page ${m.page}: ${m.text}`); drawers.open("notes"); return ok; };
 
   // Saves (and retries) can finish after you leave; Dot only speaks while this Reader is open.
   const me = openReader = {
-    leave() { guide.stop(); timer.stop(); queue.flush(); plain.flush(); drawers.destroy(); canvas.destroy(); buddy.follow(false); buddy.toolsOn("click"); pdf.destroy(); },
+    leave() { guide.stop(); timer.stop(); queue.flush(); plain.flush(); drawers.destroy(); canvas.destroy(); clearTimeout(homeHint); buddy.follow(false); buddy.look(false); buddy.toolsOn("click"); pdf.destroy(); },
     flushOnExit() { queue.flushKeepalive(); plain.flush(true); },
   };
 }
@@ -184,11 +194,12 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
   const where = h("p", { class: "gd-where" });
   const look = h("ul", { class: "gd-look" });
   const back = h("button", { type: "button", class: "btn ghost small-btn", onclick: () => show(i - 1) }, "Back");
+  const home = h("button", { type: "button", class: "btn ghost small-btn", onclick: () => { stop(); pdf.tagAlong(false); } }, "Send Dot home");
   const next = h("button", { type: "button", class: "btn small-btn", onclick: () => show(i + 1) });
   const card = h("section", { class: "guide-card", hidden: true, "aria-label": "Guided reading", "aria-live": "polite" },
     h("div", { class: "gd-top" }, h("span", { class: "buddy-name" }, "Dot guides"), label,
       h("button", { type: "button", class: "buddy-x", "aria-label": "Stop guided reading", onclick: () => stop() }, "×")),
-    what, where, look, h("div", { class: "gd-actions" }, back, next));
+    what, where, look, h("div", { class: "gd-actions" }, back, next, home));
   pdf.el.append(card);
   buddy.draggable(card, card.querySelector(".gd-top"));
   const onKey = (e) => { if (e.key === "Escape" && on && !document.querySelector(".dot-win")) stop(); };
@@ -199,10 +210,19 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
     buddy.say("Just the paper now. Want me to guide you? I will take you to each part to read and tell you what to look for.",
       { mood: "happy", actions: [{ label: "Guide me", onClick: start }, { label: "Not now" }] });
   }
+  // The tour: abstract, then conclusion, then figures, then the other sections that matter. The local model picks those
+  // sections; if it cannot be reached the paper's own headings are used, in the same order.
   async function start() {
-    stops = stops ?? (await api(`/papers/${paperId}/guide`).catch(() => ({ stops: [] }))).stops;
-    if (!stops.length) return buddy.say("I could not find the parts of this paper to guide you through.", { mood: "worried" });
+    if (!stops) {
+      buddy.busy(1); buddy.say("Mapping the paper into stages", { mood: "think", sticky: true });
+      const r = await api(`/papers/${paperId}/guide/stages`, { method: "POST" }).catch(() => null);
+      buddy.busy(-1); buddy.hide();
+      stops = r?.stages ?? [];
+      if (r?.note) buddy.say(`${r.note} I used the paper's own headings instead.`, { mood: "worried" });
+    }
+    if (!stops.length) { stops = null; return buddy.say("I could not find the parts of this paper to guide you through.", { mood: "worried" }); }
     on = true; card.hidden = false;
+    buddy.hold(true); // Dot stays at each stage; it does not trail the pointer while it guides
     document.addEventListener("keydown", onKey);
     show(0);
   }
@@ -210,15 +230,14 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
     if (k >= stops.length) return finish();
     i = Math.max(0, k);
     const s = stops[i], my = ++live;
-    label.textContent = `${i + 1} of ${stops.length}`;
-    what.textContent = `Step ${s.n}, ${s.title}. About ${s.minutes} ${s.minutes === 1 ? "minute" : "minutes"}.`;
-    look.replaceChildren(...s.look_for.map((q) => h("li", {}, q)));
+    label.textContent = `Stage ${i + 1} of ${stops.length}`;
+    what.textContent = s.title;
+    look.replaceChildren(h("li", {}, s.why));
     back.disabled = i === 0;
-    next.textContent = i === stops.length - 1 ? "Finish" : "Next";
-    onStep(s.step_id);
+    next.textContent = i === stops.length - 1 ? "Finish" : "Next stage";
     const r = await pdf.point(s.heading, s.page);
     if (my !== live || !on) return;
-    where.textContent = r.found ? `Read "${s.heading}" on page ${s.page}.` : `Read page ${s.page}. Look for the ${s.look_in.slice(0, 2).join(" or ")}.`;
+    where.textContent = r.found ? `Go to "${s.heading}" on page ${s.page}.` : `Go to page ${s.page}.`;
     const stage = pdf.el.querySelector(".pdf-stage").getBoundingClientRect();
     const left = r.left - 64 > stage.left + 30; // hover in the margin left of the heading (clear of its number), or else to its right
     await buddy.goTo(left ? r.left - 64 : Math.min(r.left + r.w + 50, stage.right - 40), r.top + r.h / 2);
@@ -233,6 +252,7 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
     if (!on) return;
     on = false; live += 1; card.hidden = true; pdf.unmark();
     document.removeEventListener("keydown", onKey);
+    buddy.hold(false);
     buddy.goHome();
   }
   return { offer, stop, start: () => (on ? show(i) : start()) };
@@ -1049,7 +1069,10 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     search.startPen((words, x, y, area) => {
       endPen();
       if (words) return dotExplain(words, x, y, area && toPoints(...area));
-      buddy.goHome(); buddy.say("No words there. Pictures and scanned pages have no text to read.", { mood: "worried" });
+      buddy.goHome();
+      // only a picture or a scanned page has no words; on a page with text the circle just missed them
+      if (pageHasText()) buddy.say("Circle some words and I will explain them.");
+      else buddy.say("No words on this page. Pictures and scanned pages have no text to read.", { mood: "worried" });
     });
   }
   // Lens from Dot's menu: Dot flies to the paper first, then follows the pointer as a highlighter
@@ -1220,11 +1243,15 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     mark: '<svg viewBox="0 0 24 24"><path d="m4 20 3-1 10-10-2-2L5 17Z"/><path d="m14 6 2-2 4 4-2 2"/><path d="M4 21h8"/></svg>',
     find: '<svg viewBox="0 0 24 24"><path d="M3 6h12"/><path d="M3 11h6"/><path d="M3 16h6"/><circle cx="16" cy="15" r="4"/><path d="m21 20-2.2-2.2"/></svg>',
   };
-  const ITEMS = [["suggest", "Suggest highlights"], ["ask", "Ask"], ["note", "Note"], ["more", "Add more"], ["back", "Back"]]
-    .map(([key, label]) => ({ key, label, icon: ICON[key] }));
-  // chosen words: Explain, Highlight and Find in paper are Dot's options too (there is no separate popup)
-  const WORDS = [["explain", "Explain"], ["mark", "Highlight"], ["find", "Find in paper"], ["ask", "Ask"], ["note", "Note"], ["back", "Back"]]
-    .map(([key, label]) => ({ key, label, icon: ICON[key] }));
+  // Each tool is a coloured blob with its icon and its name. The longer line shows when you point at it.
+  const TOOL = { suggest: ["Suggest", "#8ecbff", "Mark the lines worth keeping"], ask: ["Ask", "#c6a0ff", "Ask me about this part"],
+    note: ["Note", "#ff9e7a", "Save a note on this part"], explain: ["Explain", "#7bd88f", "I say what this means"],
+    mark: ["Highlight", "#ffe347", "Mark these words in yellow"], find: ["Find", "#ff7ab8", "Find this in the paper"],
+    more: ["Add more", "#ffa86b", "Take in the next paragraph"], back: ["Back", "#c9cdd6", "Send me home"] };
+  const tools = (...keys) => keys.map((key) => ({ key, label: TOOL[key][0], color: TOOL[key][1], hint: TOOL[key][2], icon: ICON[key] }));
+  const PARA = tools("suggest", "ask", "note", "explain", "find", "more", "back"); // clicked paragraph
+  const WORDS = tools("explain", "mark", "find", "ask", "note", "back");            // chosen words (Highlight is your own highlighter)
+  const PAGE = tools("ask", "note", "find", "back");                                // clicked off any paragraph
 
   function setBox(el, r) {
     const [x0, y0, x1, y1] = px(r);
@@ -1236,7 +1263,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       .sort((a, b) => (a[2] - a[0]) * (a[3] - a[1]) - (b[2] - b[0]) * (b[3] - b[1]))[0] ?? null; // the smallest box that holds the point
   };
   // the paragraph is free to click: not while Lens, the pen, the Map, a note or another job has Dot
-  const clickable = () => !v.hidden && !!v.vp && !job && !search.penning() && !search.isOpen() && !openMark
+  const clickable = () => along && !v.hidden && !!v.vp && !job && !search.penning() && !search.isOpen() && !openMark
     && !document.querySelector(".guide-card:not([hidden]), .dot-win, .mk-card, .hl-chip, .buddy.pen, .buddy.penning, .buddy.dragging, .buddy-opts, .buddy-pill");
   const NOT_PAGE = ".mk-pin, .mk-card, .hl-chip, .buddy-opts, .guide-card, .pen-hint, .track-here";
 
@@ -1277,51 +1304,122 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     return { page: sel.page, rect, text: textIn(rect).slice(0, 3000) };
   };
 
-  // Dot comes to the click: reduced motion puts it there at once; otherwise a short walk if it is not already beside the pointer
-  async function toClick(x, y) {
-    if (reducedMotion()) { buddy.put(x + 36, y + 34); return; }
-    const [cx, cy] = buddy.centre();
-    if (Math.hypot(cx - x - 36, cy - y - 34) > 60) await buddy.goTo(x + 36, y + 34, 260);
+  // ----- tag along: Dot rests in its corner; you pull it out when you want it along, and send it home when you are done -----
+  let along = false;
+  function setAlong(on) {
+    if (along === on) return;
+    along = on; buddy.follow(on); near.hidden = true;
+    if (!on) { clearSel(); if (chip) closeChip(); }
+    hooks.onAlong?.(on);
+    if (on && !pageHasText()) buddy.say("No words on this page. Pictures and scanned pages have no text to read.", { mood: "worried" });
   }
+  buddy.tagAlong({ pull: () => setAlong(true), home: () => setAlong(false) });
+  // does the page that shows have words Dot can read? (a picture or a scanned page does not)
+  const pageHasText = () => !textLayer || [...textLayer.querySelectorAll("span")].some((sp) => sp.textContent.trim());
 
-  // ----- Dot's options on a paragraph (or on the page, off any paragraph) -----
+  // ----- where the buddies go: in clear space around Dot, never over the chosen words, as little over other words as possible -----
+  const clientRect = (r) => { const [x0, y0, x1, y1] = px(r), b = pageBox.getBoundingClientRect(); return [b.left + x0, b.top + y0, b.left + x1, b.top + y1]; };
+  function planBuddies(chosen, n, near) {
+    const vp = stage.getBoundingClientRect();
+    const toRight = (vp.right - chosen[2]) >= (chosen[0] - vp.left);
+    let dotX = toRight ? chosen[2] + 64 : chosen[0] - 64;
+    let dotY = (chosen[1] + chosen[3]) / 2;
+    dotX = Math.max(vp.left + 56, Math.min(vp.right - 56, dotX));
+    dotY = Math.max(vp.top + 72, Math.min(vp.bottom - 72, dotY));
+    // the face landed on the chosen words: sit just above them instead of locking a column down the page
+    if (dotX > chosen[0] - 8 && dotX < chosen[2] + 8 && dotY > chosen[1] && dotY < chosen[3]) dotY = Math.max(vp.top + 72, chosen[1] - 64);
+    const step = 0.42, span = Math.max(0, n - 1) * step, R = 112;
+    const mid = toRight ? -0.2 : Math.PI + 0.2;
+    const places = Array.from({ length: n }, (_, i) => {
+      const a = mid + (i - (n - 1) / 2) * (n > 1 ? span / (n - 1) : 0);
+      let x = dotX + Math.cos(a) * R, y = dotY + Math.sin(a) * R;
+      if (x > chosen[0] - 6 && x < chosen[2] + 6 && y > chosen[1] - 6 && y < chosen[3] + 6) x = toRight ? chosen[2] + 72 : chosen[0] - 72;
+      x = Math.max(vp.left + 70, Math.min(vp.right - 70, x));
+      y = Math.max(vp.top + 44, Math.min(vp.bottom - 56, y));
+      return [x, y];
+    });
+    return { x: dotX, y: dotY, a: mid, places, labelsRight: false };
+  }
+  // Dot walks to the spot the bloom grows from. It stays the round face.
+  async function attach(plan) {
+    if (reducedMotion()) { buddy.put(plan.x, plan.y); return; }
+    await buddy.goTo(plan.x, plan.y, 340);
+  }
+  // what a tool does with the chosen part ({ page, rect, text }) and where Dot is ({ x, y })
+  async function useTool(key, c, at) {
+    if (key === "back") return setAlong(false); // Back: the buddies go in, Dot goes home, tag-along ends
+    if (key === "mark") return highlightSelection();
+    if (key === "explain") { if (c.words) clearPick(); return dotExplain(c.text.slice(0, 600), at.x, at.y, c.area ?? c.rect); }
+    if (key === "find") { if (c.words) clearPick(); return search.find(c.text.split(/\s+/).slice(0, c.words ? 40 : 7).join(" ")); }
+    if (c.words) clearPick();
+    return (key === "ask" ? askHere : noteHere)(c, at);
+  }
+  async function askHere(c, at) {
+    try { if (hooks.onAsk) return await hooks.onAsk(c, at); } catch (e) { if (!(e instanceof TypeError)) throw e; } // the canvas Ask is not there yet: ask here
+    const q = await buddy.prompt({ x: at.x, y: at.y, placeholder: c.text ? "Ask about this part" : "Ask about this page" });
+    if (!q) return;
+    const post = (question) => api(`/papers/${paperId}/ask`, { method: "POST", body: JSON.stringify({ page: c.page, question: question.slice(0, 1000) }) });
+    const about = c.text ? ` (This is about the part I chose: "${c.text.slice(0, 300)}")` : "";
+    buddy.open({ x: at.x, y: at.y, quote: c.text ? c.text.slice(0, 300) : `Page ${c.page}`, area: el.getBoundingClientRect(), save: saveToNote,
+      first: post(q + about), ask: (q2) => post(q2) });
+  }
+  async function noteHere(c, at) {
+    try { if (hooks.onNote) return await hooks.onNote(c, at); } catch (e) { if (!(e instanceof TypeError)) throw e; }
+    const text = await buddy.prompt({ x: at.x, y: at.y, placeholder: "Write a note" });
+    if (!text) return;
+    if (!c.rect) { buddy.say("Pick a passage first, then I can pin the note there.", { mood: "worried" }); return; }
+    const r = await api(`/papers/${paperId}/marks`, { method: "POST", body: JSON.stringify({ page: c.page, rect: c.rect, text }) }).catch(() => null);
+    if (!r) { buddy.say("I could not save that note. Is the app still running?", { mood: "worried" }); return; }
+    marks.push(r);
+    drawMarks();
+    const saved = await hooks.onNoteSaved?.(r);
+    buddy.say(saved === false ? "The mark is on the page. Notes did not save. Is the app still running?" : "Saved. The mark on the page opens it.", { mood: saved === false ? "worried" : "happy" });
+  }
+  let noteN = 0;
+
+  // ----- the buddies on a paragraph (or on the page, off any paragraph) -----
   async function paragraphMenu(x, y, b) {
     job = true; near.hidden = true;
     sel = b ? { page: v.page, blocks: [b] } : null;
     drawSel();
     buddy.hold(true); // Dot stays with this paragraph until you are done
+    let caption = "", plan = null;
+    const spent = new Set();
     try {
-      await toClick(x, y);
       for (;;) {
+        const items = (sel ? PARA : PAGE).filter((i) => !spent.has(i.key));
+        plan ??= planBuddies(sel ? clientRect(sel.blocks.reduce(union)) : [x - 24, y - 24, x + 24, y + 24], items.length, [x, y]);
+        await attach(plan);
         const [cx, cy] = buddy.centre();
-        const pick = await buddy.options({ x: cx, y: cy, items: sel ? ITEMS : ITEMS.filter((i) => ["ask", "note", "back"].includes(i.key)) });
-        if (pick === "more") { await addMore(); continue; }
-        if (pick === "suggest") await suggestHere();
-        else if (pick === "ask" || pick === "note") await hooks[pick === "ask" ? "onAsk" : "onNote"]?.(selection(), { x: cx, y: cy });
+        const pick = await buddy.options({ x: cx, y: cy, angle: plan.a, places: plan.places, labelsRight: plan.labelsRight, items, caption });
+        caption = "";
+        if (pick === "more") { await addMore(); plan = null; continue; }
+        if (pick === "suggest") { caption = await suggestHere(); spent.add("suggest"); plan = { ...plan }; continue; }
+        const s = selection();
+        if (pick) await useTool(pick, s ?? { page: v.page, rect: null, text: "" }, { x: cx, y: cy });
         break;
       }
     } finally { job = false; clearSel(); buddy.hold(false); await buddy.shape("face"); }
   }
 
-  // ----- Dot's options on chosen words: it is already beside the pointer, so the options come out of it there -----
+  // ----- the buddies on chosen words -----
   async function wordsMenu(x, y) {
     const sl = getSelection();
-    if (!textLayer || sl.isCollapsed || !sl.rangeCount || !textLayer.contains(sl.anchorNode) || !picked() || !clickable()) return;
+    if (!along || !textLayer || sl.isCollapsed || !sl.rangeCount || !textLayer.contains(sl.anchorNode) || !picked() || !clickable()) return;
     const words = picked(), rects = selectionRects();
     if (!rects.length) return;
     const rr = sl.getRangeAt(0).getBoundingClientRect(), box = pageBox.getBoundingClientRect();
-    const area = toPoints(rr.left - box.left, rr.top - box.top, rr.right - box.left, rr.bottom - box.top);
-    const tight = rnd(rects.reduce(union));
+    const c = { page: v.page, rect: rnd(rects.reduce(union)), text: words, words: true, area: toPoints(rr.left - box.left, rr.top - box.top, rr.right - box.left, rr.bottom - box.top) };
     job = true; near.hidden = true;
-    await toClick(x, y);
-    const [cx, cy] = buddy.centre();
-    let pick;
-    try { pick = await buddy.options({ x: cx, y: cy, items: WORDS }); } finally { job = false; }
-    if (pick === "mark") highlightSelection();
-    else if (pick === "explain") { clearPick(); await dotExplain(words, cx, cy, area); }
-    else if (pick === "find") { clearPick(); search.find(words); }
-    else if (pick === "ask" || pick === "note") { const at = { x: cx, y: cy }, chosen = { page: v.page, rect: tight, text: words.slice(0, 3000) }; clearPick(); await hooks[pick === "ask" ? "onAsk" : "onNote"]?.(chosen, at); }
-    else if (pick === "back") clearPick();
+    buddy.hold(true);
+    let pick = null, at = { x, y };
+    try {
+      const plan = planBuddies([rr.left, rr.top, rr.right, rr.bottom], WORDS.length, [x, y]);
+      await attach(plan);
+      const [cx, cy] = buddy.centre(); at = { x: cx, y: cy };
+      pick = await buddy.options({ x: cx, y: cy, angle: plan.a, places: plan.places, labelsRight: plan.labelsRight, items: WORDS });
+    } finally { job = false; buddy.hold(false); await buddy.shape("face"); }
+    if (pick) await useTool(pick, c, at);
   }
 
   // ----- Add more: Dot squashes, rides the box's bottom edge, and the box grows over the next paragraph -----
@@ -1384,15 +1482,15 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   // ----- Suggest highlights: Dot runs along the lines while the model picks, then inks each pick in blue -----
   async function suggestHere() {
     const s = selection();
-    if (!s) return;
+    if (!s) return "";
     await buddy.shape("marker");
     const finger = readAlong(s.rect);
     const r = await api(`/papers/${paperId}/highlights/suggest`, { method: "POST", body: JSON.stringify({ page: s.page, rect: s.rect }) })
       .catch(() => ({ ok: false, error: "Could not ask the model. Is the app still running?" }));
     finger.stop();
     await buddy.shape("marker");
-    if (!r.ok) { buddy.say(r.error, { mood: "worried" }); return; }
-    if (!r.highlights.length) { buddy.say("Nothing here stood out to me."); return; }
+    if (!r.ok) return r.error; // said under Dot, so Dot stays with the paragraph
+    if (!r.highlights.length) return "Nothing here stood out to me.";
     await anim(async () => {
       for (const hl of r.highlights) {
         hls.push(hl);
@@ -1400,6 +1498,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       }
     });
     drawHl();
+    return `I marked ${r.highlights.length} ${r.highlights.length === 1 ? "spot" : "spots"} in blue.`;
   }
   async function inkLine(hl, rect) {
     const [x0, , x1] = px(rect), box = pageBox.getBoundingClientRect(), full = x1 - x0 + 2;
@@ -1444,6 +1543,41 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     else { hls = hls.filter((q) => q !== hl); drawHl(); buddy.say("I could not save that highlight. Is the app still running?", { mood: "worried" }); }
   }
 
+  // Ask: Dot sweeps the page with its lens, back and forth over the paragraphs, while the model works. { stop(), done }
+  function sweep() {
+    let on = true;
+    const done = (async () => {
+      await buddy.shape("lens");
+      if (reducedMotion()) return;
+      let dir = 1;
+      while (on) {
+        const t0 = performance.now(), s = stage.getBoundingClientRect(), box = pageBox.getBoundingClientRect();
+        const rows = blocks.map((b) => px(b)).map(([x0, y0, x1, y1]) => ({ x0: box.left + x0, x1: box.left + x1, y: box.top + (y0 + y1) / 2 }))
+          .filter((r) => r.y > s.top + 20 && r.y < s.bottom - 20).sort((a, b) => dir * (a.y - b.y));
+        for (const r of rows) {
+          if (!on) break;
+          await buddy.goTo(r.x0, r.y, 320);
+          if (!on) break;
+          await buddy.goTo(r.x1, r.y, 520);
+        }
+        dir = -dir;
+        if (performance.now() - t0 < 150) await new Promise((res) => setTimeout(res, 250)); // nothing to sweep, or clicks cut it short: do not spin
+      }
+    })();
+    return { stop() { on = false; }, done };
+  }
+  // A floating copy of the words inside a box, sitting exactly over them, so it can lift off the page.
+  // { el, rect } (el is fixed to the window; the caller adds it), or null when that page is not shown.
+  function lift(n, r) {
+    if (n !== v.page || !v.vp || v.hidden || !textLayer) return null;
+    const [x0, y0, x1, y1] = px(r), box = pageBox.getBoundingClientRect();
+    const copy = textLayer.cloneNode(true);
+    copy.removeAttribute("class"); copy.classList.add("textLayer", "lift-words");
+    copy.style.cssText += `;inset:auto;left:${-x0}px;top:${-y0}px;width:${box.width}px;height:${box.height}px`;
+    const el = h("div", { class: "lift", "aria-hidden": "true", style: `left:${box.left + x0}px;top:${box.top + y0}px;width:${x1 - x0}px;height:${y1 - y0}px` }, copy);
+    return { el, rect: new DOMRect(box.left + x0, box.top + y0, x1 - x0, y1 - y0) };
+  }
+
   function go(n) {
     if (!v.doc) return;
     v.page = Math.min(v.doc.numPages, Math.max(1, Math.round(n) || v.page));
@@ -1483,8 +1617,9 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
 
   return {
-    el, hooks, selection, setHidden,
+    el, hooks, selection, setHidden, along: () => along, tagAlong: setAlong,
     onView: (f) => { viewCb = f; },
+    sweep, lift,
     // a paragraph's box on screen, or null when that page is not shown or the box is scrolled out of sight
     toScreen(n, r) {
       if (n !== v.page || !v.vp || v.hidden) return null;
@@ -1501,7 +1636,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     }, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
-    destroy() { clearInterval(watchTimer); watchStop.abort(); buddy.tools(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
+    destroy() { clearInterval(watchTimer); watchStop.abort(); buddy.tools(null); buddy.tagAlong(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
   };
 }
 
