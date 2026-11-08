@@ -153,6 +153,45 @@ CREATE TABLE IF NOT EXISTS checks (
     result TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- creatures: a job is a trigger, a short chain of steps, and an output. A run is one time it worked.
+CREATE TABLE IF NOT EXISTS job_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    sections TEXT NOT NULL DEFAULT '[]'   -- JSON [{title, ask}]
+);
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    color INTEGER NOT NULL DEFAULT 0,
+    trigger TEXT NOT NULL DEFAULT 'manual',
+    every INTEGER NOT NULL DEFAULT 120,
+    output TEXT NOT NULL DEFAULT 'doc',
+    papers TEXT NOT NULL DEFAULT '[]',    -- JSON paper ids; [] = whichever paper is open
+    template_id INTEGER REFERENCES job_templates(id) ON DELETE SET NULL,
+    steps TEXT NOT NULL DEFAULT '[]',     -- JSON [{scope, prompt, model}]
+    awake INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS job_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER,
+    job_name TEXT NOT NULL,
+    paper_id TEXT NOT NULL,
+    paper TEXT NOT NULL DEFAULT '',
+    paper_ids TEXT NOT NULL DEFAULT '[]', -- the papers this run actually reads
+    page INTEGER,
+    selection TEXT NOT NULL DEFAULT '',
+    output TEXT NOT NULL DEFAULT 'doc',
+    steps TEXT NOT NULL DEFAULT '[]',     -- copied at queue time, so an edit does not change a run already waiting
+    template_json TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'queued',
+    done INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 1,
+    label TEXT NOT NULL DEFAULT '',
+    result TEXT NOT NULL DEFAULT '{}',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
 """
 
 

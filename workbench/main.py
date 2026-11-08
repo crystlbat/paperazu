@@ -16,7 +16,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from . import canvas, checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, sections, settings, shelf, themes, websearch
+from . import canvas, checker, db, export, guide, jobs, marks, framework, graph, library, llm, notes, primer, sections, settings, shelf, themes, websearch
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -28,6 +28,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     db.init()
     library.pick_missing_templates()
     primer.reset_stale()
+    jobs.start()
     yield
 
 
@@ -766,6 +767,118 @@ def library_web(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
 @app.get("/model/status")
 def model_status() -> dict[str, Any]:
     return llm.model_status(settings.get_all())
+
+
+def _checked(model: Any, body: dict[str, Any]) -> Any:
+    try:
+        return model.model_validate(body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": jobs.errors(e)})
+
+
+def _reject(e: jobs.Reject) -> HTTPException:
+    return HTTPException(422, detail={"errors": [{"field": e.field, "message": e.message}]})
+
+
+@app.get("/jobs")
+def get_jobs() -> dict[str, Any]:
+    return jobs.list_jobs()
+
+
+@app.post("/jobs", status_code=201)
+def post_job(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        return jobs.create_job(_checked(jobs.JobIn, body))
+    except jobs.Reject as e:
+        raise _reject(e)
+
+
+@app.post("/jobs/starters")
+def post_starters() -> dict[str, Any]:
+    return jobs.starters()
+
+
+@app.put("/jobs/{job_id}")
+def put_job(job_id: int, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        return jobs.update_job(job_id, _checked(jobs.JobIn, body))
+    except jobs.Reject as e:
+        raise _reject(e)
+    except KeyError:
+        raise HTTPException(404, detail="That creature is gone.")
+
+
+@app.delete("/jobs/{job_id}")
+def remove_job(job_id: int) -> dict[str, bool]:
+    if not jobs.delete_job(job_id):
+        raise HTTPException(404, detail="That creature is gone.")
+    return {"ok": True}
+
+
+@app.post("/jobs/{job_id}/run")
+def run_job(job_id: int, response: Response, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        run, created = jobs.enqueue(job_id, _checked(jobs.RunIn, body))
+    except jobs.Reject as e:
+        raise _reject(e)
+    except jobs.QueueFull:
+        raise HTTPException(429, detail="Too many jobs waiting.")
+    response.status_code = 201 if created else 200
+    return run
+
+
+@app.get("/templates")
+def get_templates() -> dict[str, Any]:
+    return jobs.list_templates()
+
+
+@app.post("/templates", status_code=201)
+def post_template(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    return jobs.create_template(_checked(jobs.TemplateIn, body))
+
+
+@app.put("/templates/{template_id}")
+def put_template(template_id: int, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        return jobs.update_template(template_id, _checked(jobs.TemplateIn, body))
+    except KeyError:
+        raise HTTPException(404, detail="That shape is gone.")
+
+
+@app.delete("/templates/{template_id}")
+def remove_template(template_id: int) -> dict[str, bool]:
+    if not jobs.delete_template(template_id):
+        raise HTTPException(404, detail="That shape is gone.")
+    return {"ok": True}
+
+
+@app.get("/runs")
+def get_runs(limit: int = Query(30, ge=1, le=100)) -> dict[str, Any]:
+    return jobs.list_runs(limit)
+
+
+@app.get("/runs/{run_id}")
+def get_run(run_id: int) -> dict[str, Any]:
+    run = jobs.get_run(run_id)
+    if not run:
+        raise HTTPException(404, detail="That run is gone.")
+    return run
+
+
+@app.post("/runs/{run_id}/stop")
+def stop_run(run_id: int) -> dict[str, Any]:
+    run = jobs.stop(run_id)
+    if not run:
+        raise HTTPException(404, detail="That run is gone.")
+    return run
+
+
+@app.post("/dot/talk")
+def dot_talk(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        return jobs.talk(body.get("messages") or [])
+    except RuntimeError as e:
+        raise HTTPException(502, detail=str(e))
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

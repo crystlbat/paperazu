@@ -188,11 +188,19 @@ def _strip_thinking(text: str) -> str | None:
     return None if "<think>" in text else text.strip()
 
 
-def paper_text(s: Settings, pages: list[str], page: int, overhead: str) -> tuple[str, list[int]]:
+_WINDOW = re.compile(r"exceeds the (\d+)-token context window")
+
+
+def paper_text(s: Settings, pages: list[str], page: int, overhead: str, limit: int | None = None) -> tuple[str, list[int]]:
     """The paper as page-labelled text: every page if it fits the context budget, else the pages
-    nearest `page` (0-based). Returns the text and the page indexes used."""
-    budget = (s.max_context_tokens - s.max_output_tokens
-              - context.tokens(overhead) - 64 * len(pages) - 200)
+    nearest `page` (0-based). `limit` is the window the server just said it actually has.
+    Returns the text and the page indexes used."""
+    if limit is None:
+        budget = (s.max_context_tokens - s.max_output_tokens
+                  - context.tokens(overhead) - 64 * len(pages) - 200)
+    else:
+        out = min(s.max_output_tokens, max(64, limit // 4))
+        budget = limit - out - context.tokens(overhead) - 64
     keep = context.fit_pages(pages, budget, page) if pages else []
     room = int(budget * context.CHARS_PER_TOKEN)
     return "\n\n".join(f"--- Page {i + 1} ---\n{pages[i].strip()}" for i in keep)[:max(room, 0)], keep
@@ -264,11 +272,12 @@ ASK_SYSTEM = (
 
 
 def _answer(s: Settings, system: str, question: str, title: str, pages: list[str], page: int,
-            image: str | None = None) -> dict[str, Any]:
+            image: str | None = None, limit: int | None = None) -> dict[str, Any]:
     """One question to the local model with the paper (or what fits) as context. `page` is 0-based.
-    `image` is a data: URL sent with the question; if the server will not take images, it asks again without."""
+    `image` is a data: URL sent with the question; if the server will not take images, it asks again without.
+    `limit` is the context window from a "message too long" reply, used for one shorter try."""
     page = min(max(page, 0), max(len(pages) - 1, 0))
-    paper, keep = paper_text(s, pages, page, system + question + title)
+    paper, keep = paper_text(s, pages, page, system + question + title, limit)
     start = time.perf_counter()
     prompt = f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\n{question}"
     content: Any = [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": image}}] if image else prompt
@@ -280,9 +289,12 @@ def _answer(s: Settings, system: str, question: str, title: str, pages: list[str
                 max_tokens=s.max_output_tokens, temperature=s.temperature, extra_body=NO_THINK,
             )
         except APIStatusError as e:
+            found = _WINDOW.search(e.message or "")
+            if found and limit is None:  # the loaded window is smaller than the setting; ask again with less of the paper
+                return _answer(s, system, question, title, pages, page, image, limit=int(found.group(1)))
             if not image or e.status_code not in (400, 415, 422, 500, 501):
                 raise
-            return _answer(s, system, question, title, pages, page)  # a text-only model: ask without the picture
+            return _answer(s, system, question, title, pages, page, limit=limit)  # a text-only model: ask without the picture
     except AuthenticationError:
         return {"ok": False, "error": "Wrong API key. Check it in Settings."}
     except APIConnectionError:

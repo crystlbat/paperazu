@@ -7,159 +7,12 @@
 const CR_TRIGGER = { manual: "Only when I press Run", open: "When I open a paper", page: "When I turn a page",
   dwell: "When I stay on a page", highlight: "When I highlight something", timer: "Every few minutes while I read" };
 const CR_OUTPUT = { doc: "A document to read here", say: "Dot tells me", ask: "Dot asks me a question",
-  card: "A card on the canvas", highlight: "Dot highlights lines" };
+  card: "A card on the canvas", highlight: "Dot highlights lines", note: "Saved in the paper's note" };
 const CR_SCOPE = { page: "The page I'm on", selection: "What I highlighted", paper: "The whole paper (all papers)",
-  each_paper: "Each paper in turn", sections: "Each section in turn", template: "Each template heading",
-  prev: "Only the step before" };
+  each_paper: "Each paper in turn", sections: "Each section in turn", references: "The reference list",
+  template: "Each template heading", prev: "Only the step before" };
 const CR_SUGGEST = ["Make a detailed outline of the paper", "Rewrite each section simply", "Quiz me when I stay on a page",
   "Compare my papers on their methods"];
-
-const STARTER_TEMPLATES = [
-  { name: "Research brief", sections: [
-    { title: "The question", ask: "What question does this work answer, and why does it matter? Two short paragraphs." },
-    { title: "What they did", ask: "Describe the method step by step, in plain words, with the key design choices." },
-    { title: "What they found", ask: "List the main results with their numbers, and what each one means." },
-    { title: "Limits", ask: "What does this not show? Note weak spots, assumptions, and missing tests." },
-    { title: "Open questions", ask: "Write five questions a curious student could follow up on." }] },
-  { name: "Comparison", sections: [
-    { title: "The problem each tackles", ask: "For each paper, say in one or two sentences what problem it tackles." },
-    { title: "Methods side by side", ask: "Compare how the papers approach the problem. A short table, then what differs." },
-    { title: "Results side by side", ask: "Compare their results and the evidence behind them." },
-    { title: "Where they disagree", ask: "Where do the papers disagree or contradict each other?" },
-    { title: "Gaps", ask: "What do none of them cover? Suggest a next study." }] },
-];
-const STARTER_JOBS = [
-  { name: "Detailed outline", color: 0, trigger: "manual", every: 120, output: "doc", papers: [], template: "", steps: [
-    { scope: "paper", prompt: "List the sections of this paper and, for each, the one question it answers. Short lines.", model: "" },
-    { scope: "sections", prompt: "Write a detailed outline of this section: its claim, how they show it, the key numbers, and any terms a student must know. Nested bullet points, plain English.", model: "" }] },
-  { name: "Simplified version", color: 2, trigger: "manual", every: 120, output: "doc", papers: [], template: "", steps: [
-    { scope: "sections", prompt: "Rewrite this section for a first-year student: short sentences, everyday words, one small example. Keep every idea; explain jargon the first time.", model: "" }] },
-  { name: "Research brief", color: 3, trigger: "manual", every: 120, output: "doc", papers: [], template: "Research brief", steps: [
-    { scope: "template", prompt: "Answer this heading from the paper. Be thorough and specific; quote numbers.", model: "" }] },
-  { name: "Compare papers", color: 1, trigger: "manual", every: 120, output: "doc", papers: [], template: "Comparison", steps: [
-    { scope: "each_paper", prompt: "Summarise this paper's problem, method, data and results in ten bullet points.", model: "" },
-    { scope: "template", prompt: "Using the summaries, answer this heading across all the papers.", model: "" }] },
-  { name: "Quiz me", color: 4, trigger: "dwell", every: 180, output: "ask", papers: [], template: "", steps: [
-    { scope: "page", prompt: "Ask one short question that checks I understood the main idea of this page. Only the question.", model: "" }] },
-  { name: "Explain my highlights", color: 5, trigger: "highlight", every: 120, output: "card", papers: [], template: "", steps: [
-    { scope: "selection", prompt: "Explain these words in two plain sentences, and say why they matter in this paper.", model: "" }] },
-];
-
-// ---------- STAND-IN: a browser-only backend so the screen works before the real routes exist ----------
-// shortcut: fakes progress and writes placeholder text; delete this block once GET /jobs answers (see docs/creatures-api.md).
-const crLocal = (() => {
-  const KEY = "creatures-local";
-  let d;
-  try { d = JSON.parse(localStorage.getItem(KEY)); } catch { d = null; }
-  d = d || { jobs: [], templates: [], runs: [], next: 1 };
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(d)); } catch {} };
-  const now = () => new Date().toISOString().slice(0, 19).replace("T", " ");
-  const bad = (field, message) => Object.assign(new Error("422"), { status: 422, body: { detail: { errors: [{ field, message }] } } });
-  const check = (j) => {
-    if (!j.name?.trim()) throw bad("name", "Give it a name.");
-    if (!j.steps?.length) throw bad("steps", "Add at least one step.");
-    j.steps.forEach((s, i) => { if ((s.prompt || "").trim().length < 3) throw bad(`steps.${i}.prompt`, `Step ${i + 1} needs an instruction.`); });
-  };
-  const plan = (job, run) => {  // the labels a real run would walk through
-    const tpl = d.templates.find((t) => t.id === job.template_id);
-    return job.steps.flatMap((s) => s.scope === "sections" ? ["Introduction", "Method", "Results", "Discussion"]
-      : s.scope === "template" ? (tpl?.sections.map((x) => x.title) || ["Template"])
-      : s.scope === "each_paper" ? (job.papers.length ? job.papers : [run.paper_id]).map((_, i) => `Paper ${i + 1}`)
-      : [CR_SCOPE[s.scope]]);
-  };
-  function tick() {  // one creature at a time
-    let r = d.runs.find((x) => x.status === "running");
-    if (!r) { r = d.runs.filter((x) => x.status === "queued").sort((a, b) => a.id - b.id)[0]; if (!r) return; r.status = "running"; }
-    const job = d.jobs.find((j) => j.id === r.job_id);
-    const steps = job ? plan(job, r) : ["?"];
-    r.total = steps.length; r.done = Math.min(r.done + 1, r.total); r.label = steps[Math.min(r.done, r.total - 1)];
-    if (r.done >= r.total) {
-      const last = job.steps[job.steps.length - 1];
-      const secs = ["sections", "template", "each_paper"].includes(last.scope) ? plan({ ...job, steps: [last] }, r) : [];
-      r.status = "done"; r.finished_at = now(); r.label = "done";
-      r.result = { text: "Stand-in text. Once the backend is built, this is what your model wrote.",
-        sections: secs.map((t) => [t, `Stand-in text for "${t}". The real run sends this heading and the paper to the model you picked.`]) };
-    }
-    save();
-  }
-  function starters() {
-    for (const t of STARTER_TEMPLATES) if (!d.templates.some((x) => x.name === t.name)) d.templates.push({ ...structuredClone(t), id: d.next++ });
-    for (const j of STARTER_JOBS) if (!d.jobs.some((x) => x.name === j.name)) {
-      const { template, ...rest } = structuredClone(j);
-      d.jobs.push({ ...rest, on: true, id: d.next++, template_id: d.templates.find((t) => t.name === template)?.id ?? null });
-    }
-    save();
-  }
-  function talk(messages) {  // guesses a job from keywords; the real one asks the model
-    const said = messages.filter((m) => m.role === "user").pop()?.content || "";
-    const w = said.toLowerCase();
-    const job = { name: said.split(/\s+/).slice(0, 3).join(" ").replace(/^./, (c) => c.toUpperCase()) || "New job", color: 6,
-      trigger: "manual", every: 120, output: "doc", papers: [], template_id: null, on: true,
-      steps: [{ scope: "sections", prompt: said, model: "" }] };
-    if (/quiz|question|test me/.test(w)) Object.assign(job, { trigger: "dwell", every: 180, output: "ask", steps: [{ scope: "page", prompt: said, model: "" }] });
-    else if (/highlight|mark/.test(w)) Object.assign(job, { trigger: "page", output: "highlight", steps: [{ scope: "page", prompt: said, model: "" }] });
-    else if (/compar|across|papers/.test(w)) {
-      const t = d.templates.find((x) => x.name === "Comparison");
-      Object.assign(job, { template_id: t?.id ?? null, steps: [{ scope: "each_paper", prompt: "Summarise this paper in ten bullet points.", model: "" },
-        { scope: "template", prompt: said, model: "" }] });
-    } else if (/outline|plan/.test(w)) job.steps.unshift({ scope: "paper", prompt: "List the sections and the question each answers.", model: "" });
-    if (said.trim().length < 6) return { reply: "Tell me what you want done while you read, and I will turn it into a creature.", job: null };
-    return { reply: "Here is a creature for that. I am the stand-in Dot, so check the steps before you hatch it.", job };
-  }
-  async function call(path, opts = {}) {
-    const m = (opts.method || "GET").toUpperCase();
-    const body = opts.body ? JSON.parse(opts.body) : {};
-    const [p, q] = path.split("?");
-    let x;
-    if (p === "/jobs" && m === "GET") return { jobs: d.jobs };
-    if (p === "/jobs/starters") { starters(); return { jobs: d.jobs }; }
-    if (p === "/jobs" && m === "POST") { check(body); x = { ...body, id: d.next++ }; d.jobs.push(x); save(); return x; }
-    if ((x = p.match(/^\/jobs\/(\d+)$/))) {
-      const i = d.jobs.findIndex((j) => j.id === +x[1]);
-      if (i < 0) throw Object.assign(new Error("404"), { status: 404, body: {} });
-      if (m === "DELETE") { d.jobs.splice(i, 1); save(); return { ok: true }; }
-      check(body); d.jobs[i] = { ...body, id: +x[1] }; save(); return d.jobs[i];
-    }
-    if ((x = p.match(/^\/jobs\/(\d+)\/run$/))) {
-      const job = d.jobs.find((j) => j.id === +x[1]);
-      const pid = body.paper_id || job.papers[0];
-      if (!pid) throw bad("paper_id", "Pick a paper to run it on.");
-      const dup = d.runs.find((r) => r.job_id === job.id && r.paper_id === pid && ["queued", "running"].includes(r.status));
-      if (dup) return dup;
-      if (d.runs.filter((r) => r.status === "queued").length >= 20) throw Object.assign(new Error("429"), { status: 429, body: { detail: "Too many jobs waiting." } });
-      const r = { id: d.next++, job_id: job.id, job: job.name, paper_id: pid, paper: body.paper || "", status: "queued",
-        done: 0, total: 1, label: "", result: {}, error: "", created_at: now(), finished_at: null };
-      d.runs.push(r); save(); return r;
-    }
-    if (p === "/runs") {
-      tick();
-      const limit = +(new URLSearchParams(q).get("limit") || 30);
-      return { runs: [...d.runs].sort((a, b) => b.id - a.id).slice(0, limit), parallel: 1,
-        queued: d.runs.filter((r) => r.status === "queued").length };
-    }
-    if ((x = p.match(/^\/runs\/(\d+)$/))) { tick(); return d.runs.find((y) => y.id === +x[1]) || null; }
-    if ((x = p.match(/^\/runs\/(\d+)\/stop$/))) {
-      const r = d.runs.find((y) => y.id === +x[1]);
-      if (r && ["queued", "running"].includes(r.status)) { r.status = "stopped"; r.finished_at = now(); save(); }
-      return r;
-    }
-    if (p === "/templates" && m === "GET") return { templates: d.templates };
-    if (p === "/templates" && m === "POST") {
-      if (!body.name?.trim()) throw bad("name", "Give the template a name.");
-      x = { ...body, id: d.next++ }; d.templates.push(x); save(); return x;
-    }
-    if ((x = p.match(/^\/templates\/(\d+)$/))) {
-      const i = d.templates.findIndex((t) => t.id === +x[1]);
-      if (m === "DELETE") { d.templates.splice(i, 1); d.jobs.forEach((j) => { if (j.template_id === +x[1]) j.template_id = null; }); save(); return { ok: true }; }
-      if (!body.name?.trim()) throw bad("name", "Give the template a name.");
-      d.templates[i] = { ...body, id: +x[1] }; save(); return d.templates[i];
-    }
-    if (p === "/dot/talk") return talk(body.messages || []);
-    throw Object.assign(new Error("404"), { status: 404, body: {} });
-  }
-  return { call };
-})();
-// ---------- end STAND-IN ----------
 
 // ---------- creatures at work while you read ----------
 // The Reader calls crWatch when a paper opens. Every awake creature that reads this paper (or "the paper I'm reading")
@@ -191,6 +44,9 @@ function crWatch(paperId, pdf, canvas) {
     const at = () => { const w = innerWidth, hgt = innerHeight; return { x: w - 340, y: hgt - 140 }; };
     if (j.output === "doc") {
       buddy.say(`${j.name} made you something.`, { mood: "happy", actions: [{ label: "Read it", href: "#creatures" }] });
+    } else if (j.output === "note") {
+      buddy.say(text ? `${j.name} saved the papers in your note.` : `${j.name} found no papers to save.`,
+        { mood: text ? "happy" : "idle", actions: text ? [{ label: "Open the paper", href: `#read/${paperId}` }] : [] });
     } else if (j.output === "highlight") {
       await pdf.reloadHighlights?.();
       const n = res.highlights?.length || 0;
@@ -287,12 +143,7 @@ function crWatch(paperId, pdf, canvas) {
   return { chip, stop() { stopped = true; closeBubble(); bubble.remove(); timers.forEach(clearInterval); dwells.forEach(clearTimeout); pdf.hooks.onPage = pdf.hooks.onHighlight = null; } };
 }
 
-let crMode = null; // "server" once GET /jobs answers, else "local"
 async function crApi(path, opts) {
-  if (!crMode) {
-    try { await api("/jobs"); crMode = "server"; } catch (e) { crMode = e.status === 404 || e.status === 405 ? "local" : "server"; }
-  }
-  if (crMode === "local") return crLocal.call(path, opts);
   return api(path, opts);
 }
 const crPost = (path, body, method = "POST") => crApi(path, { method, body: JSON.stringify(body) });
@@ -311,6 +162,7 @@ function crSelect(options, value, attrs = {}) {
 
 // short words for the chips on a step: what it reads
 const CR_READS = { page: "this page", selection: "my highlight", paper: "the whole paper", each_paper: "each paper",
+  references: "the reference list",
   sections: "each section", template: "each heading", prev: "the step before" };
 const CR_WAKE = { manual: "When I press Run", open: "I open a paper", page: "I turn a page", dwell: "I stay on a page",
   highlight: "I highlight", timer: "Every few minutes" };
@@ -320,8 +172,9 @@ const CR_OUT_ICON = {
   say: '<svg viewBox="0 0 24 24"><circle cx="8" cy="12" r="1.6" class="fill"/><circle cx="12" cy="12" r="1.6" class="fill"/><circle cx="16" cy="12" r="1.6" class="fill"/></svg>',
   ask: '<svg viewBox="0 0 24 24"><path d="M9 9a3 3 0 1 1 4 2.8c-.8.4-1 1-1 2.2"/><circle cx="12" cy="18" r="1.2" class="fill"/></svg>',
   highlight: '<svg viewBox="0 0 24 24"><path d="M4 17h16" stroke-width="5" opacity=".5"/><path d="M14 4l5 5-8 8H6v-5z"/></svg>',
+  note: '<svg viewBox="0 0 24 24"><path d="M6 4h12v16H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>',
 };
-const CR_OUT_SHORT = { doc: "A document", card: "A canvas card", say: "Dot tells me", ask: "Dot asks me", highlight: "Highlights" };
+const CR_OUT_SHORT = { doc: "A document", card: "A canvas card", say: "Dot tells me", ask: "Dot asks me", highlight: "Highlights", note: "Your note" };
 function crIcon(svg) { const s = h("span", { class: "ico", "aria-hidden": "true" }); s.innerHTML = svg; return s; }
 // a creature's body: the same little Dot, in its own colour, with feet and a mouth
 function crBody(extra = "") {
@@ -334,23 +187,23 @@ async function renderCreatures() {
     sel: null, edit: null, shape: null, tab: "talk", doc: null, talk: [], draft: null, sending: false };
   const errs = (e) => e?.body?.detail?.errors?.map((x) => x.message).join(" ")
     || (typeof e?.body?.detail === "string" ? e.body.detail : "") || "That did not work. Try again.";
-  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const alive = () => view.classList.contains("page-creatures");
 
   // ----- layout -----
   const meter = h("p", { class: "cr-meter", role: "status" });
-  const mode = h("span", { class: "cr-mode", hidden: true }, "Stand-in");
   const pen = h("div", { class: "cr-pen", role: "list", "aria-label": "Your creatures" });
   const bench = h("div", { class: "cr-bench", hidden: true });
-  const habitat = h("div", { class: "cr-habitat" }, pen, bench);
+  const habitat = h("div", { class: "cr-habitat" }, pen);
   const tabs = h("div", { class: "cr-tabs", role: "tablist" });
   const panel = h("div", { class: "cr-panel" });
-  view.append(h("section", { class: "cr" },
+  const side = h("aside", { class: "cr-side" }, bench, tabs, panel);
+  const root = h("section", { class: "cr" },
     h("header", { class: "cr-head" },
-      h("div", {}, h("h1", {}, "Creatures ", mode),
-        h("p", { class: "cr-sub" }, "Each one reads your papers and leaves you something. Pick one to change it, or tell Dot about a new one.")),
-      meter),
-    h("div", { class: "cr-body" }, habitat, h("aside", { class: "cr-side" }, tabs, panel))));
+      h("div", {}, h("h1", {}, "Creatures"),
+        h("p", { class: "cr-sub" }, "Circle one to teach it. The plate shows what it reads, the steps, and what it leaves you."),
+        meter)),
+    h("div", { class: "cr-body" }, habitat, side));
+  view.append(root);
 
   // ----- data -----
   async function load() {
@@ -360,8 +213,6 @@ async function renderCreatures() {
     if (!j.jobs.length && !t.templates.length) { await crApi("/jobs/starters", { method: "POST" }); return load(); }
     Object.assign(st, { jobs: j.jobs, templates: t.templates, runs: r.runs, parallel: r.parallel ?? 1, queued: r.queued ?? 0,
       papers: p.papers || [] });
-    mode.hidden = crMode !== "local";
-    mode.title = "The backend for creatures is not built yet. Runs here are pretend and stay in this browser.";
   }
   async function refreshRuns() {
     const r = await crApi("/runs?limit=30");
@@ -398,24 +249,13 @@ async function renderCreatures() {
     const b = h("button", { type: "button", class: "crt", role: "listitem", onclick: () => { hop(b); openBench(job.id); } },
       crBody(), h("span", { class: "ring" }), h("span", { class: "prop", "aria-hidden": "true" }),
       h("span", { class: "zz", "aria-hidden": "true" }, h("i", {}, "z"), h("i", {}, "z"), h("i", {}, "z")),
-      h("span", { class: "nm" }), h("span", { class: "stt" }));
+      h("span", { class: "code" }), h("span", { class: "nm" }), h("span", { class: "stt" }));
     return b;
   }
   const egg = h("button", { type: "button", class: "crt crt-egg", onclick: () => { hop(egg); openBench(null); } },
-    h("span", { class: "cbod" }, "+"), h("span", { class: "nm" }, "New creature"), h("span", { class: "stt" }, "Build one, or tell Dot"));
+    h("span", { class: "cbod" }, "+"), h("span", { class: "code" }, "New"), h("span", { class: "nm" }, "New creature"), h("span", { class: "stt" }, "Build one, or tell Dot"));
   function hop(b) { b.classList.remove("hop"); void b.offsetWidth; b.classList.add("hop"); }
-  function place(b, x, y) { b.style.left = `${x}px`; b.style.top = `${y}px`; b.x = x; b.y = y; }
-  function layout() {  // a loose grid of homes, each a little off so the pen does not look like a table
-    const W = Math.max(pen.clientWidth, 480), cols = Math.max(2, Math.floor((W - 40) / 190)), cw = (W - 40) / cols;
-    [...st.jobs.map((j) => els.get(j.id)), egg].forEach((b, i) => {
-      if (!b) return;
-      const jit = (k) => ((i * 7919 + k * 104729) % 37) - 18;
-      b.home = [20 + (i % cols) * cw + cw / 2 + jit(1), 40 + Math.floor(i / cols) * 200 + jit(2)];
-      if (b.x == null) { b.style.transition = "none"; requestAnimationFrame(() => requestAnimationFrame(() => { b.style.transition = ""; })); }
-      place(b, ...b.home);
-    });
-    pen.style.minHeight = `${Math.ceil((st.jobs.length + 1) / cols) * 200 + 80}px`;
-  }
+  function layout() {}
   function drawPen() {
     const working = st.runs.filter((r) => r.status === "running").length;
     meter.replaceChildren(h("b", {}, `${working} working`), ` · ${st.queued} waiting · `,
@@ -436,6 +276,7 @@ async function renderCreatures() {
       b.style.setProperty("--i", i);
       b.style.setProperty("--p", state === "working" && r.total ? r.done / r.total : 0);
       b.setAttribute("aria-label", `${job.name}: ${line}`);
+      b.querySelector(".code").textContent = `C-${String(i + 1).padStart(2, "0")}`;
       b.querySelector(".nm").textContent = job.name;
       b.querySelector(".stt").textContent = line;
     });
@@ -443,19 +284,6 @@ async function renderCreatures() {
     if (!egg.isConnected) { pen.append(egg); added = true; }
     if (added) layout();
   }
-  // wander: idle creatures stroll around their home now and then
-  const wander = setInterval(() => {
-    if (!alive()) { clearInterval(wander); return; }
-    if (reduce || pen.hidden) return;
-    for (const b of els.values()) {
-      if (!["idle", "done"].includes(b.dataset.state) || Math.random() < 0.55 || !b.home) continue;
-      const nx = b.home[0] + (Math.random() * 2 - 1) * 60, ny = b.home[1] + (Math.random() * 2 - 1) * 26;
-      b.classList.toggle("flip", nx < b.x);
-      b.classList.add("walk");
-      place(b, nx, ny);
-      clearTimeout(b.wt); b.wt = setTimeout(() => b.classList.remove("walk"), 2300);
-    }
-  }, 2800);
   // eyes follow the pointer
   let look = 0;
   habitat.addEventListener("pointermove", (e) => {
@@ -483,14 +311,14 @@ async function renderCreatures() {
     const r = id && lastRun(st.edit);
     if (r?.status === "done" && st.edit.output === "doc" && !crSeen().has(r.id)) { crMarkSeen(r.id); st.doc = r; st.tab = "runs"; }
     else if (id) { st.tab = "runs"; st.doc = null; }
-    pen.hidden = true; bench.hidden = false;
+    bench.hidden = false;
     drawBench(); drawPen(); drawTabs(); drawPanel();
-    habitat.scrollTop = 0;
+    side.scrollTop = 0;
   }
   function closeBench() {
     st.sel = null; st.edit = null; st.shape = null;
-    bench.hidden = true; pen.hidden = false;
-    drawPen(); layout(); drawPanel();
+    bench.hidden = true;
+    drawPen(); drawPanel();
   }
   let big = null;
   function paintBig() {
@@ -546,16 +374,23 @@ async function renderCreatures() {
     const brains = { "": "usual brain", ...Object.fromEntries(st.models.map((m) => [m, m.split("/").pop().replace(/-GGUF$/i, "")])) };
     function drawSteps() {
       steps.replaceChildren(...j.steps.map((s, i) => {
-        const say = h("textarea", { rows: 2, maxlength: 4000, placeholder: i ? "Then what?" : "What should I do?", "aria-label": `Step ${i + 1}`,
+        const say = h("textarea", { rows: 3, maxlength: 4000, placeholder: i ? "Then what?" : "What should I do?", "aria-label": `Step ${i + 1}`,
           onfocus: () => big.classList.add("listen"), onblur: () => big.classList.remove("listen"),
-          oninput: () => { s.prompt = say.value; say.style.height = "auto"; say.style.height = `${say.scrollHeight}px`; } });
+          oninput: () => {
+            s.prompt = say.value;
+            say.style.height = "auto";
+            say.style.height = `${say.scrollHeight}px`;
+            say.closest("li").classList.toggle("wait", !say.value.trim());
+          } });
         say.value = s.prompt;
         requestAnimationFrame(() => { say.style.height = `${say.scrollHeight}px`; });
         const reads = crSelect(CR_READS, s.scope, { class: "cr-pill", "aria-label": `Step ${i + 1} reads`, onchange: () => { s.scope = reads.value; } });
         const brain = crSelect(brains, s.model, { class: "cr-pill", "aria-label": `Step ${i + 1} model`, onchange: () => { s.model = brain.value; } });
         if (s.model && !st.models.includes(s.model)) brain.append(h("option", { value: s.model, selected: true }, s.model));
-        return h("li", {},
-          h("div", { class: "cr-pills" }, h("span", {}, i ? "then reads" : "reads"), reads, h("span", {}, "with"), brain,
+        return h("li", { class: s.prompt.trim() ? "" : "wait" },
+          h("div", { class: "cr-pills" },
+            h("span", { class: "beat" }, String(i + 1)),
+            reads, brain,
             j.steps.length > 1 ? h("button", { type: "button", class: "x", "aria-label": `Forget step ${i + 1}`, onclick: () => { j.steps.splice(i, 1); drawSteps(); } }, "×") : null),
           say);
       }));
@@ -565,7 +400,8 @@ async function renderCreatures() {
       if (j.steps.length >= 8) return;
       j.steps.push({ scope: "prev", prompt: "", model: "" }); drawSteps(); steps.lastChild.querySelector("textarea").focus(); nod();
     } }, "+ then…");
-    const meSlot = h("div", { class: "slot slot-me" }, big, name, h("div", { class: "cr-row center" }, colors, awake), steps, teach);
+    const meSlot = h("div", { class: "slot slot-me" }, big, h("div", { class: "cr-who" }, name, h("div", { class: "cr-row" }, colors, awake)));
+    const stepSlot = h("div", { class: "slot slot-steps" }, h("h3", {}, "Steps"), steps, teach);
 
     // what it leaves you
     const outSlot = h("div", { class: "slot slot-out" });
@@ -611,10 +447,9 @@ async function renderCreatures() {
     }
     drawOut();
 
-    const arrow = () => h("div", { class: "cr-arrow", "aria-hidden": "true" }, h("i"));
     bench.replaceChildren(
       h("div", { class: "cr-benchtop" }, h("button", { type: "button", class: "cr-back", onclick: closeBench }, "← All creatures")),
-      h("div", { class: "cr-flow" }, inSlot, arrow(), meSlot, arrow(), outSlot),
+      h("div", { class: "cr-flow" }, meSlot, stepSlot, inSlot, outSlot),
       h("div", { class: "cr-benchbar" }, msg,
         j.id ? h("button", { type: "button", class: "cr-link danger", onclick: () => deleteJob(j) }, "Let it go") : null,
         runOn,

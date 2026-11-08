@@ -1,9 +1,7 @@
 # Creatures: the backend the screen expects
 
-The Creatures page (`#creatures`, `static/creatures.js`) is built. Until these routes exist it runs on a stand-in kept in
-the browser (`localStorage["creatures-local"]`) and labels itself "Stand-in". Once `GET /jobs` answers 200 the page uses
-the real routes and the stand-in is never touched. Delete the stand-in block in `creatures.js` (marked `STAND-IN`) once
-the backend is done.
+The Creatures page (`#creatures`, `static/creatures.js`) calls these routes. `GET /jobs` answering 200 is how the page
+knows this backend is the one it should use.
 
 A **creature** is a job: a trigger, a short chain of steps, and an output. A **template** is the skeleton of a document a
 job fills in, one heading at a time (deep-research style). Jobs run on one paper, or across several.
@@ -73,7 +71,7 @@ off while Dot sleeps.
 
 ## Starters (`POST /jobs/starters`)
 
-The stand-in in `creatures.js` (`STARTER_JOBS`, `STARTER_TEMPLATES`) has the exact names, prompts and sections; copy them.
+`STARTER_JOBS` and `STARTER_TEMPLATES` in `workbench/jobs.py` are those creatures. A name already saved is left as it is.
 Detailed outline, Simplified version, Research brief (template), Compare papers (each_paper then template), Quiz me on
 the page (dwell, ask), Explain what I highlight (highlight, card).
 
