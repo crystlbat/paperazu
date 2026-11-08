@@ -135,6 +135,20 @@ Steps:
 
 The server never acts. The page shows the reply, raises the papers, and runs the helpers.
 
+**Answers across papers (added during the build, at the user's ask).** Ask also answers questions from the text of the papers, not just finds them. This is the `answer` kind.
+- **Two levels of search.**
+  - Level one picks the papers whose best passage scores well: the top 6, with a floor just under the usual auto-pick score.
+  - Level two takes up to 3 passages from each of those papers, kept only when within 0.1 of that paper's best. At most 10 passages go in, each cut to 650 letters.
+- **Citations.** The model sees the passages as `S1 (P3, p. 4): text` and cites them like `[S2]`. The server keeps only real citations and renumbers them `[1]`, `[2]` in the order they are used. Each source comes back as `{n, paper_id, page, text}`.
+- **On the page.** The source papers rise with a "[n] p. X" line each.
+
+**Persona (added during the build, at the user's ask).**
+- A Persona blob opens the field so you can type who Dot should be, in up to 300 letters.
+- It is saved as `dot_persona` in Settings and added to the Ask system prompt.
+- "Back to my usual self" clears it.
+
+**While chatting, nothing fully fades.** Papers that were not fetched stay on screen at 38% opacity, and Dot stays near the middle instead of moving up.
+
 ### What helpers can do
 
 All of these run in the page, through endpoints that exist today, one paper after another:
