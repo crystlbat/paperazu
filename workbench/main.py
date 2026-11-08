@@ -463,6 +463,31 @@ def canvas_ask(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any
     return out
 
 
+class CanvasSayIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("text")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Write something first.")
+        return v
+
+
+@app.post("/papers/{paper_id}/canvas/cards/{cid}/say")
+def canvas_say(paper_id: str, cid: int, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """A line in a note. If it is meant for Dot, Dot's answer is added to the same note."""
+    try:
+        req = CanvasSayIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    out = canvas.say(settings.get_all(), paper_id, cid, req.text)
+    if out is None:
+        raise HTTPException(404, detail="This card is not there.")
+    return out
+
+
 @app.post("/papers/{paper_id}/canvas/links")
 def add_link(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     try:

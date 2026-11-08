@@ -194,3 +194,42 @@ def ask(s: Any, paper_id: str, question: str, page: int, from_card: int | None, 
     cards = [add_card(paper_id, CardIn(kind="source", text=src["gist"], x=x, y=py, w=260, page=src["page"], rect=src["rect"], parent=ans["id"]))
              for src, py in zip(got["sources"], pos)]
     return {"ok": True, "answer": ans, "sources": cards}
+
+
+_DOT_WORDS = {"explain", "summarize", "summarise", "define", "compare", "why", "how", "what"}
+
+
+def for_dot(line: str) -> bool:
+    """Is this note line meant for Dot? The client mirrors this rule exactly."""
+    line = line.strip()
+    return bool(line) and (line.endswith("?") or line.startswith("@ai") or line.split()[0].lower() in _DOT_WORDS)
+
+
+def say(s: Any, paper_id: str, cid: int, text: str) -> dict[str, Any] | None:
+    """Add a line to a note; if it is meant for Dot, Dot's answer goes in the same note.
+    None if the card is not a note on this paper. Your line is kept even if the model fails."""
+    texts = library.page_texts(paper_id)
+    con = db.connect()
+    try:
+        card = _get(con, paper_id, cid)
+        row = con.execute("SELECT title FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    finally:
+        con.close()
+    if card is None or card["kind"] != "note" or row is None or texts is None:
+        return None
+    text = text.strip()
+    if len(card["entries"]) >= 200:
+        return {"ok": False, "error": "This note is full.", "card": card}
+    entries = [*card["entries"], {"who": "me", "text": text}]
+    card = edit_card(paper_id, cid, CardEdit(entries=entries)) or card
+    if not for_dot(text):
+        return {"ok": True, "card": card}
+    page = card["page"] or 1
+    box = marks.boxed(paper_id, page, card["rect"]) if card["rect"] else None
+    got = llm.note_reply(s, entries, box[0] if box else "", box[1] if box else None, row["title"], texts, page - 1)
+    if not got["ok"]:
+        return {"ok": False, "error": got["error"], "card": card}
+    if len(entries) >= 200:
+        return {"ok": False, "error": "This note is full.", "card": card}
+    card = edit_card(paper_id, cid, CardEdit(entries=[*entries, {"who": "dot", "text": got["text"][:4000]}])) or card
+    return {"ok": True, "card": card}

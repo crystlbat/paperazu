@@ -146,3 +146,113 @@ def test_model_unreachable_saves_nothing(monkeypatch) -> None:
     pid, c = _paper(), TestClient(main.app)
     assert _ask(c, pid) == {"ok": False, "error": "Could not reach the model. Is Unsloth running?"}
     assert c.get(f"/papers/{pid}/canvas").json()["cards"] == []
+
+
+# ---------- Dot answers inside notes ----------
+
+@pytest.mark.parametrize("line,dot", [("explain this formula", True), ("Why does it vary?", True), ("@ai what is f*", True),
+    ("What a result", True), ("my own thought", False), ("howdy", False), ("  ", False)])
+def test_which_lines_go_to_dot(line, dot) -> None:
+    assert canvas.for_dot(line) is dot
+
+
+def _recording_model(monkeypatch, reply="It means the spread."):
+    from types import SimpleNamespace
+
+    from workbench import llm
+    calls: list[dict] = []
+
+    def create(**kw):
+        calls.append(kw)
+        if isinstance(reply, Exception):
+            raise reply
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=reply))])
+    monkeypatch.setattr(llm, "pick_model", lambda s: "m")
+    monkeypatch.setattr(llm, "client", lambda *a, **k: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    return calls
+
+
+def _note(c, pid, **kw):
+    return c.post(f"/papers/{pid}/canvas/cards", json={"kind": "note", "x": 0, "y": 0, "w": 240, **kw}).json()
+
+
+def test_a_question_in_a_note_is_answered_in_the_note_with_a_picture(monkeypatch) -> None:
+    calls = _recording_model(monkeypatch, "It means the spread.")
+    pid, c = _paper(), TestClient(main.app)
+    n = _note(c, pid, page=1, rect=[60, 80, 420, 120], entries=[{"who": "me", "text": "Look at this."}])
+    r = c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "@ai explain this"}).json()
+    assert r["ok"] and [e["who"] for e in r["card"]["entries"]] == ["me", "me", "dot"]
+    assert r["card"]["entries"][-1]["text"] == "It means the spread."
+    assert calls[0]["messages"][1]["content"][1]["image_url"]["url"].startswith("data:image/png")
+    prompt = calls[0]["messages"][1]["content"][0]["text"]
+    assert "explain this" in prompt and "@ai" not in prompt.split("My question:")[1] and "Look at this." in prompt
+    assert c.get(f"/papers/{pid}/canvas").json()["cards"][0]["entries"] == r["card"]["entries"]
+
+
+def test_a_note_with_no_box_gets_no_picture(monkeypatch) -> None:
+    calls = _recording_model(monkeypatch)
+    pid, c = _paper(), TestClient(main.app)
+    n = _note(c, pid)
+    r = c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "Why?"}).json()
+    assert r["ok"] and [e["who"] for e in r["card"]["entries"]] == ["me", "dot"]
+    assert isinstance(calls[0]["messages"][1]["content"], str)
+
+
+def test_a_text_only_model_is_asked_again_without_the_picture(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import openai
+
+    from workbench import llm
+    calls = _recording_model(monkeypatch)
+    real = llm.client(None).chat.completions.create
+
+    def create(**kw):
+        if isinstance(kw["messages"][1]["content"], list):
+            calls.append(kw)
+            raise openai.APIStatusError("no images", response=SimpleNamespace(status_code=400, headers={}, request=None), body=None)
+        return real(**kw)
+    monkeypatch.setattr(llm, "client", lambda *a, **k: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    pid, c = _paper(), TestClient(main.app)
+    n = _note(c, pid, page=1, rect=[60, 80, 420, 120])
+    r = c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "Why?"}).json()
+    assert r["ok"] and r["card"]["entries"][-1]["who"] == "dot" and len(calls) == 2
+
+
+def test_a_plain_line_is_just_kept(monkeypatch) -> None:
+    calls = _recording_model(monkeypatch)
+    pid, c = _paper(), TestClient(main.app)
+    n = _note(c, pid)
+    r = c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "my own thought"}).json()
+    assert r["ok"] and [e["who"] for e in r["card"]["entries"]] == ["me"] and calls == []
+
+
+def test_your_line_is_kept_when_the_model_fails(monkeypatch) -> None:
+    import openai
+    _recording_model(monkeypatch, openai.APIConnectionError(request=None))
+    pid, c = _paper(), TestClient(main.app)
+    n = _note(c, pid)
+    r = c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "Why?"}).json()
+    assert r["ok"] is False and r["error"] == "Could not reach the model. Is Unsloth running?"
+    assert [e["text"] for e in r["card"]["entries"]] == ["Why?"]
+
+
+def test_a_long_reply_is_cut_to_fit_the_note(monkeypatch) -> None:
+    _recording_model(monkeypatch, "x" * 5000)
+    pid, c = _paper(), TestClient(main.app)
+    n = _note(c, pid)
+    r = c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "Why?"}).json()
+    assert r["ok"] and len(r["card"]["entries"][-1]["text"]) == 4000
+
+
+def test_say_needs_a_note_on_this_paper() -> None:
+    pid, c = _paper(), TestClient(main.app)
+    a, s, n = _three(pid, c)
+    other = _paper()
+    assert c.post(f"/papers/{pid}/canvas/cards/{a['id']}/say", json={"text": "Why?"}).status_code == 404
+    assert c.post(f"/papers/{pid}/canvas/cards/999/say", json={"text": "Why?"}).status_code == 404
+    assert c.post(f"/papers/{other}/canvas/cards/{n['id']}/say", json={"text": "Why?"}).status_code == 404
+    assert c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": ""}).status_code == 422
+    assert c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "   "}).status_code == 422
+    assert c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "x" * 1001}).status_code == 422
+

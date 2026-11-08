@@ -204,6 +204,30 @@ def ask_box(s: Settings, question: str, boxed: str, image: str | None, title: st
     return _answer(s, BOX_SYSTEM, q, title, pages, page, image)
 
 
+NOTE_SYSTEM = (
+    "You help a student inside their own note about a part of a research paper. You get the text of the part the "
+    "note is about (formulas may look jumbled after copying out of the PDF) and, when possible, a picture of it: "
+    "trust the picture for formulas. The note so far is given as earlier lines. Answer the last question in simple "
+    "English, in 2 to 5 short sentences. For a formula, say what each symbol stands for."
+)
+
+
+def note_reply(s: Settings, lines: list[dict[str, Any]], boxed_text: str, image: str | None, title: str, pages: list[str],
+               page: int) -> dict[str, Any]:
+    """Dot's answer to the last `me` line of a note. `lines` are the note's entries ({who, text}); `page` is 0-based.
+    Without a box (`boxed_text` empty, no `image`) it answers from the paper alone."""
+    page = min(max(page, 0), max(len(pages) - 1, 0))
+    last = max((i for i, e in enumerate(lines) if e["who"] == "me"), default=None)
+    if last is None:
+        return {"ok": False, "error": "There is no question to answer."}
+    question = lines[last]["text"].strip()
+    question = question[3:].strip() if question.startswith("@ai") else question
+    earlier = "".join(f"{'Student' if e['who'] == 'me' else 'Dot'}: {e['text'][:1000]}\n" for e in lines[:last])
+    q = (f'The note is about this part of page {page + 1}:\n"""\n{boxed_text[:3000]}\n"""\n' if boxed_text else f"I am looking at page {page + 1}.\n")
+    q += (f"The note so far:\n{earlier}\n" if earlier else "") + f"My question: {question}"
+    return _answer(s, NOTE_SYSTEM, q, title, pages, page, image)
+
+
 HIGHLIGHT_SYSTEM = (
     "You help a student read a research paper. You get one part of a page. Pick only the most important parts "
     "the student should remember (a key claim, a definition, a main result). Copy each one word for word from the "
