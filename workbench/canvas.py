@@ -7,7 +7,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import db, graph, library, llm, marks
+from . import db, formula, graph, library, llm, marks
 from .marks import MarkIn
 
 
@@ -263,6 +263,11 @@ def ask(s: Any, paper_id: str, question: str, page: int, from_card: int | None, 
     return {"ok": True, "answer": ans, "sources": cards, "trace": trace + [f"{len(cards)} source card{'s' * (len(cards) != 1)} placed"]}
 
 
+def _formula_reply(s: Any, paper_id: str, card: dict[str, Any], question: str) -> dict[str, Any]:
+    q = re.sub(r"(?im)^\s*@ai\b[\s:,-]*", "", question).strip()
+    return formula.breakdown(s, paper_id, card["page"] or 1, card["rect"], q)
+
+
 _DOT_WORDS = {"explain", "summarize", "summarise", "define", "compare", "why", "how", "what"}
 
 
@@ -293,7 +298,8 @@ def say(s: Any, paper_id: str, cid: int, text: str) -> dict[str, Any] | None:
         return {"ok": True, "card": card}
     page = card["page"] or 1
     box = marks.boxed(paper_id, page, card["rect"]) if card["rect"] else None
-    got = llm.note_reply(s, entries, box[0] if box else "", box[1] if box else None, row["title"], texts, page - 1)
+    got = _formula_reply(s, paper_id, card, text) if box and llm._formula(box[0]) else \
+        llm.note_reply(s, entries, box[0] if box else "", box[1] if box else None, row["title"], texts, page - 1)
     if not got["ok"]:
         return {"ok": False, "error": got["error"], "card": card}
     if len(entries) >= 200:
@@ -319,8 +325,11 @@ def pickup(s: Any, paper_id: str, cid: int) -> dict[str, Any] | None:
         return {"ok": False, "error": "Nothing for Dot to pick up.", "card": card, "sources": []}
     page = card["page"] or 1
     box = marks.boxed(paper_id, page, card["rect"]) if card["rect"] else None
-    ctx = (f'The note is about this part of page {page}:\n"""\n{box[0][:2000]}\n"""\n' if box else "") + _earlier([card])
-    got = _cited(s, paper_id, question, page, row["title"], texts, ctx)
+    if box and llm._formula(box[0]):  # a formula gets taken apart step by step, not searched for
+        got = {**_formula_reply(s, paper_id, card, question), "sources": []}
+    else:
+        ctx = (f'The note is about this part of page {page}:\n"""\n{box[0][:2000]}\n"""\n' if box else "") + _earlier([card])
+        got = _cited(s, paper_id, question, page, row["title"], texts, ctx)
     if not got["ok"]:
         return {"ok": False, "error": got["error"], "card": card, "sources": []}
     card = edit_card(paper_id, cid, CardEdit(entries=[*card["entries"], {"who": "dot", "text": got["text"][:4000]}])) or card

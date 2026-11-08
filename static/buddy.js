@@ -63,7 +63,7 @@ const buddy = (() => {
     </div>
     <button type="button" class="buddy-face" aria-label="Reading buddy. Show the last tip.">
       <span class="buddy-led"></span><span class="buddy-grid"></span>
-      <span class="buddy-eyes" aria-hidden="true"><i></i><i></i></span>
+      <span class="buddy-eyes" aria-hidden="true"><i></i><i></i></span><span class="buddy-zz" aria-hidden="true">z</span>
       <svg class="buddy-lensg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-5-5"/></svg>
     </button>`;
   const grid = root.querySelector(".buddy-grid");
@@ -84,7 +84,7 @@ const buddy = (() => {
       : eyesOnly ? EYES[eyes](dx, dy) : [...EYES[eyes](dx, dy), ...MOUTHS[mouth]];
     root.classList.toggle("talking", st.talking && eyesOnly);
     // the wandering circle: its two eyes follow the same mood, blink and glance
-    root.classList.toggle("blinking", st.blink); root.dataset.eyes = eyes;
+    root.classList.toggle("blinking", st.blink); root.dataset.eyes = eyes; root.dataset.mood = st.busy && !st.talking ? "think" : st.mood;
     face.style.setProperty("--ex", `${dx * 7}px`); face.style.setProperty("--ey", `${dy * 6}px`);
     const on = new Set(shown.map(([x, y]) => y * W + x));
     const tail = new Map(st.busy ? [0, 1, 2, 3, 4].map((k) => [RIM[(st.spin - k + RIM.length) % RIM.length], k]) : []);
@@ -149,10 +149,10 @@ const buddy = (() => {
   });
 
   // ---------- talking ----------
-  let typing = 0, mouthTimer = 0, hideTimer = 0;
+  let typing = 0, mouthTimer = 0, hideTimer = 0, goneTimer = 0;
   function show(msg) {
     if (st.away && !st.ui) home(); // talk from the corner, unless something (the guide, a menu) holds Dot where it is
-    clearInterval(typing); clearInterval(mouthTimer); clearTimeout(hideTimer);
+    clearInterval(typing); clearInterval(mouthTimer); clearTimeout(hideTimer); clearTimeout(goneTimer); bubble.classList.remove("going");
     st.mood = msg.mood; st.talking = false; draw();
     actionsEl.replaceChildren(...(msg.actions || []).map((a) => {
       const b = document.createElement(a.href ? "a" : "button");
@@ -168,25 +168,39 @@ const buddy = (() => {
     if (st.away && bubble.getBoundingClientRect().left < 8) root.classList.add("say-right");
     if (reduced()) { textEl.textContent = msg.text; return autoHide(msg); }
     textEl.textContent = "";
+    let shown = 0, word = null;
     const start = performance.now();
     st.talking = true;
     mouthTimer = setInterval(() => { st.talkFrame ^= 1; draw(); }, 110);
     typing = setInterval(() => {
       // by elapsed time, so a throttled tab catches up instead of crawling
       const i = Math.ceil((performance.now() - start) / 11);
-      textEl.textContent = msg.text.slice(0, i);
+      while (shown < Math.min(i, msg.text.length)) { // each new letter pops out of Dot as a dot, then settles
+        const ch = msg.text[shown++];
+        if (ch === " ") { textEl.append(" "); word = null; continue; }
+        if (!word) { word = document.createElement("span"); word.className = "w"; textEl.append(word); }
+        const s = document.createElement("span"); s.textContent = ch; word.append(s);
+      }
       if (i >= msg.text.length) {
         clearInterval(typing); clearInterval(mouthTimer);
         st.talking = false; draw(); autoHide(msg);
       }
     }, 22);
   }
+  // a word bubble, not a window: it goes away by itself (longer when it offers a button), unless you are pointing at it
   function autoHide(msg) {
-    if (msg.actions?.length || msg.sticky) return;
-    hideTimer = setTimeout(() => { if (!root.matches(":hover")) hide(); }, Math.max(6000, msg.text.length * 70));
+    if (msg.sticky) return;
+    const ms = Math.max(3500, msg.text.length * 55) + (msg.actions?.length ? 6000 : 0);
+    const later = () => { hideTimer = setTimeout(() => (root.matches(":hover") ? later() : hide()), ms); };
+    later();
   }
   function hide() {
-    bubble.hidden = true; root.classList.remove("talking");
+    // the words crumble back into dots and drift into Dot
+    if (!bubble.hidden && !reduced()) {
+      bubble.classList.add("going"); clearTimeout(goneTimer);
+      goneTimer = setTimeout(() => { bubble.hidden = true; bubble.classList.remove("going"); }, 420);
+    } else bubble.hidden = true;
+    root.classList.remove("talking");
     clearInterval(typing); clearInterval(mouthTimer); st.talking = false;
     if (st.mood !== "sleep") st.mood = st.muted ? "sleep" : "idle";
     draw();
@@ -200,8 +214,11 @@ const buddy = (() => {
   muteBtn.addEventListener("click", () => { setMuted(!st.muted); if (st.muted) { st.mood = "sleep"; hide(); } });
   root.querySelector(".buddy-x").addEventListener("click", hide);
   root.addEventListener("mouseleave", () => {
-    if (!bubble.hidden && !actionsEl.children.length) hideTimer = setTimeout(hide, 2500);
+    if (!bubble.hidden && !actionsEl.children.length && !st.talking) { clearTimeout(hideTimer); hideTimer = setTimeout(hide, 2500); }
   });
+  // a click on the words, or anywhere else, puts the bubble away (its buttons still work)
+  bubble.addEventListener("click", (e) => { if (!e.target.closest("button, a")) hide(); });
+  document.addEventListener("pointerdown", (e) => { if (!bubble.hidden && !root.contains(e.target) && !actionsEl.children.length) hide(); }, true);
   root.addEventListener("mouseenter", () => clearTimeout(hideTimer));
 
   const TIPS = [
@@ -367,6 +384,12 @@ const buddy = (() => {
     const caught = nest.classList.contains("show") && overNest(e.clientX, e.clientY);
     if (caught) place(...homeCentre()); else place(e.clientX, e.clientY); // near home, the home catches Dot
     if (caught !== root.classList.contains("caught")) root.classList.toggle("caught", caught);
+    if (drag.pull && st.asleep) { // asleep, Dot is a highlighter: out of its circle it turns into one
+      const inside = nest.classList.contains("show") && overNest(e.clientX, e.clientY);
+      nest.classList.toggle("ready", inside);
+      root.classList.toggle("pen", !inside);
+      return;
+    }
     if (drag.pull) { // leaving the home circle wakes tag-along. It is not the highlighter.
       root.classList.remove("pen", "penning", "reading");
       if (nest.classList.contains("show")) {
@@ -391,6 +414,10 @@ const buddy = (() => {
     root.classList.remove("dragging", "caught");
     target?.hover?.(null);
     const back = nest.classList.contains("show") && overNest(e.clientX, e.clientY);
+    if (wasPull && st.asleep) { // asleep: dropped on the page it stays a highlighter; dropped home it rests
+      if (back) { napPen(false); return; }
+      napPen(true); return;
+    }
     if (along && (wasPull || back)) { // this drag woke Dot, or it landed back in the corner
       root.classList.remove("pen", "penning", "reading");
       if (back) {
@@ -413,6 +440,19 @@ const buddy = (() => {
     root.classList.toggle("pen", on); root.classList.toggle("penning", on);
     document[on ? "addEventListener" : "removeEventListener"]("pointermove", follow);
   }
+  // Asleep and pulled out: a highlighter that rides your pointer (select words and they are marked). Its home stays
+  // lit; click the home, press Escape, or wake Dot to put it back.
+  let napOn = false;
+  function napPen(on) {
+    if (on === napOn && on) return;
+    napOn = on; pen(on);
+    if (on) { showNest(); nest.classList.remove("ready"); st.mood = "idle"; draw(); }
+    else { root.classList.remove("pen"); hideNest(); goHome(); }
+  }
+  document.addEventListener("pointerdown", (e) => { // capture: before the click that would hide the home
+    if (napOn && overNest(e.clientX, e.clientY)) { e.preventDefault(); e.stopPropagation(); napPen(false); }
+  }, true);
+  document.addEventListener("keydown", (e) => { if (napOn && e.key === "Escape") napPen(false); });
 
   // ---------- the Dot window: Dot bursts into dots that become a window ----------
   /** open({ x, y, quote, first, ask(question), area?: DOMRect to open inside, save?(text) }) → close() */
@@ -489,6 +529,19 @@ const buddy = (() => {
     answer(first);
     return close;
   }
+  // ---------- sleep: Dot naps, the AI features are off; the page still takes highlights, notes and the canvas ----------
+  let napHook = null;
+  const napKey = "dot-asleep";
+  function sleep(on) {
+    if (!on && napOn) napPen(false);
+    st.asleep = !!on; root.classList.toggle("asleep", st.asleep);
+    face.setAttribute("aria-label", st.asleep ? "Dot is asleep, AI is off. Click for the tools." : "Reading buddy. Show the last tip.");
+    try { localStorage.setItem(napKey, st.asleep ? "1" : "0"); } catch { /* private window: this visit only */ }
+    napHook?.(st.asleep);
+  }
+  const asleep = () => !!st.asleep;
+  try { if (localStorage.getItem(napKey) === "1") { st.asleep = true; root.classList.add("asleep"); } } catch { /* awake */ }
+
   // ---------- tools: clicking Dot fans out a few dotted choices the page offers ----------
   let tools = null;
   const toolsEl = document.createElement("div");
@@ -497,16 +550,33 @@ const buddy = (() => {
   /** setTools([{ group, name, hint, pick() }]) or null to go back to tips */
   function setTools(list) { tools = list; closeTools(); if (atHome()) showHome(); }
   let homeStay = false;
-  function closeTools() { homeStay = false; toolsEl.hidden = true; root.classList.remove("tools-open"); }
+  let orbitHold = false; // tagging along, the ring holds Dot still so you can reach its tools
+  function closeTools() {
+    homeStay = false; toolsEl.hidden = true; root.classList.remove("tools-open");
+    if (orbitHold) { orbitHold = false; st.hold -= 1; }
+  }
   const atHome = () => !st.follow && !st.away && !root.classList.contains("moving");
   function toggleTools() {
-    if (!atHome()) return closeTools(); // wandering: the paragraph buddies do the work, not this row
     if (!toolsEl.hidden) return closeTools();
+    if (st.follow && !root.classList.contains("moving")) { // tagging along: the tools ring Dot in an outer orbit, where you are
+      orbitHold = true; st.hold += 1;
+      return openFan(true);
+    }
+    if (!atHome()) return closeTools(); // wandering: the paragraph buddies do the work, not this row
+    openFan(false);
+  }
+  // at home the tools fan from left to straight up; out on the page (the wake-up show) they ring Dot all round
+  function openFan(round) {
     hide();
     const list = tools.slice();
-    const span = Math.PI * 0.5, radius = 128; // left to straight up, just off the face, circles do not touch
-    const step = span / Math.max(1, list.length - 1);
-    let a = Math.PI;
+    // each tool keeps 64px of room along the arc
+    const span = round ? Math.PI * 2 : Math.PI * 0.5;
+    // the orbit sits snug round Dot: just past its face, with 52px of arc per tool
+    const radius = round ? Math.max(84, (list.length * 52) / span) : Math.max(132, ((list.length - 1) * 64) / span);
+    toolsEl.classList.toggle("orbit", round); toolsEl.style.setProperty("--orbit-r", `${radius}px`);
+    toolsEl.classList.toggle("cap-up", round && centre()[1] + radius + 90 > innerHeight); // no room for the name under the ring
+    const step = round ? span / list.length : span / Math.max(1, list.length - 1);
+    let a = round ? -Math.PI / 2 : Math.PI;
     const buttons = list.map((t, i) => {
       const b = document.createElement("button");
       b.type = "button"; b.className = `buddy-tool tool-${t.key || "item"}${t.on ? " on" : ""}`;
@@ -525,8 +595,41 @@ const buddy = (() => {
     });
     toolsEl.replaceChildren(...buttons);
     toolsEl.hidden = false; root.classList.add("tools-open");
+    if (round) { // each name opens away from Dot, and to the other side if that side runs off the screen
+      const [cx] = centre();
+      buttons.forEach((b) => { // worked out from where the tool lands, not where its pop-out starts
+        const ox = parseFloat(b.style.getPropertyValue("--ox")), x = cx + ox, w = b.querySelector(".tip").offsetWidth + 30;
+        b.classList.toggle("tip-r", ox > 1 ? x + w < innerWidth - 8 : x - w < 8);
+      });
+    }
     draw();
     if (!homeStay) toolsEl.querySelector("button")?.focus();
+  }
+  // Waking up: Dot yawns and stretches, then its tools fan out and each one lights up with its name, then they fold away
+  async function stretch() {
+    hide();
+    root.classList.add("waking");
+    await wait(reduced() ? 0 : 950);
+    root.classList.remove("waking");
+  }
+  async function showcase({ wake = true, out = false } = {}) {
+    if (!tools?.length || !atHome()) return;
+    if (wake) await stretch();
+    if (reduced()) return;
+    if (out) { // run out to where you are, leaving room all round for the ring of tools
+      const m = 190, x = mouse.in && mouse.x > 0 ? mouse.x + 70 : innerWidth / 2, y = mouse.in && mouse.y > 0 ? mouse.y : innerHeight / 2;
+      await goTo(Math.min(innerWidth - m, Math.max(m, x)), Math.min(innerHeight - m, Math.max(m + 40, y)), 650);
+    }
+    homeStay = true; openFan(out); homeStay = true; // the fan stays while it plays, even if you click elsewhere
+    toolsEl.classList.add("parade");
+    await wait(380); // the fan opens
+    for (const b of toolsEl.querySelectorAll(".buddy-tool")) {
+      if (toolsEl.hidden) { toolsEl.classList.remove("parade"); if (out && st.away) goHome(); return; } // you picked one or closed it: stop
+      b.classList.add("lit"); await wait(620); b.classList.remove("lit");
+    }
+    toolsEl.classList.remove("parade");
+    if (!toolsEl.hidden) closeTools();
+    if (out) await goHome();
   }
   const paperSelection = () => {
     const s = getSelection();
@@ -867,7 +970,8 @@ const buddy = (() => {
 
   const BACK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
   /** prompt({ x, y, placeholder, hint(text) }) → the trimmed text, or null (Back, Escape, a click outside). */
-  function prompt({ x, y, placeholder = "", hint } = {}) {
+  /** optional: Enter on an empty box answers "" (go ahead without), Escape or a click away answers null (cancel) */
+  function prompt({ x, y, placeholder = "", hint, optional = false } = {}) {
     closeTools();
     st.ui += 1;
     const [fx0, fy0] = centre(), PW = Math.min(300, innerWidth - 16), PH = 36;
@@ -903,7 +1007,7 @@ const buddy = (() => {
         resolve(text);
       }
       const onOut = (e) => { if (!el.contains(e.target)) finish(null); };
-      el.addEventListener("submit", (e) => { e.preventDefault(); const t = input.value.trim(); if (t) finish(t); });
+      el.addEventListener("submit", (e) => { e.preventDefault(); const t = input.value.trim(); if (t || optional) finish(t); });
       el.querySelector(".bp-back").addEventListener("click", () => finish(null));
       el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(null); } });
       input.addEventListener("input", () => {
@@ -977,5 +1081,5 @@ const buddy = (() => {
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
   return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, reading, open, format, draggable, tools: setTools,
-    follow: followMode, look, tagAlong, options, shape, prompt, gulp, burp, toolsOn, skip, centre, put, hold, nudge, wait: waitSkippable };
+    follow: followMode, look, tagAlong, sleep, asleep, showcase, stretch, onSleep: (f) => { napHook = f; }, options, shape, prompt, gulp, burp, toolsOn, skip, centre, put, hold, nudge, wait: waitSkippable };
 })();

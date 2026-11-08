@@ -401,12 +401,15 @@ def add_highlight(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, 
 def suggest_highlights(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Dot picks the important lines inside a box and highlights them in blue. Runs on the local model only."""
     try:
-        req = marks.MarkIn(**{**body, "text": ""})
+        focus = body.get("focus") or ""
+        if not isinstance(focus, str) or len(focus) > 300:
+            raise HTTPException(422, detail={"errors": [{"field": "focus", "message": "Say what to highlight in at most 300 characters."}]})
+        req = marks.MarkIn(**{**{k: v for k, v in body.items() if k != "focus"}, "text": ""})
     except ValidationError as e:
         raise HTTPException(422, detail={"errors": _errors(e)})
     paper = _paper_or_404(paper_id)
     try:
-        out = marks.suggest(settings.get_all(), paper_id, req.page, req.rect, paper["title"])
+        out = marks.suggest(settings.get_all(), paper_id, req.page, req.rect, paper["title"], focus.strip())
     except primer.PrimerError as e:
         return {"ok": False, "error": str(e)}
     if out is None:

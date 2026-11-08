@@ -276,7 +276,7 @@ function libHome(soft = false) {
   if (L.f && !L.f.el.hidden) libCloseField(true);
   L.mode = "bubble"; L.job = null; libStore.set("lib-mode", "bubble");
   if (L.web) { L.web.hidden = true; L.webGen++; L.webHits.replaceChildren(); L.webIn.disabled = false; L.webIn.value = ""; }
-  L.st.classList.remove("chatting", "shelfing", "webbing");
+  L.st.classList.remove("chatting", "shelfing", "webbing", "hits");
   L.shelf.hidden = true; L.sblobs.hidden = true; L.strip.classList.remove("on");
   L.dotEl.className = "ldot abs"; L.dotEl.tabIndex = 0; L.dotEl.querySelector("input").tabIndex = -1;
   L.back.classList.remove("on"); L.lineGap = 150; L.count.style.opacity = 1;
@@ -644,6 +644,7 @@ function libFitField() {
     return;
   }
   f.el.style.height = `${Math.max(52, f.line.offsetHeight)}px`;
+  if (L.fetched?.length) libLayoutFetched(); // a longer reply pushes the results down
 }
 // Typing shows whole words, drawn as plain text while you type them. When a word is finished (a space follows it)
 // it fades up once as one piece and the bubble gives a small squash. Nothing animates per letter.
@@ -720,7 +721,7 @@ async function libSwallow() {
 // Dot stays where it is; the field opens right under it, fetched papers rise into the ring around it.
 function libAskLayout() {
   const W = libW(), H = libH();
-  L.dot.tx = W / 2; L.dot.ty = H / 2 - 40;
+  L.dot.tx = W / 2; L.dot.ty = L.fetched?.length ? Math.max(70, H * 0.16) : H / 2 - 40; // results need the room below
   const fw = Math.min(460, W * 0.84), top = L.dot.ty + 64;
   L.f.el.style.transform = `translate3d(${W / 2}px, ${top}px, 0) translate(-50%, 0)`;
   L.histEl.style.transform = `translate3d(${W / 2 - fw / 2 - 16}px, ${top - 12}px, 0) translate(-100%, 0)`;
@@ -842,18 +843,20 @@ function libRaise(res) {
   L.fetched = items.filter((id) => L.cards.has(id)).slice(0, 8);
   libPlaceRing(L.fetched.length ? 1.16 : 1, new Set(L.fetched));
   L.fetched.forEach((id) => { const c = L.cards.get(id); c.el.classList.add("fetched"); c.el.querySelector(".why").textContent = why.get(id) || ""; });
-  libLayoutFetched();
+  libAskLayout();
 }
 function libLayoutFetched() {
+  L.st.classList.toggle("hits", !!L.fetched?.length);
   if (!L.fetched?.length) return;
-  const W = libW(), H = libH(), n = L.fetched.length, cx = W / 2, cy = L.dot.ty + 40;
-  const rx = Math.max(300, Math.min(W / 2 - 110, 500)), ry = Math.max(200, Math.min(H / 2 - 80, 290));
-  // spread over the ring, leaving the middle band (Dot and the field) clear
+  // a tidy grid under the field, best first; the rest of the shelf steps aside (see .lst.hits)
+  const W = libW(), n = L.fetched.length, fh = parseFloat(L.f.el.style.height) || L.f.el.offsetHeight || 52; // the height it is growing to
+  const cw = Math.max(...L.fetched.map((id) => L.cards.get(id).el.offsetWidth || 150)) + 18;
+  const ch = Math.max(...L.fetched.map((id) => L.cards.get(id).el.offsetHeight || 130)) + 16;
+  const cols = Math.max(1, Math.min(n, Math.floor((W - 32) / cw), 4)), top = L.dot.ty + 64 + fh + 34;
   L.fetched.forEach((id, i) => {
-    const a = n === 1 ? Math.PI / 2 : -Math.PI / 2 + (i + 0.5) * (Math.PI * 2) / n;
-    let y = cy + Math.sin(a) * ry; const x = cx + Math.cos(a) * rx;
-    if (Math.abs(x - cx) < 330 && Math.abs(y - cy) < 150) y = cy + Math.sign(y - cy || 1) * 175;
-    libPlace(id, x, y, i % 2 ? 1.2 : -1.2, { drift: false });
+    const row = Math.floor(i / cols), inRow = Math.min(cols, n - row * cols), col = i % cols;
+    const el = L.cards.get(id).el;
+    libPlace(id, W / 2 + (col - (inRow - 1) / 2) * cw, top + row * ch + (el.offsetHeight || 120) / 2, 0, { drift: false });
   });
 }
 
@@ -910,7 +913,7 @@ async function libSend(q) {
   if (a.kind === "export" && ids.length !== 1) { reply += ids.length ? " Click the one you want and use More, then Export." : ""; a.kind = "find"; }
   L.turn.a = reply.replace(/\s+/g, " "); L.turn.res = res;
   L.hist.push({ q, a: L.turn.a }); L.hist = L.hist.slice(-4);
-  if ((res.papers || []).length || (res.sources || []).length) libRaise(res); else { libCardsReset(); L.fetched = []; libPlaceRing(1, new Set()); }
+  if ((res.papers || []).length || (res.sources || []).length) libRaise(res); else { libCardsReset(); L.fetched = []; libAskLayout(); libPlaceRing(1, new Set()); }
   if (a.kind === "delete") {
     await libReplyTo(reply, [["Yes, delete", () => libRunJob(a, ids, "Deleted.")], ["No", () => libReplyTo("Kept them. Nothing was deleted.").then(() => libReady())]]);
     return;
@@ -975,7 +978,7 @@ function libToShelf() {
   libClear(); libPeekClose();
   if (L.f && !L.f.el.hidden) libCloseField(true);
   L.mode = "shelf"; L.job = null; libStore.set("lib-mode", "shelf");
-  L.st.classList.remove("chatting"); L.st.classList.add("shelfing"); L.strip.classList.remove("on");
+  L.st.classList.remove("chatting", "hits"); L.st.classList.add("shelfing"); L.strip.classList.remove("on");
   libBlobsOut(false); L.blobs.forEach((b) => { b.classList.add("out"); });
   for (const id of L.cards.keys()) libHideCard(id);
   L.back.classList.remove("on"); L.line.classList.add("off"); L.count.style.opacity = 1;

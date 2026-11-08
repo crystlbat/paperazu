@@ -279,6 +279,24 @@ function canvasPanel(host, paperId, pdf) {
     if (!(await gone1)) { buddy.say("I could not delete that card. Is the app still running?", { mood: "worried" }); load(true); }
   }
 
+  // Typed to Dot: "clear my notes", "delete all cards", "clear the canvas". The cards are put away, not deleted,
+  // so Undo (or All blobs) brings them back.
+  async function command(q) {
+    if (!/^(?:please\s+)?(?:clear|remove|delete|erase|wipe|tidy|clean)(?:\s+up)?\s+(?:all\s+)?(?:of\s+)?(?:the\s+|my\s+)?(?:notes?|cards?|blobs?|canvas|board)(?:\s+(?:on|from)\s+(?:this|the)\s+(?:paper|page|canvas|board))?[.!]?$/i.test(q.trim())) return false;
+    const list = [...cards.values()].filter((c) => !c.d.hidden);
+    if (!list.length) { buddy.say("The canvas is already clear.", { mood: "idle" }); return true; }
+    closeMenu();
+    list.forEach((c) => { c.d.hidden = true; call(`/cards/${c.d.id}`, "PUT", { hidden: true }).catch(() => {}); });
+    await swallowAll(list);
+    list.forEach(lift);
+    refreshView(); updateEmpty(); redraw();
+    buddy.say(`I put away ${list.length} card${list.length === 1 ? "" : "s"}.`, { mood: "happy", actions: [{ label: "Undo", onClick: () => {
+      list.forEach((c) => { c.d.hidden = false; call(`/cards/${c.d.id}`, "PUT", { hidden: false }).catch(() => {}); board.append(ensureEl(c)); });
+      refreshView(); updateEmpty(); redraw(true);
+    } }] });
+    return true;
+  }
+
   // ----- threads -----
   const threads = new Map(); // key -> { path, mask, maskPath, cards: [ids] }
   let maskN = 0;
@@ -587,7 +605,7 @@ function canvasPanel(host, paperId, pdf) {
   async function ask(sel, at) {
     if (asking || busy || locked || gone) return;
     const q = await buddy.prompt({ x: at.x, y: at.y, placeholder: sel ? "Ask about this part..." : "Ask about this page..." });
-    if (q) await runAsk({ question: q, page: sel?.page ?? pdf.page(), quote: sel?.text || "" });
+    if (q && !(await pdf.command?.(q))) await runAsk({ question: q, page: sel?.page ?? pdf.page(), quote: sel?.text || "" });
   }
   // click an answer or a source card: Dot offers a follow-up question that grows from it
   async function followUp(c, x, y) {
@@ -603,7 +621,7 @@ function canvasPanel(host, paperId, pdf) {
     followUp(c, x, y);
   }
   async function pickup(c) {
-    if (!c || c.picking || !openTask(c.d)) return;
+    if (!c || c.picking || !openTask(c.d) || buddy.asleep?.()) return; // asleep: the @ai task waits until Dot wakes
     c.picking = true; c.fail = ""; fill(c);
     const r = await call(`/cards/${c.d.id}/pickup`, "POST").catch(() => null);
     c.picking = false;
@@ -858,7 +876,7 @@ function canvasPanel(host, paperId, pdf) {
   }
   return {
     open, close, toggle, isOpen: () => opened, edit, view: showView, editing: () => editing,
-    mountEditor: (el, hooks) => { editor.append(el); editHooks = hooks; }, onViewChange: (f) => { onViewChange = f; }, add, place, ask, followUp, note, el: host, redraw, lock, refresh, card: (id) => cards.get(id),
+    mountEditor: (el, hooks) => { editor.append(el); editHooks = hooks; }, onViewChange: (f) => { onViewChange = f; }, add, place, ask, command, followUp, note, el: host, redraw, lock, refresh, sweep: sweepTasks, card: (id) => cards.get(id),
     destroy() {
       gone = true; closeMenu();
       document.removeEventListener("pointerdown", skipAll, true);

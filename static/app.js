@@ -17,7 +17,12 @@ function h(tag, attrs = {}, ...kids) {
 // calls that wait on the local model: Dot shows it is working while they run
 const MODEL_CALL = /\/(explain|ask|test-connection|check-context)$|\/check\/\w+$|\/export\/reflection$|^\/graph\/(index|search|suggest)$/;
 
+// calls that ask the model to write: off while Dot sleeps (searching, highlights, notes and the canvas still work)
+const AI_CALL = /\/(explain|ask|pickup|reflection)$|\/highlights\/suggest$|\/check\/\w+$/;
+const ASLEEP = "I am asleep, so the AI is off. Click me and pick Wake up to use it.";
+
 async function api(path, opts = {}) {
+  if (AI_CALL.test(path) && buddy.asleep?.()) return { ok: false, error: ASLEEP, reply: ASLEEP, text: "", sources: [] };
   const working = MODEL_CALL.test(path);
   if (working) buddy.busy(1);
   try {
@@ -101,6 +106,7 @@ const PRIMER = { not_made: "Not made", making: "Making", ready: "Ready", failed:
 // Start (or follow) the AI summary for a paper. The server streams progress as Server-Sent Events;
 // onEvent gets {state, done, total, step, error} each time. Resolves with the last event.
 async function streamPrimer(id, onEvent) {
+  if (buddy.asleep?.()) { const end = { state: "failed", error: ASLEEP }; onEvent?.(end); return end; }
   buddy.busy(1);
   let last = { state: "failed", error: "Could not reach the app. Is it still running?" };
   try {

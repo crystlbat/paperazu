@@ -42,7 +42,7 @@ def test_connection(s: Settings) -> dict[str, Any]:
         r = client(s, timeout=min(s.timeout_s, 60)).chat.completions.create(
             model=pick_model(s) or "default",
             messages=[{"role": "user", "content": "Reply with the word OK."}],
-            max_tokens=16, temperature=0,
+            max_tokens=16, temperature=0, extra_body=NO_THINK,
         )
     except AuthenticationError:
         return {"ok": False, "error": "Wrong API key."}
@@ -151,6 +151,17 @@ FORMULA_SYSTEM = (
 )
 
 
+# thinking models (Gemma 4, Qwen 3) spend the whole reply budget reasoning on short structured jobs; servers that
+# do not know the switch ignore it
+NO_THINK = {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def persona(s: Settings) -> str:
+    """The voice the student picked for Dot, as a line for a system prompt (empty when none)."""
+    p = (s.dot_persona or "").strip()[:300]
+    return f"\nSpeak in this voice, chosen by the student: {p}. Keep every fact and the format exactly as asked." if p else ""
+
+
 def _no_loops(text: str) -> str:
     """Small models fall into a loop on long lists: keep each line once and stop where it starts going round."""
     out, seen, again = [], set(), 0
@@ -226,7 +237,7 @@ def key_ideas(s: Settings, title: str, pages: list[str]) -> list[str]:
             model=pick_model(s) or "default",
             messages=[{"role": "system", "content": IDEAS_SYSTEM},
                       {"role": "user", "content": f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\nThe 5 key ideas:"}],
-            max_tokens=s.max_output_tokens, temperature=s.temperature,
+            max_tokens=s.max_output_tokens, temperature=s.temperature, extra_body=NO_THINK,
         )
     except AuthenticationError:
         raise RuntimeError("Wrong API key. Check it in Settings.")
@@ -265,8 +276,8 @@ def _answer(s: Settings, system: str, question: str, title: str, pages: list[str
         try:
             r = client(s).chat.completions.create(
                 model=pick_model(s) or "default",
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": content}],
-                max_tokens=s.max_output_tokens, temperature=s.temperature,
+                messages=[{"role": "system", "content": system + persona(s)}, {"role": "user", "content": content}],
+                max_tokens=s.max_output_tokens, temperature=s.temperature, extra_body=NO_THINK,
             )
         except APIStatusError as e:
             if not image or e.status_code not in (400, 415, 422, 500, 501):
@@ -347,24 +358,29 @@ def note_reply(s: Settings, lines: list[dict[str, Any]], boxed_text: str, image:
 HIGHLIGHT_SYSTEM = (
     "You help a student read a research paper. You get one part of a page. Pick only the most important parts "
     "the student should remember (a key claim, a definition, a main result). Copy each one word for word from the "
-    "text. Give at most 3, each at most 25 words, never a whole paragraph. Fewer is better. "
-    'Reply with JSON only: {"quotes": ["..."]}.'
+    "text. Give at most {most}, each at most 25 words, never a whole paragraph. Look through the whole text, from its "
+    "first sentence to its last, not only the start. "
+    'Reply with JSON only: {{"quotes": ["..."]}}.'
 )
 _QUOTES = {"type": "object", "properties": {"quotes": {"type": "array", "items": {"type": "string"}}},
            "required": ["quotes"], "additionalProperties": False}
 
 
-def pick_quotes(s: Settings, text: str, title: str) -> list[str]:
-    """Quotes worth highlighting in `text`. Raises primer.PrimerError for the user; broken JSON is asked twice, then []."""
+def pick_quotes(s: Settings, text: str, title: str, focus: str = "") -> list[str]:
+    """Quotes worth highlighting in `text`, about `focus` if the student said what to look for. Raises
+    primer.PrimerError for the user; broken JSON is asked twice, then []."""
     from . import primer  # primer imports this module
-    msgs = [{"role": "system", "content": HIGHLIGHT_SYSTEM},
-            {"role": "user", "content": f"Paper: {title}\n\nText:\n\"\"\"\n{text[:6000]}\n\"\"\""}]
+    most = max(2, min(6, len(re.findall(r"[.!?](?:\s|$)", text)) // 2 + 1))  # a long paragraph gets more than a short one
+    want = (f"\n\nThe student wants you to highlight: {focus}\nPick only parts about that. If nothing in the text "
+            'is about it, reply {"quotes": []}.') if focus else ""
+    msgs = [{"role": "system", "content": HIGHLIGHT_SYSTEM.format(most=most)},
+            {"role": "user", "content": f"Paper: {title}\n\nText:\n\"\"\"\n{text[:6000]}\n\"\"\"{want}"}]
     for _ in range(2):
         try:
             reply = primer._complete(s, msgs, _QUOTES, "quotes")
             out = json.loads(reply[reply.find("{"):reply.rfind("}") + 1])["quotes"]  # some models wrap the JSON in words or fences
             out = [out] if isinstance(out, str) else out  # one quote as a plain string, not a list of letters
-            return [q.strip() for q in out if isinstance(q, str) and len(q.split()) >= 3][:3]
+            return [q.strip() for q in out if isinstance(q, str) and len(q.split()) >= 3][:most]
         except (ValueError, KeyError, TypeError):
             continue
     return []
@@ -492,7 +508,7 @@ def ask_with_sources(s: Settings, question: str, title: str, paras: list[tuple[s
         "sources": {"type": "array", "items": {"type": "object", "required": ["block", "gist"], "properties": {
             "block": {"type": "string", "enum": list(by)}, "gist": {"type": "string"}}}}}}
     listing = "\n\n".join(f"{i} (page {pg}): {t[:1500]}" for i, pg, _, t in paras)
-    messages = [{"role": "system", "content": SOURCES_SYSTEM},
+    messages = [{"role": "system", "content": SOURCES_SYSTEM + persona(s)},
                 {"role": "user", "content": f"Paper: {title}\n\n<paragraphs>\n{listing}\n</paragraphs>\n\n"
                                             f"{earlier}My question: {question}\n\nReturn the JSON."}]
     try:

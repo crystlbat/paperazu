@@ -3,6 +3,7 @@ text blocks; a note keeps the box (PDF points, top-left origin) and the page it 
 from typing import Any, Literal
 
 import base64
+import re
 import json
 
 import pymupdf
@@ -249,24 +250,72 @@ def _lines(rects: list[Any]) -> list[list[float]]:
     return [[round(v, 1) for v in r] for r in out]
 
 
-def suggest(s: Any, paper_id: str, page: int, rect: list[float], title: str) -> list[dict[str, Any]] | None:
-    """Dot highlights the important quotes inside a box. Quotes the model made up, or that are most of the box, are dropped."""
+def _norm(w: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", w.lower())
+
+
+def _words(pg: Any, clip: Any) -> list[tuple[str, list[Any]]]:
+    """The words in a box in reading order as (normalised word, [rects]). A word split by a hyphen at a line's end is
+    one word with two rects, so a quote copied without the break still matches."""
+    raw = [w for w in pg.get_text("words", clip=clip, sort=True) if _norm(w[4])]
+    out: list[tuple[str, list[Any]]] = []
+    i = 0
+    while i < len(raw):
+        w = raw[i]
+        r = pymupdf.Rect(w[:4])
+        if w[4].endswith("-") and i + 1 < len(raw) and raw[i + 1][1] > w[3] - 1:  # hyphen, and the next word is on the next line
+            n = raw[i + 1]
+            out.append((_norm(w[4]) + _norm(n[4]), [r, pymupdf.Rect(n[:4])])); i += 2
+        else:
+            out.append((_norm(w[4]), [r])); i += 1
+    return out
+
+
+def _find(words: list[tuple[str, list[Any]]], quote: str) -> list[Any]:
+    """The rects of a quote's words: the exact run of words if it is there, else from where its first four words
+    start to where its last four end (the model sometimes drops or changes a word in the middle)."""
+    q = [n for w in quote.split() if (n := _norm(w))]
+    if len(q) < 3:
+        return []
+    toks = [w for w, _ in words]
+    def at(seq: list[str], start: int = 0) -> int:
+        for i in range(start, len(toks) - len(seq) + 1):
+            if toks[i:i + len(seq)] == seq:
+                return i
+        return -1
+    i = at(q)
+    if i >= 0:
+        j = i + len(q)
+    else:
+        k = min(4, len(q))
+        i = at(q[:k])
+        e = at(q[-k:], max(i, 0)) if i >= 0 else -1
+        if i < 0 or e < 0 or e + k - i > 2 * len(q):
+            return []
+        j = e + k
+    return [r for _, rs in words[i:j] for r in rs]
+
+
+def suggest(s: Any, paper_id: str, page: int, rect: list[float], title: str, focus: str = "") -> list[dict[str, Any]] | None:
+    """Dot highlights the important quotes inside a box, about `focus` if you said what to look for. Quotes the model
+    made up, or that are most of the box, are dropped."""
     from . import llm
     got = boxed(paper_id, page, rect)
     if not got:
         return None
     text = got[0]
-    quotes = llm.pick_quotes(s, text, title)
+    quotes = llm.pick_quotes(s, text, title, focus)
     pg = _page(paper_id, page)
     if not pg:
         return None
     out: list[dict[str, Any]] = []
     with pg[0]:
         clip = pymupdf.Rect(*rect) & pg[1].rect
+        words = _words(pg[1], clip)
         for q in quotes:
             if len(q) > 0.6 * len(text):
                 continue
-            found = pg[1].search_for(q, clip=clip) or pg[1].search_for(" ".join(q.split()[:8]), clip=clip)
+            found = _find(words, q)
             if found:
                 out.append({"text": q, "rects": _lines(found)})
     return [h for x in out if (h := add_highlight(paper_id, HighlightIn(page=page, kind="dot", text=x["text"], rects=x["rects"])))]

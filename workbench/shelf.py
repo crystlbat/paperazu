@@ -273,7 +273,7 @@ def _about_dot(s: Settings, question: str) -> dict[str, Any] | None:
     reply = ""
     try:
         r = llm.client(s).chat.completions.create(
-            model=llm.pick_model(s) or "default", max_tokens=s.max_output_tokens, temperature=s.temperature,
+            model=llm.pick_model(s) or "default", max_tokens=s.max_output_tokens, temperature=s.temperature, extra_body=llm.NO_THINK,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": question[:300]}])
         reply = llm._strip_thinking(r.choices[0].message.content or "") or ""
     except APIError:

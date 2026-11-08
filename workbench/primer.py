@@ -199,7 +199,7 @@ def _complete(s: Settings, messages: list[dict[str, str]], schema: dict[str, Any
     try:
         r = llm.client(s).chat.completions.create(model=llm.pick_model(s) or "default", messages=messages,
                                                   max_tokens=s.max_output_tokens, temperature=s.temperature,
-                                                  response_format=fmt)  # type: ignore[arg-type]
+                                                  response_format=fmt, extra_body=llm.NO_THINK)  # type: ignore[arg-type]
     except AuthenticationError:
         raise PrimerError("Wrong API key. Check it in Settings.")
     except APIConnectionError:

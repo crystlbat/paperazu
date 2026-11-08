@@ -138,6 +138,7 @@ async function renderReader(paperId, startPage) {
     openNote();
   }
   pdf.hooks.onAsk = (s, at) => canvas.ask(s, at);
+  pdf.hooks.onCommand = (q) => canvas.command?.(q);
   const guide = guidedReading(paperId, pdf, (id) => { const st = fw.steps.find((x) => x.id === id); if (st && st !== current) open(st, false, false); },
     () => openNote(), (text) => plain.append(text));
   // Highlight collector: your highlights, in page order, gathered into the note; ones already there are skipped
@@ -161,7 +162,18 @@ async function renderReader(paperId, startPage) {
   }
   plain.el.querySelector(".plain-foot").prepend(h("button", { type: "button", class: "plain-collect", onclick: collectHighlights }, "Collect highlights"));
   const ico = (inner) => `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
-  const dotTools = () => buddy.tools([
+  const moon = ico('<path class="fill" d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5z"/>');
+  // asleep, Dot only offers what needs no AI: the highlighter is selecting words, notes and the canvas work as ever
+  const sleepTools = () => [
+    { group: "Asleep", key: "wake", name: "Wake up", hint: "Turn the AI back on", color: "#ffe347",
+      icon: ico('<circle cx="8.5" cy="11" r="1.8" class="fill"/><circle cx="15.5" cy="11" r="1.8" class="fill"/><path d="M8 16c2.4 1.6 5.6 1.6 8 0"/>'), pick: () => buddy.sleep(false) },
+    { group: "Asleep", key: "collect", name: "Collect highlights", hint: "Gather your highlights into your note", color: "#f7b955",
+      icon: ico('<path d="M5 6h9M5 10h7"/><path d="M4 15h16l-2 5H6z"/><path d="M17 4v7m-3-3 3 3 3-3"/>'), pick: collectHighlights },
+    { group: "Asleep", key: "canvas", name: "Canvas", hint: "Your notes and cards", color: "#ff9e7a", icon: ico('<rect class="card a" x="3" y="6" width="11" height="13" rx="2"/><rect class="card b" x="10" y="4" width="11" height="13" rx="2"/>'),
+      pick: () => (canvasHost.hidden ? buddy.say("The paper is closed for this step, so the canvas is too.") : canvas.toggle()) },
+  ];
+  const dotTools = () => buddy.tools(buddy.asleep() ? sleepTools() : [
+    { group: "With you", key: "sleep", name: "Sleep", hint: "AI off; select words to highlight", color: "#9aa7ff", icon: moon, pick: () => buddy.sleep(true) },
     pdf.along()
       ? { group: "With you", key: "home", name: "Go home", hint: "Back to my corner", color: "#ffe347", icon: ico('<path d="M14 4h6v6"/><path d="M20 4 11 13"/><circle class="fill" cx="7" cy="17" r="2.4"/>'), pick: () => pdf.tagAlong(false) }
       : { group: "With you", key: "along", name: "Tag along", hint: "I follow you and help", color: "#8ecbff", icon: ico('<circle class="fill trail" cx="6" cy="16" r="2"/><circle class="fill lead" cx="15" cy="9" r="2.5"/>'), pick: () => pdf.tagAlong(true) },
@@ -177,6 +189,16 @@ async function renderReader(paperId, startPage) {
       pick: () => (canvasHost.hidden ? buddy.say("The paper is closed for this step, so the canvas is too.") : canvas.toggle()) },
   ]);
   dotTools();
+  let napWatch = false;
+  buddy.onSleep((on) => {
+    if (on) { guide.stop(); pdf.tagAlong(false); napWatch = pdf.watching(); if (napWatch) pdf.watch(false); }
+    dotTools();
+    if (on) return; // Dot's closed eyes and its z say it; pull it out and it is a highlighter
+    buddy.showcase({ out: true }).then(() => { // waking is the show: Dot runs out to you, rings itself with its tools, goes home
+      if (napWatch) { napWatch = false; pdf.watch(true); } // Proactive was on before the nap
+      canvas.sweep?.(); // @ai tasks left while I slept
+    });
+  });
   open(current, false, false); greeted.add("reader");
   if (ai.data.progress.state === "making") ai.make(); // it was started elsewhere; follow it here
   buddy.look(true); buddy.follow(false); buddy.toolsOn("click"); // reading mode: Dot rests in its corner (the Library's yellow circle); pull it out to tag along
@@ -196,7 +218,7 @@ async function renderReader(paperId, startPage) {
 
   // Saves (and retries) can finish after you leave; Dot only speaks while this Reader is open.
   const me = openReader = {
-    leave() { guide.stop(); timer.stop(); queue.flush(); plain.flush(); drawers.destroy(); canvas.destroy(); clearTimeout(homeHint); buddy.follow(false); buddy.look(false); buddy.toolsOn("click"); pdf.destroy(); },
+    leave() { buddy.onSleep(null); guide.stop(); timer.stop(); queue.flush(); plain.flush(); drawers.destroy(); canvas.destroy(); clearTimeout(homeHint); buddy.follow(false); buddy.look(false); buddy.toolsOn("click"); pdf.destroy(); },
     flushOnExit() { queue.flushKeepalive(); plain.flush(true); },
   };
 }
@@ -561,6 +583,7 @@ const ICONS = {
   minus: '<path d="M6 12h12"/>',
   plus: '<path d="M12 6v12M6 12h12"/>',
   fit: '<path d="M3.5 12h17M7 8.5 3.5 12 7 15.5M17 8.5l3.5 3.5-3.5 3.5"/>',
+  moon: '<path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10z"/>',
 };
 function icon(name, cls = "ico") {
   const s = h("span", { class: cls, "aria-hidden": "true" });
@@ -947,7 +970,7 @@ function oldFields(st, fields) {
 // ---------- PDF viewer ----------
 // Canvas only, no text layer, so the text cannot be selected or copied. Renders the current page only.
 function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
-  const v = { doc: null, page: startPage, scale: 1, fit: true, task: null, seq: 0, hidden: false, auto: false, vp: null };
+  const v = { doc: null, page: startPage, scale: 1.57, fit: false, task: null, seq: 0, hidden: false, auto: false, vp: null };
   const sheet = h("div", { class: "pdf-sheet" });
   let shown = 0; // the page on screen, so a page change can slide in
   const hits = h("div", { class: "pdf-hits", "aria-hidden": "true" });
@@ -976,11 +999,19 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   const total = h("span", { class: "quiet num" }, "of 0");
   const zoomLbl = h("span", { class: "num quiet zoom" });
   const el = h("section", { class: "pdf-pane", "aria-label": "Paper" });
+  // Dark page: the rendered page is inverted (white paper becomes near-black, black ink light; hues turned back so
+  // figures keep their colours). Remembered on this browser.
+  let darkPage = false;
+  try { darkPage = localStorage.getItem("pdf-dark") === "1"; } catch { /* private window */ }
+  const darkBtn = h("button", { type: "button", class: "btn ghost tool", "aria-pressed": String(darkPage), title: "Dark page: easier on the eyes",
+    onclick: () => { darkPage = !darkPage; el.classList.toggle("pdf-dark", darkPage); darkBtn.setAttribute("aria-pressed", String(darkPage));
+      try { localStorage.setItem("pdf-dark", darkPage ? "1" : "0"); } catch { /* this visit only */ } } }, icon("moon"), "Dark page");
+  el.classList.toggle("pdf-dark", darkPage);
   const search = circleSearch({ v, go, ink, hits, pane: el, paperId });
   el.append(
     h("div", { class: "pdf-tools" }, prev, pageIn, total, next, search.button, h("span", { class: "spacer" }),
       tool(icon("minus"), "Zoom out", () => zoom(1 / 1.2)), zoomLbl, tool(icon("plus"), "Zoom in", () => zoom(1.2)),
-      h("button", { type: "button", class: "btn ghost tool", onclick: () => { v.fit = true; draw(); } }, icon("fit"), "Fit width")),
+      h("button", { type: "button", class: "btn ghost tool", onclick: () => { v.fit = true; draw(); } }, icon("fit"), "Fit width"), darkBtn),
     h("div", { class: "pdf-view" }, stage, closed, search.panel, penHint));
 
   async function draw() {
@@ -1207,9 +1238,11 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
   function pin(m) {
     const [x0, y0, x1] = px(m.rect), right = x1 + 32 < pageBox.clientWidth;
-    return h("button", { type: "button", class: "mk-pin", style: `left:${right ? x1 + 6 : x0 - 30}px;top:${y0 - 10}px`,
-      title: m.text.slice(0, 120), "aria-label": `Margin note: ${m.text.slice(0, 60)}`, onclick: () => card(m) },
-      h("i"), h("i"));
+    // a mini Dot keeps each note: hover and it shows what the note says, click to open it
+    const said = m.text.trim();
+    return h("button", { type: "button", class: `mk-pin${right ? "" : " left"}`, style: `left:${right ? x1 + 6 : x0 - 30}px;top:${y0 - 10}px;--b:${(m.id % 7) * 0.9}s`,
+      "aria-label": `Margin note: ${said.slice(0, 60) || "empty"}`, onclick: () => card(m) },
+      h("i"), h("i"), h("span", { class: "mk-peek" }, said ? (said.length > 140 ? `${said.slice(0, 138)}\u2026` : said) : "An empty note. Click to write in it."));
   }
   async function trace(b) {
     clearPick(); buddy.pen(false);
@@ -1366,8 +1399,26 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   const sessBar = h("i", { class: "sess-bar" }), sessLbl = h("span", { class: "sess-lbl" });
   const sessEl = h("div", { class: "sess", hidden: true, role: "status", "aria-label": "This reading session" }, sessBar, sessLbl);
   el.querySelector(".pdf-tools").append(sessEl);
+  // Proactive on: a mini Dot on a yellow rail rides the margin beside the part you are reading (it glides from part to
+  // part), and a dotted rail marks each part of this page you stayed on
+  const hereEl = h("div", { class: "track-here" }, h("i", {}, h("b"), h("b")));
+  let readEls = "";
+  function drawRails() {
+    trackLayer.hidden = !watchOn || v.hidden || !v.vp;
+    if (trackLayer.hidden) return;
+    const done = [...trail].filter((k) => +k.split(":")[0] === v.page);
+    const sig = `${v.page}|${v.vp.scale}|${done.join(";")}`;
+    if (sig !== readEls) { // the read rails change only when you finish a part
+      readEls = sig;
+      trackLayer.replaceChildren(...done.map((k) => { const [x0, y0, , y1] = px(k.split(":")[1].split(",").map(Number));
+        return h("i", { class: "track-read", style: `left:${x0 - 14}px;top:${y0}px;height:${y1 - y0}px` }); }), hereEl);
+    }
+    const b = readingBlock();
+    hereEl.hidden = !b;
+    if (b) { const [x0, y0, , y1] = px(b); Object.assign(hereEl.style, { left: `${x0 - 15}px`, top: `${y0}px`, height: `${y1 - y0}px` }); }
+  }
   function drawTrack() {
-    trackLayer.hidden = true;
+    drawRails();
     sessEl.hidden = !watchOn || !v.doc;
     if (sessEl.hidden) return;
     const pages = new Set([...trail].map((k) => k.split(":")[0])).size, min = Math.round(sess.ms / 60_000);
@@ -1381,7 +1432,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
   function tick() {
     if (!watchOn || asking || v.hidden || document.hidden || !v.vp) return;
-    if (Date.now() - lastHere < AWAY_MS) { sess.ms += TICK; save(); drawTrack(); }
+    if (Date.now() - lastHere < AWAY_MS) { sess.ms += TICK; save(); drawTrack(); } else drawRails();
     if (document.querySelector(".dot-win, .mk-card") || search.penning()) { seen.ms = 0; return; } // busy with Dot already
     const b = readingBlock();
     if (!b) return;
@@ -1392,6 +1443,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     if (seen.ms >= STUCK_MS * (asked.has(key) ? 3 : 1)) offer(b, key);
   }
   const watchTimer = setInterval(tick, TICK);
+  const railTimer = setInterval(() => { if (watchOn && !document.hidden) drawRails(); }, 700); // the mini Dot keeps up as you read
   async function offer(b, key) {
     asking = true; asked.add(key); seen.ms = 0;
     const [, y0, x1] = px(b), box = pageBox.getBoundingClientRect(), x = box.left + x1, y = box.top + y0;
@@ -1444,7 +1496,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
 
   // ---------- reading mode: click a paragraph for Dot's options; highlight by hand ----------
   // The reader sets hooks.onAsk(selection, at) and hooks.onNote(selection, at); until then Ask and Note only close the menu.
-  const hooks = { onAsk: null, onNote: null };
+  const hooks = { onAsk: null, onNote: null, onCommand: null };
   let hls = [], sel = null, job = false, animating = false, skipAnim = false, chip = null;
   const near = h("div", { class: "p-near", hidden: true });
   const selBox = h("div", { class: "sel-box", hidden: true }, h("b"));
@@ -1471,7 +1523,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     find: '<svg viewBox="0 0 24 24"><g class="lens"><circle cx="10" cy="10" r="6"/><path d="m14.5 14.5 6 6"/></g></svg>',
   };
   // Each tool is a coloured blob with its icon and its name. The longer line shows when you point at it.
-  const TOOL = { suggest: ["Suggest", "#8ecbff", "Mark the lines worth keeping"], ask: ["Ask", "#c6a0ff", "Ask me about this part"],
+  const TOOL = { suggest: ["Highlight for me", "#8ecbff", "I mark the key lines; you can say what to look for"], ask: ["Ask", "#c6a0ff", "Ask me about this part"],
     note: ["Note", "#ff9e7a", "Save a note on this part"], explain: ["Explain", "#7bd88f", "I say what this means"],
     mark: ["Highlight", "#ffe347", "Mark these words in yellow"], find: ["Find", "#ff7ab8", "Find this in the paper"],
     more: ["Add more", "#ffa86b", "Take in the next paragraph"], back: ["Back", "#c9cdd6", "Send me home"] };
@@ -1536,6 +1588,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   let along = false;
   function setAlong(on) {
     if (along === on) return;
+    if (on && buddy.asleep()) { buddy.goHome(); buddy.say("I am asleep. Select words and I highlight them, or wake me to come along.", { mood: "idle" }); return; }
     along = on; buddy.follow(on); near.hidden = true;
     if (!on) { clearSel(); if (chip) closeChip(); }
     hooks.onAlong?.(on);
@@ -1602,7 +1655,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   async function askHere(c, at) {
     try { if (hooks.onAsk) return await hooks.onAsk(c, at); } catch (e) { if (!(e instanceof TypeError)) throw e; } // the canvas Ask is not there yet: ask here
     const q = await buddy.prompt({ x: at.x, y: at.y, placeholder: c.text ? "Ask about this part" : "Ask about this page" });
-    if (!q) return;
+    if (!q || await command(q)) return;
     const post = (question) => api(`/papers/${paperId}/ask`, { method: "POST", body: JSON.stringify({ page: c.page, question: question.slice(0, 1000) }) });
     const about = c.text ? ` (This is about the part I chose: "${c.text.slice(0, 300)}")` : "";
     buddy.open({ x: at.x, y: at.y, quote: c.text ? c.text.slice(0, 300) : `Page ${c.page}`, area: el.getBoundingClientRect(), save: saveToNote,
@@ -1650,6 +1703,8 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   // ----- the buddies on chosen words -----
   async function wordsMenu(x, y) {
     const sl = getSelection();
+    // asleep, Dot is a highlighter: the words you select are marked at once
+    if (buddy.asleep() && textLayer && !sl.isCollapsed && sl.rangeCount && textLayer.contains(sl.anchorNode) && picked()) return highlightSelection();
     if (!along || !textLayer || sl.isCollapsed || !sl.rangeCount || !textLayer.contains(sl.anchorNode) || !picked() || !clickable()) return;
     const words = picked(), rects = selectionRects();
     if (!rects.length) return;
@@ -1723,6 +1778,25 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     const box = pageBox.getBoundingClientRect(), k = v.vp?.scale ?? 1, lx = (cx - box.left) / k, ly = (cy - box.top) / k;
     return hls.findLast((x) => x.page === v.page && x.rects.some((r) => lx >= r[0] && lx <= r[2] && ly >= r[1] && ly <= r[3])) ?? null;
   }
+  // Typed to Dot: "clear all highlights" (or just mine, or Dot's) clears them, with Undo, instead of asking the model
+  async function command(q) {
+    const m = q.trim().toLowerCase().match(/^(?:please\s+)?(?:clear|remove|delete|erase|wipe)\s+(?:all\s+)?(?:of\s+)?(?:the\s+)?(my|your|dot'?s|blue|yellow)?\s*highlights?(?:\s+(?:on|from)\s+(?:this|the)\s+(?:paper|page))?[.!]?$/);
+    if (!m) return !!(await hooks.onCommand?.(q)); // not about highlights: the canvas may know it (clear the notes)
+    const kind = m[1] === "my" || m[1] === "yellow" ? "me" : m[1] && m[1] !== "your" ? "dot" : null;
+    const gone = hls.filter((x) => !kind || x.kind === kind);
+    if (!gone.length) { buddy.say("There are no highlights to clear.", { mood: "idle" }); return true; }
+    hls = hls.filter((x) => !gone.includes(x)); drawHl();
+    const failed = (await Promise.all(gone.map((x) => api(`/papers/${paperId}/highlights/${x.id}`, { method: "DELETE" }).then(() => null, () => x)))).filter(Boolean);
+    if (failed.length) { hls.push(...failed); drawHl(); }
+    const n = gone.length - failed.length;
+    buddy.say(failed.length ? `I cleared ${n} and could not clear ${failed.length}. Is the app still running?` : `I cleared ${n} highlight${n === 1 ? "" : "s"}.`,
+      { mood: failed.length ? "worried" : "happy", actions: n ? [{ label: "Undo", onClick: async () => {
+        const back = await Promise.all(gone.filter((x) => !failed.includes(x)).map((x) =>
+          api(`/papers/${paperId}/highlights`, { method: "POST", body: JSON.stringify({ page: x.page, kind: x.kind, text: x.text || "", rects: x.rects }) }).catch(() => null)));
+        hls.push(...back.filter(Boolean)); drawHl();
+      } }] : [] });
+    return true;
+  }
   function closeChip() { chip?.remove(); chip = null; document.removeEventListener("pointerdown", chipOut, true); document.removeEventListener("keydown", chipKey, true); }
   const chipOut = (e) => { if (!chip?.contains(e.target)) closeChip(); };
   const chipKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); closeChip(); } };
@@ -1743,9 +1817,12 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   async function suggestHere() {
     const s = selection();
     if (!s) return "";
+    const [cx, cy] = buddy.centre();
+    const focus = await buddy.prompt({ x: cx, y: cy, optional: true, placeholder: "What to highlight? Or just Enter" });
+    if (focus == null) return ""; // Escape: changed your mind
     await buddy.shape("marker");
     const finger = readAlong(s.rect);
-    const r = await api(`/papers/${paperId}/highlights/suggest`, { method: "POST", body: JSON.stringify({ page: s.page, rect: s.rect }) })
+    const r = await api(`/papers/${paperId}/highlights/suggest`, { method: "POST", body: JSON.stringify({ page: s.page, rect: s.rect, focus }) })
       .catch(() => ({ ok: false, error: "Could not ask the model. Is the app still running?" }));
     finger.stop();
     await buddy.shape("marker");
@@ -1893,10 +1970,10 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       const b = pageBox.getBoundingClientRect(), s = stage.getBoundingClientRect();
       stage.scrollTop += b.top + px(r)[1] - s.top - stage.clientHeight * 0.3;
       const off = glow(r); setTimeout(off, 1800);
-    }, hidden: () => v.hidden, page: () => v.page, highlights: () => hls, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
+    }, hidden: () => v.hidden, page: () => v.page, highlights: () => hls, command, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
-    destroy() { clearInterval(watchTimer); watchStop.abort(); buddy.tools(null); buddy.tagAlong(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
+    destroy() { clearInterval(watchTimer); clearInterval(railTimer); watchStop.abort(); buddy.tools(null); buddy.tagAlong(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },
   };
 }
 
