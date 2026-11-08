@@ -28,6 +28,8 @@ class Settings(BaseModel):
     # checker
     hint_words: int = Field(40, ge=20, le=60)
     checker_hints: bool = True  # False = show the verdict only
+    # Dot's personality, in your words; used when Dot talks in the Library
+    dot_persona: str = Field("", max_length=300)
 
     @field_validator("base_url")
     @classmethod

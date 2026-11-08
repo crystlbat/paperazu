@@ -580,8 +580,9 @@ class LibraryAskIn(BaseModel):
 
 
 @app.get("/library/map")
-def library_map() -> dict[str, Any]:
-    return shelf.library_map(settings.get_all())
+def library_map(names: bool = True) -> dict[str, Any]:
+    """names=false answers at once with fallback row names; the page asks again for Dot's names."""
+    return shelf.library_map(settings.get_all(), name_groups=names)
 
 
 @app.post("/library/ask")

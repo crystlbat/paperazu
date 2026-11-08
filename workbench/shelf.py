@@ -11,7 +11,7 @@ from typing import Any
 from . import db, framework, graph, library, primer
 from .settings import Settings
 
-KINDS = ("find", "summarize", "set_date", "add_theme", "mark_done", "export", "delete", "none")
+KINDS = ("answer", "find", "summarize", "set_date", "add_theme", "mark_done", "export", "delete", "none")
 MAX_CANDIDATES = 12
 MAX_STATE = 40  # questions about state ("not opened") reach every match, up to this
 STATE_WORDS = re.compile(r"not opened|never opened|unopened|no summary|without (a )?summary|not started|"
@@ -40,7 +40,7 @@ def kmeans(vecs: dict[str, Any], weight: dict[str, int]) -> list[list[str]]:
     n = len(ids)
     if n < 4:
         return [ids] if ids else []
-    k = max(2, min(8, round((n / 2) ** 0.5)))
+    k = max(2, min(8, round(n ** 0.5)))  # a small library still gets a few colours
     seeds = [max(ids, key=lambda p: (weight.get(p, 0), p))]
     while len(seeds) < k:
         seeds.append(min((p for p in ids if p not in seeds),
@@ -74,22 +74,24 @@ def _fallback_name(con: Any, ids: list[str], n: int) -> str:
 
 
 def _ask_names(s: Settings, groups: list[list[str]], titles: dict[str, str]) -> list[str] | None:
-    lines = "\n".join(f"G{i + 1}: " + " | ".join(titles.get(p, "")[:90] for p in g[:8]) for i, g in enumerate(groups))
-    schema = {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}},
-              "required": ["names"]}
-    try:
-        text = primer._complete(s, [
-            {"role": "system", "content": "You name shelves in a reading library. For each group of paper titles, "
-             "give one short plain name of 2 to 4 words that says what the papers share. No quotes, no numbering. "
-             'Reply as JSON: {"names": ["...", ...]} in the same order as the groups.'},
-            {"role": "user", "content": lines}], schema, "shelf_names")
-        a, b = text.find("{"), text.rfind("}")
-        names = json.loads(text[a:b + 1])["names"]
-    except (primer.PrimerError, ValueError, KeyError, TypeError):
-        return None
-    if not isinstance(names, list) or len(names) != len(groups):
-        return None
-    return [" ".join(str(x).replace("—", "-").split()[:5])[:40] or "" for x in names]
+    """One short shelf name per group, one model call each (small models mix up several groups in one call)."""
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    out = []
+    for g in groups:
+        try:
+            text = primer._complete(s, [
+                {"role": "system", "content": "You name one shelf in a reading library. Given the paper titles on it, "
+                 "reply with one short plain name of 2 to 4 words that says what they share. Not a title from the list. "
+                 'Reply as JSON: {"name": "..."}'},
+                {"role": "user", "content": "\n".join(titles.get(p, "")[:90] for p in g[:10])}], schema, "shelf_name")
+            a, b = text.find("{"), text.rfind("}")
+            name = str(json.loads(text[a:b + 1])["name"])
+        except (primer.PrimerError, ValueError, KeyError, TypeError):
+            return None
+        name = name.strip(" \"'.")
+        name = name[:1].upper() + name[1:]
+        out.append(" ".join(re.sub(r"^\s*G\d+\s*[:.)-]\s*", "", name).replace("\u2014", "-").strip(" \"'.").split()[:5])[:40])
+    return out
 
 
 def library_map(s: Settings, name_groups: bool = True) -> dict[str, Any]:
@@ -124,17 +126,52 @@ def library_map(s: Settings, name_groups: bool = True) -> dict[str, Any]:
 
 # ---------- Ask ----------
 
-def _candidates(s: Settings, question: str, papers: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+TOP_PAPERS = 6       # level 1: the papers whose best passage is closest to the question
+PER_PAPER = 3        # level 2: the best passages inside each of those papers
+MAX_PASSAGES = 10
+PASSAGE_CHARS = 650
+PAPER_FLOOR = graph.AUTO_PICK - 0.12  # papers below this are not about the question at all
+NEAR_BEST = 0.1      # inside a paper, keep passages this close to its best one
+
+
+def passages(s: Settings, question: str, allowed: set[str] | None = None) -> list[dict[str, Any]]:
+    """Cross-paper search in two levels: rank papers by their best passage, then take the best few
+    passages inside each top paper. Returns [{paper_id, page, text, score}], best first.
+    Raises GraphError when there is no embedding model."""
+    model = graph.embed_model(s)
+    con = db.connect()
+    rows = graph._chunks(con, model)
+    con.close()
+    if allowed is not None:
+        rows = [r for r in rows if r["paper_id"] in allowed]
+    if not rows:
+        return []
+    qv = graph.embed(s, [graph.QUERY + question], model)[0]
+    per: dict[str, list[tuple[float, Any]]] = {}
+    for r in rows:
+        per.setdefault(r["paper_id"], []).append((graph._dot(qv, graph._vec(r["vec"])), r))
+    for hits in per.values():
+        hits.sort(key=lambda x: -x[0])
+    tops = sorted(per, key=lambda pid: -per[pid][0][0])[:TOP_PAPERS]
+    out = []
+    for pid in tops:
+        best = per[pid][0][0]
+        if best < PAPER_FLOOR:
+            continue
+        out += [{"paper_id": pid, "page": r["page"], "text": " ".join(r["text"].split())[:PASSAGE_CHARS], "score": round(sc, 3)}
+                for sc, r in per[pid][:PER_PAPER] if sc >= best - NEAR_BEST]
+    return sorted(out, key=lambda x: -x["score"])[:MAX_PASSAGES]
+
+
+def _candidates(s: Settings, question: str, papers: list[dict[str, Any]],
+                found: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Up to MAX_CANDIDATES papers for the question, with the passage that matched (if any)."""
     by_id = {p["id"]: p for p in papers}
     picked: list[str] = []
     snippet: dict[str, str] = {}
-    try:
-        for r in graph.search(s, question, MAX_CANDIDATES)["results"]:
-            if r["paper_id"] in by_id and r["score"] >= graph.AUTO_PICK - 0.1:
-                picked.append(r["paper_id"]); snippet[r["paper_id"]] = r["snippet"][:200]
-    except graph.GraphError:
-        pass
+    for r in found:
+        if r["paper_id"] in by_id and r["paper_id"] not in picked:
+            picked.append(r["paper_id"]); snippet[r["paper_id"]] = r["text"][:200]
     for p in library.list_papers(framework.load_all(), q=question):
         if p["id"] not in picked:
             picked.append(p["id"])
@@ -166,12 +203,17 @@ ASK_SCHEMA = {"type": "object", "properties": {
     "kind": {"type": "string", "enum": list(KINDS)},
     "papers": {"type": "array", "items": {"type": "object", "properties": {
         "p": {"type": "string"}, "why": {"type": "string"}}, "required": ["p", "why"]}},
+    "sources": {"type": "array", "items": {"type": "string"}},
     "date": {"type": "string"}, "theme": {"type": "string"}}, "required": ["reply", "kind", "papers"]}
 
 SYSTEM = (
     "You are Dot, a small friendly helper inside a student's paper reading library. Today is {today}. "
     "You get a list of the student's papers (P1, P2, ...) and a request. Reply in one or two short, plain "
-    "sentences, simple English, no dashes as punctuation. Choose one kind:\n"
+    "sentences, simple English, no dashes as punctuation. You may also get passages (S1, S2, ...) from inside "
+    "the papers. Choose one kind:\n"
+    "answer: they ask what the papers say, want an explanation, or want papers compared. Answer from the passages "
+    "only, in 2 to 5 short sentences, and cite every claim like [S2]. Put the passages you used in sources. If the "
+    "passages do not answer it, say so plainly and do not guess.\n"
     "find: they want to see papers (\"show me\", \"which papers\", \"find\").\n"
     "summarize: make the AI summary for the papers.\n"
     "set_date: set the talk (presentation) date; put it in date as YYYY-MM-DD.\n"
@@ -183,7 +225,7 @@ SYSTEM = (
     "List the papers the request is about in papers, each with why: at most 10 words on why it fits. "
     "Use only papers from the list. If nothing fits, use kind none and say so. For a job, the reply says "
     "what you will do, naming the papers by short title. "
-    'Reply as JSON: {{"reply": "...", "kind": "...", "papers": [{{"p": "P1", "why": "..."}}], "date": "", "theme": ""}}'
+    'Reply as JSON: {{"reply": "...", "kind": "...", "papers": [{{"p": "P1", "why": "..."}}], "sources": ["S1"], "date": "", "theme": ""}}'
 )
 
 
@@ -192,10 +234,22 @@ def ask(s: Settings, question: str, history: list[dict[str, str]]) -> dict[str, 
     con = db.connect()
     themes = {r["id"]: r["name"] for r in con.execute("SELECT id, name FROM themes")}
     con.close()
-    cands, snippet = _candidates(s, question, papers)
+    try:
+        found = passages(s, question)
+    except graph.GraphError:
+        found = []
+    cands, snippet = _candidates(s, question, papers, found)
     alias = {f"P{i + 1}": p for i, p in enumerate(cands)}
     listing = "\n".join(_describe(p, a, themes) for a, p in alias.items()) or "(the library is empty)"
-    msgs = [{"role": "system", "content": SYSTEM.format(today=date.today().isoformat())}]
+    back = {p["id"]: a for a, p in alias.items()}
+    srcs = {f"S{i + 1}": x for i, x in enumerate(x for x in found if x["paper_id"] in back)}
+    if srcs:
+        listing += "\n\nPassages:\n" + "\n".join(f'{k} ({back[x["paper_id"]]}, p. {x["page"]}): {x["text"]}' for k, x in srcs.items())
+    system = SYSTEM.format(today=date.today().isoformat())
+    if s.dot_persona.strip():
+        system += ("\nYour personality, chosen by the student: " + s.dot_persona.strip()[:300] +
+                   "\nSpeak in that voice, but keep facts, citations and the JSON format exactly as above.")
+    msgs = [{"role": "system", "content": system}]
     for h in history[-4:]:
         msgs += [{"role": "user", "content": h.get("q", "")[:500]}, {"role": "assistant", "content": h.get("a", "")[:800]}]
     msgs.append({"role": "user", "content": f"Papers:\n{listing}\n\nRequest: {question}"})
@@ -207,11 +261,27 @@ def ask(s: Settings, question: str, history: list[dict[str, str]]) -> dict[str, 
         return _offline(cands, snippet)
     except (ValueError, TypeError):
         return {"reply": "I got muddled there. Try asking again in other words.", "action": {"kind": "none", "paper_ids": []}, "papers": []}
-    return clean(out, alias)
+    return clean(out, alias, srcs)
 
 
-def clean(out: dict[str, Any], alias: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Check the model's JSON: known kind, known papers only, a real date, short reasons."""
+def _cite(reply: str, out: dict[str, Any], srcs: dict[str, dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    """Keep only citations of real passages, renumbered [1], [2] in the order they are used."""
+    order: list[str] = []
+    for k in re.findall(r"S\d+", reply.upper()) + [str(x).strip().upper() for x in out.get("sources") or []]:
+        if k in srcs and k not in order:
+            order.append(k)
+    num = {k: i + 1 for i, k in enumerate(order)}
+
+    def sub(m: re.Match[str]) -> str:
+        ks = [k for k in re.findall(r"S\d+", m.group(0).upper()) if k in num]
+        return "".join(f"[{num[k]}]" for k in ks)
+    reply = re.sub(r"\[\s*S\d+(?:\s*[,;]\s*S?\d+)*\s*\]", lambda m: sub(m), reply, flags=re.I)
+    reply = re.sub(r"\s+([.,])", r"\1", re.sub(r"\s{2,}", " ", reply)).strip()
+    return reply, [{"n": num[k], "paper_id": srcs[k]["paper_id"], "page": srcs[k]["page"], "snippet": srcs[k]["text"][:220]} for k in order]
+
+
+def clean(out: dict[str, Any], alias: dict[str, dict[str, Any]], srcs: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Check the model's JSON: known kind, known papers only, a real date, short reasons, real citations."""
     kind = out.get("kind") if out.get("kind") in KINDS else "none"
     seen: list[dict[str, str]] = []
     for item in out.get("papers") or []:
@@ -219,7 +289,8 @@ def clean(out: dict[str, Any], alias: dict[str, dict[str, Any]]) -> dict[str, An
             continue
         p = alias.get(str(item.get("p", "")).strip().upper())
         if p and all(x["id"] != p["id"] for x in seen):
-            seen.append({"id": p["id"], "why": " ".join(str(item.get("why", "")).split()[:12])})
+            why = re.sub(r"\b[PS]\d+(?:'s)?\b", "", str(item.get("why", "")))  # the model's own labels mean nothing to you
+            seen.append({"id": p["id"], "why": " ".join(why.replace("\u2014", ",").split()[:12]).strip(" ,.:;")})
     action: dict[str, Any] = {"kind": kind, "paper_ids": [x["id"] for x in seen]}
     reply = " ".join(str(out.get("reply") or "").replace("—", ",").split()) or "Done."
     if kind == "set_date":
@@ -235,9 +306,12 @@ def clean(out: dict[str, Any], alias: dict[str, dict[str, Any]]) -> dict[str, An
             reply = "Which theme should I put them in?"
         else:
             action["theme"] = name
-    if kind != "none" and kind != "find" and not seen:
+    reply, sources = _cite(reply, out, srcs or {})
+    if kind == "answer":
+        action = {"kind": "answer", "paper_ids": list(dict.fromkeys([x["paper_id"] for x in sources] + action["paper_ids"]))}
+    elif kind not in ("none", "find") and not seen:
         action = {"kind": "none", "paper_ids": []}
-    return {"reply": reply, "action": action, "papers": seen}
+    return {"reply": reply, "action": action, "papers": seen, "sources": sources}
 
 
 def _offline(cands: list[dict[str, Any]], snippet: dict[str, str]) -> dict[str, Any]:

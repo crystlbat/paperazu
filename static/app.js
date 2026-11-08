@@ -81,6 +81,7 @@ function route() {
   if (!pages[name]) { location.hash = "#library"; return; }
   document.querySelectorAll("[data-nav]").forEach((a) =>
     a.classList.toggle("active", a.dataset.nav === name));
+  libraryLeave();
   $("#page-extra").replaceChildren();
   view.replaceChildren();
   view.className = `page page-${name}`;
@@ -90,7 +91,7 @@ function route() {
 window.addEventListener("hashchange", route);
 
 // ---------- Library ----------
-const lib = { q: "", status: "all", sort: "date", theme: "" };
+const lib = { theme: "" }; // the Graph page sets theme to open the Library on that theme's shelf
 let themeList = []; // [{id, name, color, papers}], loaded with the Library
 const STATUSES = [["all", "All"], ["not_started", "Not started"], ["in_progress", "In progress"],
   ["notes_done", "Notes done"], ["reflection_done", "Reflection done"]];
@@ -148,19 +149,11 @@ function fmtSpent(sec) {
 }
 
 async function renderLibrary() {
-  const [s, fw, list, th] = await Promise.all([api("/settings"), api("/frameworks"), loadPapers(), api("/themes")]);
+  const [s, fw, list, th] = await Promise.all([api("/settings"), api("/frameworks"), api("/papers"), api("/themes")]);
   themeList = th.themes;
-  const page = h("div", { class: "library" });
-  view.append(page);
-  // The agenda shows every dated paper, even when a filter or search narrows the list.
-  const draw = async (data) => {
-    const all = lib.q || lib.status !== "all" || lib.theme ? (await api("/papers")).papers : data.papers;
-    page.replaceChildren(libHead(data, s, all), data.total ? libBody(data, s, fw, nextTalk(all)?.id) : libEmpty(fw.paper));
-  };
-  await draw(list);
-  enablePageDrop(page);
-  libraryGreeting(list);
-  libRedraw = async () => { themeList = (await api("/themes")).themes; await draw(await loadPapers()); };
+  if (!view.classList.contains("page-library")) return; // you left while it loaded
+  view.append(libraryStage({ s, fw, list }));
+  libRedraw = libraryRefresh;
   // a summary still being made (you came back mid-way): follow it so its chip counts up
   for (const p of list.papers.filter((x) => x.primer_status === "making")) {
     streamPrimer(p.id, (e) => { const el = document.querySelector(`[data-primer="${p.id}"]`); if (el) el.textContent = primerLabel(e); })
@@ -169,60 +162,8 @@ async function renderLibrary() {
 }
 let libRedraw = async () => {};
 
-function libraryGreeting(data) {
-  if (!data.total) {
-    return greet("lib-empty", "Hi, I am Dot. Drop your first PDF anywhere on this page. I will read the title and authors for you.", { mood: "happy" });
-  }
-  const next = nextTalk(data.papers);
-  if (next) {
-    const left = next.progress.length - next.steps_done;
-    greet("lib", `Your next talk is "${next.title}", ${relDays(next.presentation_date)}. ` +
-      (left ? `${left} steps to go.` : "Your notes are done. Time for the reflection."),
-      { mood: daysFromToday(next.presentation_date) <= 2 && left ? "surprised" : "idle",
-        actions: [{ label: "Open it", href: `#read/${next.id}` }] });
-  } else {
-    greet("lib", "No talks with a date coming up. Add a presentation date with More, then Edit details.");
-  }
-}
-
 const nextTalk = (papers) => papers.filter((p) => p.presentation_date && daysFromToday(p.presentation_date) >= 0)
   .sort((a, b) => a.presentation_date.localeCompare(b.presentation_date))[0];
-
-function loadPapers() {
-  return api(`/papers?${new URLSearchParams(lib)}`);
-}
-
-function libHead(data, s, all) {
-  return h("header", { class: "lib-head" },
-    h("h1", {}, "Library"),
-    h("span", { class: "stat" }, h("span", { class: "dotnum" }, String(data.total)), data.total === 1 ? "paper" : "papers"),
-    h("span", { class: "stat" }, h("span", { class: "dotnum" }, `${data.reflections_done}/${s.reflections_target}`), "reflections done"),
-    data.total ? agenda(all) : null);
-}
-
-// The next 14 days as a dot-matrix strip: a lit column is a talk, the next talk wears the marker.
-let agendaPlayed = false;
-function agenda(papers) {
-  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const byDay = Object.groupBy(papers.filter((p) => p.presentation_date), (p) => p.presentation_date);
-  const next = nextTalk(papers);
-  const days = Array.from({ length: 14 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() + i); return d; });
-  const inRange = days.reduce((n, d) => n + (byDay[iso(d)]?.length ?? 0), 0);
-  const summary = !next ? "No talks with a date coming up."
-    : `${inRange ? plural(inRange, "talk") : "No talks"} in this window. Next talk ${fmtDate(next.presentation_date)}, ${relDays(next.presentation_date)}.`;
-  const intro = !agendaPlayed; agendaPlayed = true;
-  return h("div", { class: `agenda${intro ? " intro" : ""}` },
-    h("ol", { class: "agenda-days", "aria-hidden": "true" }, days.map((d, i) => {
-      const talks = byDay[iso(d)] ?? [];
-      const isNext = next && next.presentation_date === iso(d);
-      return h("li", { class: [i === 0 && "today", talks.length && "talk", isNext && "next"].filter(Boolean).join(" "),
-        style: `--i:${i}`, title: [fmtDate(iso(d)), ...talks.map((p) => p.title)].join("\n") },
-        h("span", { class: "wd" }, d.toLocaleDateString("en-GB", { weekday: "narrow" })),
-        h("span", { class: "col" }, h("i"), h("i"), h("i"), h("i")),
-        h("span", { class: "dn" }, h("span", { class: isNext ? "hl" : "" }, String(d.getDate()))));
-    })),
-    h("p", { class: "agenda-cap" }, h("span", { class: "agenda-label" }, "Next 14 days"), h("span", { class: "quiet" }, summary)));
-}
 
 function filePicker() {
   const input = h("input", { type: "file", accept: "application/pdf,.pdf", hidden: true,
@@ -230,92 +171,7 @@ function filePicker() {
   return input;
 }
 
-function libEmpty(fw) {
-  const total = fw.steps.reduce((t, st) => t + st.minutes, 0);
-  const picker = filePicker();
-  return h("div", { class: "lib-empty" },
-    h("div", { class: "sheet-drop", "data-drop": "" },
-      h("h2", {}, "Add the first paper you need to read."),
-      h("p", { class: "quiet" }, "Drop a PDF on this page, or choose one from your Mac."),
-      dropGlyph(),
-      h("div", { class: "actions" },
-        h("button", { class: "btn", type: "button", onclick: () => picker.click() }, "Choose PDF"),
-        h("span", { class: "quiet small upload-msg", "aria-live": "polite" }), picker)),
-    h("section", { class: "path" },
-      h("h2", {}, "How you will read it"),
-      h("p", {}, `Every paper goes through the same ${fw.steps.length} steps, about `,
-        h("span", { class: "num" }, `${total}`), " minutes in all. Write your own notes first. The model checks them after."),
-      h("ol", {}, fw.steps.map((st) => h("li", {},
-        h("span", { class: "num n" }, String(st.n)),
-        h("span", {}, h("span", { class: "title" }, st.title),
-          st.look_in.length ? h("span", { class: "look" }, `  in ${st.look_in.join(", ")}`) : null),
-        h("span", { class: "num quiet" }, `${st.minutes} min`))))));
-}
-
-// A dot-matrix arrow into a tray. It drops one row while you hover or drag a file over the page.
-const DROP = [".....#.....", ".....#.....", ".....#.....", "..#..#..#..", "...#.#.#...", "....###....", ".....#.....",
-  "...........", "#.........#", "###########"];
-function dropGlyph() {
-  return h("span", { class: "dm", "aria-hidden": "true" }, DROP.flatMap((line, y) =>
-    [...line].map((c) => h("i", { class: c === "#" ? (y < 7 ? "a" : "t") : "" }))));
-}
-
-function libBody(data, s, fw, nextId) {
-  const picker = filePicker();
-  let timer;
-  const search = h("input", { type: "search", placeholder: "Search titles, authors, tags and notes",
-    value: lib.q, "aria-label": "Search papers",
-    oninput: () => { clearTimeout(timer); timer = setTimeout(() => { lib.q = search.value; refreshList(); }, 250); } });
-  const filters = h("div", { class: "segmented", role: "group", "aria-label": "Show papers" },
-    STATUSES.map(([id, label]) => h("button", { type: "button", "aria-pressed": String(lib.status === id),
-      onclick: (e) => { lib.status = id;
-        filters.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === e.currentTarget)));
-        refreshList(); } }, label)));
-  const sort = h("select", { "aria-label": "Sort by", onchange: () => { lib.sort = sort.value; refreshList(); } },
-    SORTS.map(([id, label]) => h("option", { value: id, selected: lib.sort === id }, `Sort: ${label}`)));
-  const listEl = h("div", { class: "paper-list" });
-
-  async function refreshList() {
-    const [d, all] = await Promise.all([loadPapers(), api("/papers")]);
-    listEl.replaceChildren(paperTable(d.papers, s, fw, nextTalk(all.papers)?.id));
-  }
-  listEl.append(paperTable(data.papers, s, fw, nextId));
-
-  return h("div", { class: "lib-main" },
-    h("div", { class: "toolbar" }, search, sort,
-      h("button", { class: "btn", type: "button", onclick: () => picker.click() }, "Add paper"), picker),
-    h("div", { class: "toolbar-2" }, filters,
-      h("span", { class: "quiet small upload-msg", "aria-live": "polite" }, "You can also drop a PDF anywhere on this page.")),
-    themeBar(), listEl);
-}
-
-// Themes: your own topic groups. Click one to show only its papers; papers with none are "Unsorted".
 const themeDot = (t) => h("i", { class: "tdot", style: `--tc:var(--theme-${t.color})` });
-function themeBar() {
-  const pick = (id) => { lib.theme = lib.theme === id ? "" : id; libRedraw(); };
-  const name = h("input", { type: "text", placeholder: "New theme", maxlength: 40, "aria-label": "Name of the new theme" });
-  const err = h("span", { class: "status err", "aria-live": "polite" });
-  const add = h("form", { class: "tadd", onsubmit: async (e) => {
-    e.preventDefault(); err.textContent = "";
-    try { await api("/themes", { method: "POST", body: JSON.stringify({ name: name.value }) }); libRedraw(); }
-    catch (x) { err.textContent = x.body?.detail?.errors?.name ?? "Could not add the theme."; }
-  } }, name, h("button", { type: "submit", class: "btn ghost" }, "Add"), err);
-  return h("div", { class: "themebar", role: "group", "aria-label": "Themes" },
-    h("span", { class: "tlabel" }, "Themes"),
-    h("button", { type: "button", class: "tchip", "aria-pressed": String(!lib.theme), onclick: () => pick("") }, "All"),
-    themeList.map((t) => h("span", { class: "tchip-wrap" },
-      h("button", { type: "button", class: "tchip", "aria-pressed": String(lib.theme === t.id), onclick: () => pick(t.id) },
-        themeDot(t), t.name, h("span", { class: "tn" }, String(t.papers))),
-      h("button", { type: "button", class: "tdel", "aria-label": `Delete the theme ${t.name}`, title: "Delete theme",
-        onclick: async () => {
-          if (!confirm(`Delete the theme "${t.name}"? Papers stay in the library, only the theme goes.`)) return;
-          await api(`/themes/${t.id}`, { method: "DELETE" }).catch(() => {});
-          if (lib.theme === t.id) lib.theme = "";
-          libRedraw();
-        } }, "×"))),
-    themeList.length ? h("button", { type: "button", class: "tchip", "aria-pressed": String(lib.theme === "none"), onclick: () => pick("none") }, "Unsorted") : null,
-    add);
-}
 
 // The theme picker on a card: tick themes, or make a new one and put the paper in it at once.
 function themePicker(p) {
@@ -337,72 +193,6 @@ function themePicker(p) {
         } catch (x) { name.setCustomValidity(x.body?.detail?.errors?.name ?? "Could not add."); name.reportValidity(); name.setCustomValidity(""); }
       } }, name, h("button", { type: "submit", class: "btn ghost" }, "Add"))));
   return menu;
-}
-
-function progressBar(progress) {
-  return h("span", { class: "segs", "aria-hidden": "true" },
-    progress.map((st, i) => h("i", { class: st, style: `--i:${i}` })));
-}
-
-let cardsPlayed = false;
-function paperTable(papers, s, fw, nextId) {
-  if (!papers.length) {
-    return h("p", { class: "none quiet" }, lib.q ? `No papers match "${lib.q}".` : "No papers with this status.");
-  }
-  // "You are here" in the Library: the next presentation overall (nextId comes from the unfiltered list).
-  const intro = !cardsPlayed; cardsPlayed = true; // the entrance plays once, not on every change
-  return h("ol", { class: `pcards${intro ? " intro" : ""}` }, papers.map((p, i) => paperRow(p, s, fw, p.id === nextId, i)));
-}
-
-// One paper: cover, what it is, how far you are, and the one thing to do next. Only facts that exist are shown.
-function paperRow(p, s, fws, isNext, i = 0) {
-  const fw = fws[p.template] ?? fws.paper;
-  const done = h("input", { type: "checkbox", checked: p.reflection_done, class: "switch",
-    "aria-label": `Reflection done for ${p.title}`,
-    onchange: async () => { await api(`/papers/${p.id}`, { method: "PATCH",
-      body: JSON.stringify({ reflection_done: done.checked }) });
-      if (done.checked) buddy.say(`Reflection done for "${p.title}". Nice work.`, { mood: "happy" });
-      libRedraw(); } });
-  const total = p.progress.length;
-  const at = p.progress.findIndex((x) => x !== "done");
-  const step = at < 0 ? null : fw.steps[at];
-  const where = p.steps_done === total ? `All ${total} steps done`
-    : p.progress.every((x) => x === "empty") ? `Not started, ${fw.steps.reduce((t, x) => t + x.minutes, 0)} min in all`
-    : `Step ${step.n} of ${total - 1}: ${step.title}`;
-  const go = p.steps_done === total ? "Review" : p.progress.every((x) => x === "empty") ? "Start reading" : "Continue";
-  const chip = (text, cls = "") => h("span", { class: `pchip ${cls}` }, text);
-  const chips = [
-    p.presentation_date
-      ? chip(`Talk ${fmtDate(p.presentation_date)}, ${relDays(p.presentation_date)}`, isNext ? "next" : "")
-      : h("button", { type: "button", class: "pchip add", onclick: () => detailsDialog(p, s, false) }, "+ Set talk date"),
-    p.reflection_no ? chip(`Reflection ${p.reflection_no} of ${s.reflections_target}`) : null,
-    p.primer_status !== "not_made" ? h("span", { class: `pchip ${p.primer_status}`, "data-primer": p.id }, primerLabel({ state: p.primer_status })) : null,
-    p.seconds >= 60 ? chip(`${fmtSpent(p.seconds)} read`) : null,
-    chip(p.last_opened ? `Opened ${ago(p.last_opened).toLowerCase()}` : "Not opened yet", "soft"),
-    ...p.themes.map((id) => themeList.find((t) => t.id === id)).filter(Boolean)
-      .map((t) => h("span", { class: "pchip theme", style: `--tc:var(--theme-${t.color})` }, themeDot(t), t.name)),
-    themePicker(p),
-    ...p.tags.map((t) => chip(t, "tag")),
-  ].filter(Boolean);
-  return h("li", { class: `pcard${isNext ? " is-next" : ""}${p.reflection_done ? " is-done" : ""}`, style: `--i:${i}` },
-    h("a", { class: "pcover", href: `#read/${p.id}`, tabindex: -1, "aria-hidden": "true" },
-      h("img", { src: `/papers/${p.id}/cover`, alt: "", loading: "lazy", decoding: "async",
-        onerror: (e) => e.target.replaceWith(h("span", { class: "pcover-none" }, "PDF")) })),
-    h("div", { class: "pmain" },
-      h("a", { href: `#read/${p.id}`, class: "ptitle" }, p.title),
-      h("span", { class: "pauthors" }, h("span", { class: "ptype" }, p.template === "slides" ? "Slides" : "Paper"),
-        p.authors || "Authors unknown"),
-      h("div", { class: "chips" }, chips)),
-    h("div", { class: "ptrack" },
-      h("span", { class: "pwhere" }, where),
-      h("span", { class: "steps", role: "img", "aria-label": `${p.steps_done} of ${total} steps done` },
-        p.progress.map((x, k) => h("i", { class: `${x}${k === at ? " here" : ""}`, style: `--k:${k}`,
-          title: `Step ${fw.steps[k].n}, ${fw.steps[k].title}: ${x === "done" ? "done" : x === "partial" ? "started" : "not started"}` }))),
-      h("span", { class: "pcount" }, `${p.steps_done} / ${total}`)),
-    h("div", { class: "pact" },
-      h("a", { class: `btn${go === "Review" ? " ghost" : ""}`, href: `#read/${p.id}` }, go),
-      h("label", { class: "pdone" }, done, "Reflection done"),
-      rowMenu(p, s)));
 }
 
 async function makePrimerFromLibrary(p) {

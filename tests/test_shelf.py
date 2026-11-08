@@ -97,3 +97,30 @@ def test_ask_offline_falls_back_to_find(lib: dict[str, str], monkeypatch: pytest
     out = shelf.ask(S, "papers about protein", [])
     assert out["offline"] and out["action"]["kind"] == "find" and out["action"]["paper_ids"]
     assert set(out["action"]["paper_ids"][:2]) == {lib["c"], lib["d"]}
+
+
+def test_passages_two_levels(lib: dict[str, str]) -> None:
+    out = shelf.passages(S, "protein")
+    assert out and {x["paper_id"] for x in out} <= {lib["c"], lib["d"]}
+    assert all(x["score"] >= out[-1]["score"] for x in out) and all(len(x["text"]) <= shelf.PASSAGE_CHARS for x in out)
+
+
+def test_clean_answer_keeps_real_citations() -> None:
+    srcs = {"S1": {"paper_id": "x1", "page": 3, "text": "aaa"}, "S2": {"paper_id": "x2", "page": 5, "text": "bbb"}}
+    out = shelf.clean({"reply": "Noise hurts small groups [S2]. Seeds matter [S1, S9].", "kind": "answer", "papers": [], "sources": ["S2", "S7"]},
+                      ALIAS, srcs)
+    assert out["reply"] == "Noise hurts small groups [1]. Seeds matter [2]."
+    assert [(s["n"], s["paper_id"], s["page"]) for s in out["sources"]] == [(1, "x2", 5), (2, "x1", 3)]
+    assert out["action"] == {"kind": "answer", "paper_ids": ["x2", "x1"]}
+
+
+def test_ask_sends_passages_and_persona(lib: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = {}
+
+    def fake(s: Settings, msgs: list[dict[str, str]], *a: object) -> str:
+        seen["system"], seen["user"] = msgs[0]["content"], msgs[-1]["content"]
+        return '{"reply": "Folding [S1].", "kind": "answer", "papers": [], "sources": ["S1"]}'
+    monkeypatch.setattr(primer, "_complete", fake)
+    out = shelf.ask(S.model_copy(update={"dot_persona": "a pirate"}), "what about protein?", [])
+    assert "Passages:" in seen["user"] and "S1 (P" in seen["user"] and "a pirate" in seen["system"]
+    assert out["reply"] == "Folding [1]." and out["sources"][0]["paper_id"] in (lib["c"], lib["d"])
