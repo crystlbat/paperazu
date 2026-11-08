@@ -18,7 +18,7 @@ function h(tag, attrs = {}, ...kids) {
 const MODEL_CALL = /\/(explain|ask|test-connection|check-context)$|\/check\/\w+$|\/export\/reflection$|^\/graph\/(index|search|suggest)$/;
 
 // calls that ask the model to write: off while Dot sleeps (searching, highlights, notes and the canvas still work)
-const AI_CALL = /\/(explain|ask|pickup|reflection)$|\/highlights\/suggest$|\/check\/\w+$/;
+const AI_CALL = /\/(explain|ask|pickup|reflection)$|\/highlights\/suggest$|\/check\/\w+$|^\/jobs\/\d+\/run$|^\/dot\/talk$/;
 const ASLEEP = "I am asleep, so the AI is off. Click me and pick Wake up to use it.";
 
 async function api(path, opts = {}) {
@@ -79,7 +79,7 @@ setInterval(refreshChip, 30000);
 
 // ---------- router ----------
 const view = $("#view");
-const pages = { library: renderLibrary, read: renderReader, graph: renderGraph, settings: renderSettings };
+const pages = { library: renderLibrary, read: renderReader, graph: renderGraph, creatures: renderCreatures, settings: renderSettings };
 
 function route() {
   const [name, arg, extra] = location.hash.replace(/^#/, "").split("/");

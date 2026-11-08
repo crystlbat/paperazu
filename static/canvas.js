@@ -282,7 +282,10 @@ function canvasPanel(host, paperId, pdf) {
   // Typed to Dot: "clear my notes", "delete all cards", "clear the canvas". The cards are put away, not deleted,
   // so Undo (or All blobs) brings them back.
   async function command(q) {
-    if (!/^(?:please\s+)?(?:clear|remove|delete|erase|wipe|tidy|clean)(?:\s+up)?\s+(?:all\s+)?(?:of\s+)?(?:the\s+|my\s+)?(?:notes?|cards?|blobs?|canvas|board)(?:\s+(?:on|from)\s+(?:this|the)\s+(?:paper|page|canvas|board))?[.!]?$/i.test(q.trim())) return false;
+    // "clear", "delete everything", "wipe all the notes", "delete everthhing": a clear verb, then only words about the board
+    const w = q.trim().toLowerCase().replace(/[.!?]+$/, "").split(/\s+/).filter((x) => x !== "please");
+    const filler = /^(up|all|of|the|my|it|on|from|this|paper|page|here|stuff|ever\w*|ev\w*ing|notes?|cards?|blobs?|canvas|board)$/;
+    if (!/^(clear|remove|delete|del|erase|wipe|tidy|clean|empty)$/.test(w[0] || "") || !w.slice(1).every((x) => filler.test(x))) return false;
     const list = [...cards.values()].filter((c) => !c.d.hidden);
     if (!list.length) { buddy.say("The canvas is already clear.", { mood: "idle" }); return true; }
     closeMenu();
@@ -612,7 +615,7 @@ function canvasPanel(host, paperId, pdf) {
     if (asking || busy || gone) return;
     const r = c.el.getBoundingClientRect();
     const q = await buddy.prompt({ x: x ?? r.left + r.width / 2, y: y ?? r.top + r.height / 2, placeholder: "Follow up on this card..." });
-    if (!q) return;
+    if (!q || await pdf.command?.(q)) return;
     await runAsk({ question: q, page: c.d.kind === "source" ? c.d.page : pdf.page(), from: c.d.id, at: { x: c.d.x + 60, y: c.d.y + (c.el.offsetHeight || 90) + 60 } });
   }
   function activate(c, x, y) {
