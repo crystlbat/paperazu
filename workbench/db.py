@@ -121,6 +121,26 @@ CREATE TABLE IF NOT EXISTS highlights (
     rects TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now'))
 );
+-- the canvas: cards (answer, source, note) placed freely; entries is a JSON list of {who, text}; hidden = "put away"
+CREATE TABLE IF NOT EXISTS canvas_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    question TEXT NOT NULL DEFAULT '',
+    text TEXT NOT NULL DEFAULT '',
+    entries TEXT NOT NULL DEFAULT '[]',
+    x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL,
+    page INTEGER, x0 REAL, y0 REAL, x1 REAL, y1 REAL,
+    parent INTEGER REFERENCES canvas_cards(id) ON DELETE SET NULL,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS canvas_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    from_card INTEGER NOT NULL REFERENCES canvas_cards(id) ON DELETE CASCADE,
+    to_card INTEGER NOT NULL REFERENCES canvas_cards(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS shelf_names (  -- Dot's name for a group of similar papers; key = sha1 of its sorted ids
     key TEXT PRIMARY KEY,
     name TEXT NOT NULL

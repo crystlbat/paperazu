@@ -16,7 +16,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from . import checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, settings, shelf, themes
+from . import canvas, checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, settings, shelf, themes
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -401,6 +401,66 @@ def keep_highlight(paper_id: str, hid: int) -> dict[str, Any]:
 def remove_highlight(paper_id: str, hid: int) -> dict[str, Any]:
     if not marks.remove_highlight(paper_id, hid):
         raise HTTPException(404, detail="This highlight is not there.")
+    return {"ok": True}
+
+
+@app.get("/papers/{paper_id}/canvas")
+def get_canvas(paper_id: str) -> dict[str, Any]:
+    out = canvas.read(paper_id)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return out
+
+
+@app.post("/papers/{paper_id}/canvas/cards")
+def add_card(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        c = canvas.CardIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    out = canvas.add_card(paper_id, c)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return out
+
+
+@app.put("/papers/{paper_id}/canvas/cards/{cid}")
+def edit_card(paper_id: str, cid: int, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        e = canvas.CardEdit(**body)
+    except ValidationError as err:
+        raise HTTPException(422, detail={"errors": _errors(err)})
+    out = canvas.edit_card(paper_id, cid, e)
+    if out is None:
+        raise HTTPException(404, detail="This card is not there.")
+    return out
+
+
+@app.delete("/papers/{paper_id}/canvas/cards/{cid}")
+def remove_card(paper_id: str, cid: int) -> dict[str, Any]:
+    if not canvas.delete_card(paper_id, cid):
+        raise HTTPException(404, detail="This card is not there.")
+    return {"ok": True}
+
+
+@app.post("/papers/{paper_id}/canvas/links")
+def add_link(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        l = canvas.LinkIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    if l.from_card == l.to_card:
+        raise HTTPException(422, detail={"errors": {"to_card": "A card cannot link to itself."}})
+    out = canvas.add_link(paper_id, l)
+    if out is None:
+        raise HTTPException(404, detail="This card is not there.")
+    return out
+
+
+@app.delete("/papers/{paper_id}/canvas/links/{lid}")
+def remove_link(paper_id: str, lid: int) -> dict[str, Any]:
+    if not canvas.delete_link(paper_id, lid):
+        raise HTTPException(404, detail="This link is not there.")
     return {"ok": True}
 
 
