@@ -75,3 +75,20 @@ def test_reflection_needs_notes_and_skips_the_model(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(llm, "client", lambda *a, **k: pytest.fail("the model was called"))
     with pytest.raises(primer.PrimerError, match="Write some notes"):
         export.reflection(Settings(model_name="m"), pid)
+
+
+def test_markdown_lists_the_canvas() -> None:
+    from workbench import canvas
+    pid = _paper()
+    assert "## Canvas" not in export.markdown(pid)
+    ans = canvas.add_card(pid, canvas.CardIn(kind="answer", question="Why?", text="Because it is cheap.", x=0, y=0, w=260))
+    for _ in range(2):
+        canvas.add_card(pid, canvas.CardIn(kind="source", text="gist", x=0, y=0, w=260, page=1, rect=[10, 10, 50, 50], parent=ans["id"]))
+    canvas.add_card(pid, canvas.CardIn(kind="note", x=0, y=0, w=240, page=1, rect=[10, 10, 50, 50],
+                                       entries=[{"who": "me", "text": "What is f?"}, {"who": "dot", "text": "It means this."}]))
+    lines = export.markdown(pid).splitlines()
+    want = ["## Canvas", "- Q: Why?", "  Sources: p. 1", "- Note (p. 1):", "  Dot: It means this."]
+    idx = [lines.index(w) for w in want]
+    assert idx == sorted(idx)
+    assert "  Because it is cheap." in lines and "  What is f?" in lines
+    assert lines.count("  Sources: p. 1") == 1 and "gist" not in "\n".join(lines)

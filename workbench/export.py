@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from . import db, framework, library, marks, primer
+from . import canvas, db, framework, library, marks, primer
 from .framework import Field, Framework
 from .settings import Settings
 
@@ -79,7 +79,29 @@ def markdown(paper_id: str) -> str | None:
     margin = [m for m in marks.all_for(paper_id) or [] if m["text"].strip()]
     if margin:
         out += ["## Margin notes", ""] + [f"- p. {m['page']}: {' '.join(m['text'].split())}" for m in margin] + [""]
+    out += _canvas_md(paper_id)
     return "\n".join(out).rstrip() + "\n"
+
+
+def _canvas_md(paper_id: str) -> list[str]:
+    """The `## Canvas` section: answers (with the pages of their sources) and notes, oldest first."""
+    cards = (canvas.read(paper_id) or {"cards": []})["cards"]
+    shown = sorted((c for c in cards if c["kind"] in ("answer", "note")), key=lambda c: (c["created_at"], c["id"]))
+    if not shown:
+        return []
+    out = ["## Canvas", ""]
+    for c in shown:
+        if c["kind"] == "answer":
+            out += [f"- Q: {' '.join(c['question'].split())}"] + [f"  {ln}" for ln in c["text"].strip().splitlines()]
+            pages = list(dict.fromkeys(s["page"] for s in cards if s["parent"] == c["id"] and s["kind"] == "source" and s["page"]))
+            if pages:
+                out.append("  Sources: " + ", ".join(f"p. {p}" for p in pages))
+        else:
+            out.append(f"- Note (p. {c['page']}):" if c["page"] else "- Note:")
+            for e in c["entries"]:
+                lines = e["text"].strip().splitlines() or [""]
+                out += [f"  {'Dot: ' if e['who'] == 'dot' else ''}{lines[0]}"] + [f"  {ln}" for ln in lines[1:]]
+    return out + [""]
 
 
 # ---------- reflection outline ----------
