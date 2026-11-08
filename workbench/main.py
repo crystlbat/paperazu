@@ -443,6 +443,26 @@ def remove_card(paper_id: str, cid: int) -> dict[str, Any]:
     return {"ok": True}
 
 
+class CanvasAskIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str = Field(min_length=1, max_length=1000)
+    page: int = Field(ge=1)
+    from_card: int | None = None
+    at: tuple[float, float]
+
+
+@app.post("/papers/{paper_id}/canvas/ask")
+def canvas_ask(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        req = CanvasAskIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    out = canvas.ask(settings.get_all(), paper_id, req.question.strip(), req.page, req.from_card, req.at)
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return out
+
+
 @app.post("/papers/{paper_id}/canvas/links")
 def add_link(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     try:

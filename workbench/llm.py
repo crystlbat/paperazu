@@ -226,3 +226,58 @@ def pick_quotes(s: Settings, text: str, title: str) -> list[str]:
         except (ValueError, KeyError, TypeError):
             continue
     return []
+
+
+SOURCES_SYSTEM = (
+    "You help a student read a research paper. Answer the question in simple English, in at most 6 short sentences. "
+    "You get the paper's paragraphs, each with an id like p3-b7. Name only ids from that list as sources, at most 4, "
+    "each with a gist of at most 12 words. Name only paragraphs that really answer the question. "
+    'Return JSON: {"answer": "...", "sources": [{"block": "p3-b7", "gist": "..."}]}.'
+)
+
+
+def ask_with_sources(s: Settings, question: str, title: str, paras: list[tuple[str, int, list[float], str]],
+                     context: str = "") -> dict[str, Any]:
+    """Answer and name the paragraphs that back it up. Each para is (id, page, rect, text)."""
+    from pydantic import BaseModel, ValidationError
+
+    from . import primer
+
+    class Src(BaseModel):
+        block: str
+        gist: str
+
+    class Reply(BaseModel):
+        answer: str
+        sources: list[Src] = []
+
+    ids = [p[0] for p in paras]
+    schema = {"type": "object", "required": ["answer", "sources"], "properties": {
+        "answer": {"type": "string"},
+        "sources": {"type": "array", "items": {"type": "object", "required": ["block", "gist"], "properties": {
+            "block": {"type": "string", "enum": ids}, "gist": {"type": "string"}}}}}}
+    listing = "\n\n".join(f"{i} (page {pg}): {t[:700]}" for i, pg, _, t in paras)
+    messages = [{"role": "system", "content": SOURCES_SYSTEM},
+                {"role": "user", "content": f"Paper: {title}\n\n<paragraphs>\n{listing}\n</paragraphs>\n\n"
+                                            f"{context}My question: {question}\n\nReturn the JSON."}]
+    try:
+        for _ in range(2):
+            reply = primer._complete(s, messages, schema, "sources")
+            a, b = reply.find("{"), reply.rfind("}")
+            try:
+                out = Reply.model_validate_json(reply[a:b + 1] if a >= 0 else reply)
+            except ValidationError as e:
+                messages += [{"role": "assistant", "content": reply},
+                             {"role": "user", "content": f"That answer was not valid: {str(e)[:300]}\nReturn only JSON."}]
+                continue
+            by = {p[0]: p for p in paras}
+            src = [{"page": by[x.block][1], "rect": by[x.block][2], "gist": x.gist.strip()[:120]}
+                   for x in out.sources if x.block in by]
+            return {"ok": True, "text": out.answer.strip(), "sources": src[:4]}
+    except primer.PrimerError as e:
+        return {"ok": False, "error": str(e)}
+    pages = [""] * max(p[1] for p in paras)  # paragraph text by page, for the plain answer
+    for _, pg, _, t in paras:
+        pages[pg - 1] += t + "\n\n"
+    plain = ask(s, context + question, title, pages, min(p[1] for p in paras) - 1)
+    return {"ok": True, "text": plain["text"], "sources": []} if plain["ok"] else plain

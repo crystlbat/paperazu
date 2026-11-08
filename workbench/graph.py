@@ -202,6 +202,25 @@ def search(s: Settings, q: str, limit: int = 8) -> dict[str, Any]:
          "score": round(sc, 3), "pick": sc >= bar} for pid, (sc, r) in top]}
 
 
+def pages_for(s: Settings, paper_id: str, question: str, most: int = 2) -> list[int]:
+    """1-based pages of this paper's best-matching passages, best first. [] without an embedding model."""
+    try:
+        model = embed_model(s)
+        con = db.connect()
+        rows = con.execute("SELECT page, vec FROM chunks WHERE paper_id = ? AND model = ? AND text != ''", (paper_id, model)).fetchall()
+        con.close()
+        if not rows:
+            return []
+        qv = embed(s, [QUERY + question], model)[0]
+    except GraphError:
+        return []
+    out: list[int] = []
+    for r in sorted(rows, key=lambda r: -_dot(qv, _vec(r["vec"]))):
+        if r["page"] not in out:
+            out.append(r["page"])
+    return out[:most]
+
+
 def add_concept(label: str, links: list[dict[str, Any]], kind: str = "kept") -> str:
     cid = uuid.uuid4().hex[:12]
     con = db.connect()

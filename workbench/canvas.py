@@ -2,10 +2,11 @@
 from typing import Any, Literal
 
 import json
+import math
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import db
+from . import db, graph, library, llm, marks
 from .marks import MarkIn
 
 
@@ -149,3 +150,47 @@ def chain(paper_id: str, cid: int, most: int = 6) -> list[dict[str, Any]]:
         return out
     finally:
         con.close()
+
+
+def _h(text: str) -> int:
+    return 40 + 18 * math.ceil(len(text) / 34)
+
+
+def ask(s: Any, paper_id: str, question: str, page: int, from_card: int | None, at: tuple[float, float]) -> dict[str, Any] | None:
+    """Answer with Dot, saving the answer card and a card for each paragraph it points at."""
+    texts = library.page_texts(paper_id)
+    con = db.connect()
+    row = con.execute("SELECT title FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    con.close()
+    if texts is None or row is None:
+        return None
+    prior = chain(paper_id, from_card) if from_card is not None else []
+    if from_card is not None and not prior:
+        return {"ok": False, "error": "That card is not there."}
+    ctx = "".join(f"Earlier question: {c['question']}\nEarlier answer: {c['text']}\n\n" if c["kind"] == "answer" else ""
+                  for c in reversed(prior))
+    near = graph.pages_for(s, paper_id, question)
+    if not near:  # no embeddings: the pages around this one that fit the model's budget
+        keep = llm.paper_text(s, texts, page - 1, question + ctx)[1]
+        near = [p for p in (page - 1, page, page + 1) if p - 1 in keep]
+    chosen = sorted({page, *near})
+    paras = [(f"p{pg}-b{i}", pg, r, t) for pg in chosen for i, (r, t) in enumerate(marks.paragraphs(paper_id, pg) or []) if t]
+    if paras:
+        got = llm.ask_with_sources(s, question, row["title"], paras, ctx)
+    else:  # nothing to point at: a plain answer
+        got = llm.ask(s, ctx + question, row["title"], texts, page - 1)
+        got = {**got, "sources": []}
+    if not got["ok"]:
+        return {"ok": False, "error": got["error"]}
+    text = got["text"] + ("" if got["sources"] else "\n\nNo exact lines found.")
+    x, y = at
+    pos, top = [], y
+    for src in got["sources"]:
+        pos.append(top)
+        top += _h(src["gist"]) + 14
+    ans = add_card(paper_id, CardIn(kind="answer", question=question, text=text, x=x, y=top, w=260, parent=from_card))
+    if ans is None:
+        return {"ok": False, "error": "That card is not there."}
+    cards = [add_card(paper_id, CardIn(kind="source", text=src["gist"], x=x, y=py, w=260, page=src["page"], rect=src["rect"], parent=ans["id"]))
+             for src, py in zip(got["sources"], pos)]
+    return {"ok": True, "answer": ans, "sources": cards}
