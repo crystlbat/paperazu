@@ -841,6 +841,13 @@ function canvasPanel(host, paperId, pdf) {
     if (!gone && store.get() && !locked) { loaded = Promise.resolve(); await open({ instant: true }); }
   });
 
+  // a card a creature leaves: placed where there is room, saved, shown
+  async function drop(d) {
+    const spot = place(160);
+    const out = await call("/cards", "POST", { x: spot.x, y: spot.y, w: 300, ...d }).catch(() => null);
+    if (out) add(out);
+    return out;
+  }
   async function note(info) {
     const text = (info?.text || "").trim();
     if (!text) return null;
@@ -879,7 +886,7 @@ function canvasPanel(host, paperId, pdf) {
   }
   return {
     open, close, toggle, isOpen: () => opened, edit, view: showView, editing: () => editing,
-    mountEditor: (el, hooks) => { editor.append(el); editHooks = hooks; }, onViewChange: (f) => { onViewChange = f; }, add, place, ask, command, followUp, note, el: host, redraw, lock, refresh, sweep: sweepTasks, card: (id) => cards.get(id),
+    mountEditor: (el, hooks) => { editor.append(el); editHooks = hooks; }, onViewChange: (f) => { onViewChange = f; }, add, drop, place, ask, command, followUp, note, el: host, redraw, lock, refresh, sweep: sweepTasks, card: (id) => cards.get(id),
     destroy() {
       gone = true; closeMenu();
       document.removeEventListener("pointerdown", skipAll, true);

@@ -18,51 +18,51 @@ body:has(.page-creatures) { --c0: #17181b; --c1: #222326; --c2: #2b2c30; --cl: #
 
 /* ---------- a creature ---------- */
 .crt, .cr-big { --bc: var(--theme-6); --p: 0; --ex: 0px; --ey: 0px; }
-.bod { position: relative; display: grid; place-items: center; background: var(--bc); border-radius: 50%;
+.cbod { position: relative; display: grid; place-items: center; background: var(--bc); border-radius: 50%;
   box-shadow: 0 14px 18px -12px #000, inset 0 -6px 0 rgb(0 0 0 / .14), inset 6px 8px 10px -6px rgb(255 255 255 / .45); }
-.bod .eyes { display: flex; gap: 22%; translate: var(--ex) calc(var(--ey) - 12%); transition: translate .15s ease-out; }
-.bod .eyes i { width: 11%; aspect-ratio: 8 / 14; min-width: 7px; border-radius: 99px; background: #1f2023; animation: bblink 4.5s calc(var(--i, 0) * -.7s) infinite; }
-.bod .eyes { width: 100%; justify-content: center; }
-.bod .mouth { position: absolute; left: 50%; top: 66%; width: 12%; height: 4px; translate: calc(-50% + var(--ex)) 0; border-radius: 0 0 8px 8px; background: #1f2023; opacity: 0; transition: .2s; }
-.bod .ft { position: absolute; bottom: -5px; left: 50%; translate: -50% 0; display: flex; gap: 22%; width: 70%; justify-content: center; z-index: -1; }
-.bod .ft i { width: 26%; height: 9px; border-radius: 50%; background: var(--bc); filter: brightness(.7); }
+.cbod .eyes { display: flex; gap: 22%; translate: var(--ex) calc(var(--ey) - 12%); transition: translate .15s ease-out; }
+.cbod .eyes i { width: 11%; aspect-ratio: 8 / 14; min-width: 7px; border-radius: 99px; background: #1f2023; animation: bblink 4.5s calc(var(--i, 0) * -.7s) infinite; }
+.cbod .eyes { width: 100%; justify-content: center; }
+.cbod .mouth { position: absolute; left: 50%; top: 66%; width: 12%; height: 4px; translate: calc(-50% + var(--ex)) 0; border-radius: 0 0 8px 8px; background: #1f2023; opacity: 0; transition: .2s; }
+.cbod .ft { position: absolute; bottom: -5px; left: 50%; translate: -50% 0; display: flex; gap: 22%; width: 70%; justify-content: center; z-index: -1; }
+.cbod .ft i { width: 26%; height: 9px; border-radius: 50%; background: var(--bc); filter: brightness(.7); }
 
 .cr-pen { position: relative; }
 .crt { position: absolute; left: 0; top: 0; translate: -50% 0; width: 160px; display: grid; justify-items: center; gap: 6px; padding: 8px 4px 10px;
   border: 0; background: none; color: inherit; cursor: pointer; border-radius: 18px; transition: left 2.3s ease-in-out, top 2.3s ease-in-out; }
 .crt:focus-visible { outline: 2px solid var(--cy); outline-offset: 4px; }
-.crt .bod { width: 76px; height: 76px; animation: crt-bob 3.2s ease-in-out calc(var(--i, 0) * -.6s) infinite, bwob 7s ease-in-out calc(var(--i, 0) * -1.1s) infinite; }
+.crt .cbod { width: 76px; height: 76px; animation: crt-bob 3.2s ease-in-out calc(var(--i, 0) * -.6s) infinite, bwob 7s ease-in-out calc(var(--i, 0) * -1.1s) infinite; }
 .crt .nm { font: 800 15px/1.15 "Doto", var(--mono); color: var(--cy); text-align: center; letter-spacing: .02em; text-shadow: 0 0 10px rgb(255 227 71 / .25); }
 .crt .stt { font-size: 13px; color: var(--ctx2); text-align: center; min-height: 2.4em; }
-.crt.flip .bod { scale: -1 1; }
-.crt.flip .bod .eyes { scale: -1 1; }
+.crt.flip .cbod { scale: -1 1; }
+.crt.flip .cbod .eyes { scale: -1 1; }
 /* walking: quick waddle, feet step */
-.crt.walk .bod { animation: crt-waddle .38s ease-in-out infinite; }
+.crt.walk .cbod { animation: crt-waddle .38s ease-in-out infinite; }
 .crt.walk .ft i { animation: crt-step .38s ease-in-out infinite; }
 .crt.walk .ft i + i { animation-delay: -.19s; }
 /* poked */
-.crt.hop .bod { animation: crt-hop .55s cubic-bezier(.3,1.6,.4,1); }
-.crt.hatch .bod { animation: crt-hatch .8s cubic-bezier(.3,1.6,.4,1); }
-.crt:hover .bod { scale: 1.06; }
+.crt.hop .cbod { animation: crt-hop .55s cubic-bezier(.3,1.6,.4,1); }
+.crt.hatch .cbod { animation: crt-hatch .8s cubic-bezier(.3,1.6,.4,1); }
+.crt:hover .cbod { scale: 1.06; }
 .crt:hover .mouth, .cr-big .mouth { opacity: 1; }
-.crt.sel .bod { box-shadow: 0 0 0 3px var(--c0), 0 0 0 5px var(--cy), 0 14px 18px -12px #000; }
+.crt.sel .cbod { box-shadow: 0 0 0 3px var(--c0), 0 0 0 5px var(--cy), 0 14px 18px -12px #000; }
 /* working: ring of progress, chewing, eyes darting over the page it holds */
 .crt .ring, .cr-big .ring { position: absolute; top: 0; left: 50%; translate: -50% 0; width: 92px; height: 92px; border-radius: 50%; pointer-events: none; opacity: 0;
   background: conic-gradient(var(--cy) calc(var(--p) * 1turn), rgb(255 255 255 / .1) 0);
   -webkit-mask: radial-gradient(closest-side, transparent 88%, #000 90%); mask: radial-gradient(closest-side, transparent 88%, #000 90%); }
 [data-state="working"] .ring { opacity: 1; }
-[data-state="working"] .bod { animation: crt-work .7s ease-in-out infinite, bwob 2s ease-in-out infinite; }
-[data-state="working"] .bod .eyes i { aspect-ratio: 8 / 8; animation: crt-read 1.4s ease-in-out infinite; }
-[data-state="working"] .bod .mouth { opacity: 1; animation: crt-chew .35s ease-in-out infinite; }
+[data-state="working"] .cbod { animation: crt-work .7s ease-in-out infinite, bwob 2s ease-in-out infinite; }
+[data-state="working"] .cbod .eyes i { aspect-ratio: 8 / 8; animation: crt-read 1.4s ease-in-out infinite; }
+[data-state="working"] .cbod .mouth { opacity: 1; animation: crt-chew .35s ease-in-out infinite; }
 [data-state="working"] .stt { color: var(--ctx); }
 /* waiting in line: tapping its foot, looking up */
-[data-state="waiting"] .bod { animation: crt-tap 1.1s ease-in-out infinite; }
-[data-state="waiting"] .bod .eyes { translate: var(--ex) -30%; }
+[data-state="waiting"] .cbod { animation: crt-tap 1.1s ease-in-out infinite; }
+[data-state="waiting"] .cbod .eyes { translate: var(--ex) -30%; }
 [data-state="waiting"] .ft i + i { animation: crt-step .55s ease-in-out infinite; }
 /* asleep: grey, eyes shut, snoring */
-[data-state="asleep"] .bod { filter: grayscale(.85) brightness(.6); animation: crt-breathe 4s ease-in-out infinite; }
-[data-state="asleep"] .bod .eyes { translate: 0 0; }
-[data-state="asleep"] .bod .eyes i { aspect-ratio: 8 / 2.5; animation: none; }
+[data-state="asleep"] .cbod { filter: grayscale(.85) brightness(.6); animation: crt-breathe 4s ease-in-out infinite; }
+[data-state="asleep"] .cbod .eyes { translate: 0 0; }
+[data-state="asleep"] .cbod .eyes i { aspect-ratio: 8 / 2.5; animation: none; }
 [data-state="asleep"] .nm { color: var(--ctx2); text-shadow: none; }
 .zz { display: none; position: absolute; top: -4px; left: calc(50% + 26px); pointer-events: none; }
 [data-state="asleep"] .zz { display: block; }
@@ -75,15 +75,15 @@ body:has(.page-creatures) { --c0: #17181b; --c1: #222326; --c2: #2b2c30; --cl: #
   background: #fff repeating-linear-gradient(#fff 0 6px, #c9cbd0 6px 7.5px) 4px 7px / 18px 20px no-repeat; box-shadow: 0 4px 8px -3px #000;
   animation: crt-wave 1.6s ease-in-out infinite; }
 [data-state="done"] .stt { color: var(--cy); }
-[data-state="done"] .bod .eyes i { aspect-ratio: 8 / 5; border-radius: 99px 99px 2px 2px; }
-[data-state="failed"] .bod { animation: shake .6s 1, crt-bob 3.2s ease-in-out .6s infinite; }
-[data-state="failed"] .bod .eyes i { rotate: 18deg; }
-[data-state="failed"] .bod .eyes i + i { rotate: -18deg; }
+[data-state="done"] .cbod .eyes i { aspect-ratio: 8 / 5; border-radius: 99px 99px 2px 2px; }
+[data-state="failed"] .cbod { animation: shake .6s 1, crt-bob 3.2s ease-in-out .6s infinite; }
+[data-state="failed"] .cbod .eyes i { rotate: 18deg; }
+[data-state="failed"] .cbod .eyes i + i { rotate: -18deg; }
 [data-state="failed"] .stt { color: #ff9b85; }
 /* the egg: a new creature */
-.crt-egg .bod { background: none; border: 2px dashed var(--cl); color: var(--ctx2); font: 300 34px/1 var(--sans); box-shadow: none; animation: crt-wobble 4s ease-in-out infinite;
+.crt-egg .cbod { background: none; border: 2px dashed var(--cl); color: var(--ctx2); font: 300 34px/1 var(--sans); box-shadow: none; animation: crt-wobble 4s ease-in-out infinite;
   border-radius: 48% 48% 46% 46% / 56% 56% 42% 42%; }
-.crt-egg:hover .bod { border-color: var(--cy); color: var(--cy); }
+.crt-egg:hover .cbod { border-color: var(--cy); color: var(--cy); }
 .crt-egg .nm { color: var(--ctx2); text-shadow: none; }
 
 @keyframes crt-bob { 50% { translate: 0 -5px; } }
@@ -140,12 +140,12 @@ body:has(.page-creatures) { --c0: #17181b; --c1: #222326; --c2: #2b2c30; --cl: #
 /* the creature in the middle */
 .slot-me { justify-items: center; text-align: center; }
 .cr-big { position: relative; padding: 8px 0 4px; }
-.cr-big .bod { width: 132px; height: 132px; animation: crt-bob 3.2s ease-in-out infinite, bwob 7s ease-in-out infinite; }
-.cr-big .bod .ft i { height: 13px; }
-.cr-big .bod .mouth { height: 6px; }
-.cr-big.nod .bod { animation: crt-nod .45s ease-in-out; }
-.cr-big.listen .bod .eyes { translate: 0 8%; }
-.cr-big.listen .bod .eyes i { aspect-ratio: 8 / 11; }
+.cr-big .cbod { width: 132px; height: 132px; animation: crt-bob 3.2s ease-in-out infinite, bwob 7s ease-in-out infinite; }
+.cr-big .cbod .ft i { height: 13px; }
+.cr-big .cbod .mouth { height: 6px; }
+.cr-big.nod .cbod { animation: crt-nod .45s ease-in-out; }
+.cr-big.listen .cbod .eyes { translate: 0 8%; }
+.cr-big.listen .cbod .eyes i { aspect-ratio: 8 / 11; }
 .cr-big .zz { left: calc(50% + 50px); top: 0; }
 .cr-big .ring { width: 156px; height: 156px; top: 0; }
 .cr-name { width: 100%; max-width: 320px; padding: 4px 8px; border: 0; border-bottom: 1px dashed var(--cl); background: none; color: var(--cy); text-align: center;
@@ -269,3 +269,49 @@ body:has(.page-creatures) { --c0: #17181b; --c1: #222326; --c2: #2b2c30; --cl: #
   .cr-bench { padding: 12px 16px 0; }
 }
 @media (prefers-reduced-motion: reduce) { .cr *, .cr *::after { animation: none !important; transition: none !important; } }
+
+/* ---------- in the Reader: the creatures chip and its bubble ---------- */
+.cr-rchip { gap: 8px; }
+.cr-rflock { display: inline-flex; }
+.cr-rflock .crm { width: 16px; height: 16px; margin-left: -4px; }
+.cr-rflock .crm:first-child { margin-left: 0; }
+.cr-rflock .crm .cbod .ft, .cr-rflock .crm .cbod .mouth { display: none; }
+.cr-rflock .crm .cbod .eyes i { min-width: 2px; width: 2px; }
+.cr-rbubble { position: fixed; z-index: 60; width: 300px; padding: 14px 12px 10px; border-radius: 18px; background: var(--device); color: var(--device-ink);
+  box-shadow: 0 24px 40px -18px rgb(0 0 0 / .6); animation: pop .2s ease-out; }
+.cr-rbubble::before { content: ""; position: absolute; top: -7px; left: var(--tip, 50%); width: 14px; height: 14px; translate: -50% 0; rotate: 45deg; background: var(--device); border-radius: 3px 0 0 0; }
+.cr-rhead { margin: 0 4px 8px; font: 800 13px/1.2 "Doto", var(--mono); color: var(--device-dim); letter-spacing: .05em; text-transform: uppercase; }
+.cr-rbubble ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; max-height: 50vh; overflow: auto; }
+.cr-ritem { width: 100%; display: flex; align-items: center; gap: 12px; padding: 8px; border: 0; border-radius: 12px; background: none; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.cr-ritem:hover, .cr-ritem:focus-visible { background: var(--device-off); outline: none; }
+.cr-ritem > span:last-child { display: grid; gap: 1px; min-width: 0; }
+.cr-ritem b { font: 800 15px/1.2 "Doto", var(--mono); color: #ffe347; }
+.cr-ritem small { font-size: 13px; color: var(--device-dim); }
+.cr-ritem.out small { color: #ffe347; }
+.cr-rmore { display: block; margin: 8px 4px 2px; font-size: 14px; color: var(--device-dim); }
+.cr-rmore:hover { color: var(--device-ink); }
+
+/* a mini creature: jumping (watching), running (working), spiky (made you something) */
+.crm { --bc: var(--theme-6); position: relative; flex: none; width: 34px; height: 34px; display: inline-grid; }
+.crm .cbod { width: 100%; height: 100%; box-shadow: inset 0 -3px 0 rgb(0 0 0 / .15); }
+.crm .cbod .ft { bottom: -3px; }
+.crm .cbod .ft i { height: 5px; }
+.crm .cbod .mouth { height: 2px; }
+.crm.watch .cbod { animation: crm-jump 1.6s cubic-bezier(.3,0,.4,1) calc(var(--i, 0) * -.23s) infinite; }
+.crm.run .cbod { animation: crm-run .32s ease-in-out infinite; }
+.crm.run .cbod .eyes { translate: 12% -8%; }
+.crm.run .cbod .ft i { animation: crt-step .16s ease-in-out infinite; }
+.crm.run .cbod .ft i + i { animation-delay: -.08s; }
+.crm.run::after { content: ""; position: absolute; left: -9px; top: 40%; width: 8px; height: 2px; border-radius: 2px; background: currentColor; opacity: .4;
+  box-shadow: -3px 6px 0 currentColor; animation: crm-dust .32s linear infinite; }
+.crm.out .cbod { border-radius: 0; animation: crm-spike 1.2s ease-in-out infinite;
+  clip-path: polygon(50% 0, 60% 18%, 79% 7%, 78% 28%, 98% 30%, 85% 46%, 100% 60%, 80% 67%, 86% 88%, 65% 82%, 54% 100%, 43% 83%, 22% 92%, 24% 70%, 2% 64%, 16% 48%, 2% 32%, 23% 28%, 20% 7%, 40% 17%); }
+.crm.out .cbod .eyes i { aspect-ratio: 1; }
+.crm.out .cbod .mouth { opacity: 1; height: 4px; border-radius: 0 0 6px 6px; }
+.crm.poke .cbod { animation: crt-hop .55s cubic-bezier(.3,1.6,.4,1); }
+.dchip[data-mood="out"] { border-color: var(--marker); }
+@keyframes crm-jump { 0%, 55%, 100% { translate: 0 0; scale: 1; } 62% { scale: 1.12 .86; } 75% { translate: 0 -9px; scale: .94 1.08; } 88% { translate: 0 0; scale: 1.08 .92; } }
+@keyframes crm-run { 0%, 100% { translate: -1px 0; rotate: 8deg; } 50% { translate: 1px -3px; rotate: 12deg; } }
+@keyframes crm-dust { from { opacity: .5; translate: 0 0; } to { opacity: 0; translate: -6px 0; } }
+@keyframes crm-spike { 0%, 100% { rotate: -6deg; scale: 1; } 50% { rotate: 6deg; scale: 1.1; } }
+@media (prefers-reduced-motion: reduce) { .crm .cbod, .crm::after { animation: none !important; } }

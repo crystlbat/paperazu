@@ -139,6 +139,8 @@ async function renderReader(paperId, startPage) {
   }
   pdf.hooks.onAsk = (s, at) => canvas.ask(s, at);
   pdf.hooks.onCommand = (q) => canvas.command?.(q);
+  const creatures = crWatch(paperId, pdf, canvas); // your creatures wake on what you do here
+  notesChip.before(creatures.chip);
   const guide = guidedReading(paperId, pdf, (id) => { const st = fw.steps.find((x) => x.id === id); if (st && st !== current) open(st, false, false); },
     () => openNote(), (text) => plain.append(text));
   // Highlight collector: your highlights, in page order, gathered into the note; ones already there are skipped
@@ -218,7 +220,7 @@ async function renderReader(paperId, startPage) {
 
   // Saves (and retries) can finish after you leave; Dot only speaks while this Reader is open.
   const me = openReader = {
-    leave() { buddy.onSleep(null); guide.stop(); timer.stop(); queue.flush(); plain.flush(); drawers.destroy(); canvas.destroy(); clearTimeout(homeHint); buddy.follow(false); buddy.look(false); buddy.toolsOn("click"); pdf.destroy(); },
+    leave() { creatures.stop(); buddy.onSleep(null); guide.stop(); timer.stop(); queue.flush(); plain.flush(); drawers.destroy(); canvas.destroy(); clearTimeout(homeHint); buddy.follow(false); buddy.look(false); buddy.toolsOn("click"); pdf.destroy(); },
     flushOnExit() { queue.flushKeepalive(); plain.flush(true); },
   };
 }
@@ -1019,6 +1021,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     const seq = ++v.seq;
     const page = await v.doc.getPage(v.page);
     if (seq !== v.seq) return;
+    hooks.onPage?.(v.page); // creatures that wake on a page turn; they skip a redraw of the same page
     if (v.fit) v.scale = Math.max(0.25, (stage.clientWidth - 48) / page.getViewport({ scale: 1 }).width);
     const vp = page.getViewport({ scale: v.scale });
     const dpr = window.devicePixelRatio || 1;
@@ -1496,7 +1499,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
 
   // ---------- reading mode: click a paragraph for Dot's options; highlight by hand ----------
   // The reader sets hooks.onAsk(selection, at) and hooks.onNote(selection, at); until then Ask and Note only close the menu.
-  const hooks = { onAsk: null, onNote: null, onCommand: null };
+  const hooks = { onAsk: null, onNote: null, onCommand: null, onPage: null, onHighlight: null };
   let hls = [], sel = null, job = false, animating = false, skipAnim = false, chip = null;
   const near = h("div", { class: "p-near", hidden: true });
   const selBox = h("div", { class: "sel-box", hidden: true }, h("b"));
@@ -1876,7 +1879,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     const hl = { id: null, page: v.page, kind: "me", text, rects };
     hls.push(hl); drawHl(); // yellow at once
     const r = await api(`/papers/${paperId}/highlights`, { method: "POST", body: JSON.stringify({ page: hl.page, kind: "me", text, rects }) }).catch(() => null);
-    if (r) hl.id = r.id;
+    if (r) { hl.id = r.id; hooks.onHighlight?.(hl); }
     else { hls = hls.filter((q) => q !== hl); drawHl(); buddy.say("I could not save that highlight. Is the app still running?", { mood: "worried" }); }
   }
 
@@ -1970,7 +1973,8 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       const b = pageBox.getBoundingClientRect(), s = stage.getBoundingClientRect();
       stage.scrollTop += b.top + px(r)[1] - s.top - stage.clientHeight * 0.3;
       const off = glow(r); setTimeout(off, 1800);
-    }, hidden: () => v.hidden, page: () => v.page, highlights: () => hls, command, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
+    }, hidden: () => v.hidden, page: () => v.page, highlights: () => hls,
+    reloadHighlights: () => api(`/papers/${paperId}/highlights`).then((r) => { hls = r.highlights; drawHl(); }).catch(() => {}), command, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
     destroy() { clearInterval(watchTimer); clearInterval(railTimer); watchStop.abort(); buddy.tools(null); buddy.tagAlong(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },

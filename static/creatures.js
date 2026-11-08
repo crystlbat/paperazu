@@ -137,6 +137,7 @@ const crLocal = (() => {
       return { runs: [...d.runs].sort((a, b) => b.id - a.id).slice(0, limit), parallel: 1,
         queued: d.runs.filter((r) => r.status === "queued").length };
     }
+    if ((x = p.match(/^\/runs\/(\d+)$/))) { tick(); return d.runs.find((y) => y.id === +x[1]) || null; }
     if ((x = p.match(/^\/runs\/(\d+)\/stop$/))) {
       const r = d.runs.find((y) => y.id === +x[1]);
       if (r && ["queued", "running"].includes(r.status)) { r.status = "stopped"; r.finished_at = now(); save(); }
@@ -159,6 +160,132 @@ const crLocal = (() => {
   return { call };
 })();
 // ---------- end STAND-IN ----------
+
+// ---------- creatures at work while you read ----------
+// The Reader calls crWatch when a paper opens. Every awake creature that reads this paper (or "the paper I'm reading")
+// and has a reading trigger wakes on what you do: opening the paper, turning a page, staying on one, highlighting, or a
+// timer. A woken creature runs on the server queue (one at a time) and its output lands here: Dot says it, asks it,
+// leaves a card, marks lines, or tells you a document is ready. Asleep Dot means asleep creatures too.
+function crWatch(paperId, pdf, canvas) {
+  let jobs = [], stopped = false, page = 0, dwells = [];
+  const timers = [], last = new Map(), pending = new Set();
+  const held = new Map(); // job id -> the run it finished that you have not looked at yet
+  const COOL = { open: 0, page: 45e3, dwell: 0, highlight: 20e3, timer: 0 }; // a page-flicker or a burst of highlights wakes it once
+  const wake = async (j, text = "") => {
+    if (stopped || buddy.asleep?.() || pending.has(j.id)) return;
+    if (document.hidden && ["timer", "dwell"].includes(j.trigger)) return; // nobody is reading a hidden tab; a page turn or highlight means you are here
+    if (Date.now() - (last.get(j.id) || 0) < COOL[j.trigger]) return;
+    last.set(j.id, Date.now()); pending.add(j.id); paint();
+    try {
+      let r = await crPost(`/jobs/${j.id}/run`, { paper_id: paperId, page: pdf.page(), text: text.slice(0, 3000) });
+      while (!stopped && r && ["queued", "running"].includes(r.status)) {
+        await new Promise((ok) => setTimeout(ok, 1500));
+        r = await crApi(`/runs/${r.id}`);
+      }
+      if (!stopped && r?.status === "done") { held.set(j.id, r); await deliver(j, r); }
+    } catch { /* a creature that cannot run stays quiet here; the Creatures page shows the failed run */ }
+    finally { pending.delete(j.id); paint(); }
+  };
+  async function deliver(j, r) {
+    const res = r.result || {}, text = (res.text || res.sections?.map(([t, x]) => `${t}\n${x}`).join("\n\n") || "").trim();
+    const at = () => { const w = innerWidth, hgt = innerHeight; return { x: w - 340, y: hgt - 140 }; };
+    if (j.output === "doc") {
+      buddy.say(`${j.name} made you something.`, { mood: "happy", actions: [{ label: "Read it", href: "#creatures" }] });
+    } else if (j.output === "highlight") {
+      await pdf.reloadHighlights?.();
+      const n = res.highlights?.length || 0;
+      buddy.say(n ? `${j.name} marked ${n} line${n === 1 ? "" : "s"} in blue.` : `${j.name} found nothing to mark here.`, { mood: n ? "happy" : "idle" });
+    } else if (!text) {
+      return;
+    } else if (j.output === "card") {
+      const d = await canvas.drop?.({ kind: "answer", question: j.name, text: text.slice(0, 8000), page: r.page || pdf.page() });
+      if (d) buddy.say(`${j.name} left a card on your canvas.`, { mood: "happy", actions: canvas.isOpen?.() ? [] : [{ label: "Show me", onClick: () => canvas.open?.() }] });
+    } else if (j.output === "ask") {
+      const q = text.slice(0, 500);
+      buddy.say(`${j.name} asks: ${q}`, { mood: "think", actions: [{ label: "Answer", onClick: async () => {
+        const a = (await buddy.prompt({ ...at(), placeholder: "Your answer" }))?.trim();
+        if (!a) return;
+        const d = await canvas.drop?.({ kind: "note", entries: [{ who: "dot", text: q }, { who: "me", text: a.slice(0, 4000) }], page: r.page || pdf.page() });
+        buddy.say(d ? "Saved on your canvas." : "I could not save that. Is the app still running?", { mood: d ? "happy" : "worried" });
+      } }] });
+    } else {
+      buddy.say(`${j.name}: ${text.slice(0, 600)}`, { mood: "happy", actions: text.length > 600 ? [{ label: "Keep it", onClick: () => canvas.drop?.({ kind: "answer", question: j.name, text: text.slice(0, 8000), page: r.page || pdf.page() }) }] : [] });
+    }
+  }
+  // ----- the chip in the reader's bar, and its bubble of creatures -----
+  // spiky: it made you something you have not looked at; running: it is working; jumping: awake and watching
+  const moodOf = (j) => (pending.has(j.id) ? "run" : held.has(j.id) ? "out" : "watch");
+  const LINE = { run: "Working on it", out: "Made you something. Tap to see", watch: null };
+  const blob = (j) => h("span", { class: `crm ${moodOf(j)}`, "data-job": j.id, style: `--bc: var(--theme-${j.color ?? 6}); --i: ${j.id % 7}` }, crBody());
+  const chip = h("button", { type: "button", class: "dchip cr-rchip", "aria-expanded": "false", "aria-haspopup": "dialog",
+    onclick: (e) => { e.stopPropagation(); bubble.hidden ? openBubble() : closeBubble(); } });
+  const bubble = h("div", { class: "cr-rbubble", role: "dialog", "aria-label": "Creatures on this paper", hidden: true });
+  document.body.append(bubble);
+  function paint() {
+    const out = jobs.filter((j) => held.has(j.id)).length, run = jobs.filter((j) => pending.has(j.id)).length;
+    chip.replaceChildren(h("span", { class: "cr-rflock", "aria-hidden": "true" }, jobs.slice(0, 3).map(blob)),
+      jobs.length ? `${jobs.length}` : "Creatures");
+    chip.dataset.mood = out ? "out" : run ? "run" : "watch";
+    chip.setAttribute("aria-label", `Creatures on this paper: ${jobs.length}${run ? `, ${run} working` : ""}${out ? `, ${out} made something` : ""}`);
+    if (!bubble.hidden) fill();
+  }
+  function fill() {
+    bubble.replaceChildren(
+      h("p", { class: "cr-rhead" }, jobs.length ? "Creatures watching this paper" : "No creatures are watching this paper."),
+      jobs.length ? h("ul", {}, jobs.map((j) => {
+        const m = moodOf(j);
+        return h("li", {}, h("button", { type: "button", class: `cr-ritem ${m}`, onclick: () => see(j) }, blob(j),
+          h("span", {}, h("b", {}, j.name), h("small", {}, LINE[m] || `Wakes when ${CR_WAKE[j.trigger].toLowerCase()}`))));
+      })) : null,
+      h("a", { href: "#creatures", class: "cr-rmore", onclick: closeBubble }, jobs.length ? "Manage creatures" : "Make one"));
+  }
+  function see(j) {  // show what it made again, then it calms down
+    const r = held.get(j.id);
+    if (!r) { hopIn(j); return; }
+    held.delete(j.id); paint();
+    if (j.output === "doc") { closeBubble(); location.hash = "#creatures"; return; }
+    if (j.output === "card") { canvas.open?.(); return; }
+    if (j.output === "highlight") { buddy.say(`${j.name} marked them in blue on page ${r.page || pdf.page()}.`, { mood: "happy" }); return; }
+    deliver(j, r);
+  }
+  function hopIn(j) { const b = bubble.querySelector(`.crm[data-job="${j.id}"]`); b?.classList.remove("poke"); void b?.offsetWidth; b?.classList.add("poke"); }
+  function openBubble() {
+    fill(); bubble.hidden = false; chip.setAttribute("aria-expanded", "true");
+    const r = chip.getBoundingClientRect();
+    bubble.style.top = `${r.bottom + 10}px`;
+    bubble.style.left = `${Math.max(12, Math.min(r.left + r.width / 2 - 150, innerWidth - 312))}px`;
+    bubble.style.setProperty("--tip", `${r.left + r.width / 2 - parseFloat(bubble.style.left)}px`);
+    document.addEventListener("pointerdown", outside, true); document.addEventListener("keydown", esc, true);
+  }
+  function closeBubble() {
+    bubble.hidden = true; chip.setAttribute("aria-expanded", "false");
+    document.removeEventListener("pointerdown", outside, true); document.removeEventListener("keydown", esc, true);
+  }
+  const outside = (e) => { if (!bubble.contains(e.target) && !chip.contains(e.target)) closeBubble(); };
+  const esc = (e) => { if (e.key === "Escape") { closeBubble(); chip.focus(); } };
+
+  const of = (t) => jobs.filter((j) => j.trigger === t);
+  function onPage(n) {
+    if (stopped || n === page) return;
+    const first = !page;
+    page = n;
+    dwells.forEach(clearTimeout);
+    dwells = of("dwell").map((j) => setTimeout(() => { if (pdf.page() === n) wake(j); }, j.every * 1000));
+    if (!first) of("page").forEach((j) => wake(j));
+  }
+  pdf.hooks.onPage = onPage;
+  pdf.hooks.onHighlight = (hl) => of("highlight").forEach((j) => wake(j, hl.text || ""));
+  crApi("/jobs").then((r) => {
+    if (stopped) return;
+    jobs = (r.jobs || []).filter((j) => j.on && j.trigger !== "manual" && (!j.papers?.length || j.papers.includes(paperId)));
+    paint();
+    of("open").forEach((j) => wake(j));
+    of("timer").forEach((j) => timers.push(setInterval(() => wake(j), j.every * 1000)));
+    const n = pdf.page(); page = 0; if (n) onPage(n); // the page already shown starts its dwell clock
+  }).catch(() => {});
+  paint();
+  return { chip, stop() { stopped = true; closeBubble(); bubble.remove(); timers.forEach(clearInterval); dwells.forEach(clearTimeout); pdf.hooks.onPage = pdf.hooks.onHighlight = null; } };
+}
 
 let crMode = null; // "server" once GET /jobs answers, else "local"
 async function crApi(path, opts) {
@@ -198,7 +325,7 @@ const CR_OUT_SHORT = { doc: "A document", card: "A canvas card", say: "Dot tells
 function crIcon(svg) { const s = h("span", { class: "ico", "aria-hidden": "true" }); s.innerHTML = svg; return s; }
 // a creature's body: the same little Dot, in its own colour, with feet and a mouth
 function crBody(extra = "") {
-  return h("span", { class: `bod ${extra}` }, h("span", { class: "eyes" }, h("i"), h("i")), h("span", { class: "mouth" }),
+  return h("span", { class: `cbod ${extra}` }, h("span", { class: "eyes" }, h("i"), h("i")), h("span", { class: "mouth" }),
     h("span", { class: "ft" }, h("i"), h("i")));
 }
 
@@ -275,7 +402,7 @@ async function renderCreatures() {
     return b;
   }
   const egg = h("button", { type: "button", class: "crt crt-egg", onclick: () => { hop(egg); openBench(null); } },
-    h("span", { class: "bod" }, "+"), h("span", { class: "nm" }, "New creature"), h("span", { class: "stt" }, "Build one, or tell Dot"));
+    h("span", { class: "cbod" }, "+"), h("span", { class: "nm" }, "New creature"), h("span", { class: "stt" }, "Build one, or tell Dot"));
   function hop(b) { b.classList.remove("hop"); void b.offsetWidth; b.classList.add("hop"); }
   function place(b, x, y) { b.style.left = `${x}px`; b.style.top = `${y}px`; b.x = x; b.y = y; }
   function layout() {  // a loose grid of homes, each a little off so the pen does not look like a table
@@ -336,7 +463,7 @@ async function renderCreatures() {
     look = requestAnimationFrame(() => {
       look = 0;
       habitat.querySelectorAll(".crt:not(.crt-egg), .cr-big").forEach((b) => {
-        const r = b.querySelector(".bod").getBoundingClientRect();
+        const r = b.querySelector(".cbod").getBoundingClientRect();
         const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2), d = Math.hypot(dx, dy) || 1;
         const k = Math.min(1, d / 220) * (b.classList.contains("cr-big") ? 6 : 4);
         b.style.setProperty("--ex", `${(dx / d) * k}px`); b.style.setProperty("--ey", `${(dy / d) * k}px`);
