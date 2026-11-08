@@ -121,6 +121,10 @@ CREATE TABLE IF NOT EXISTS highlights (
     rects TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS shelf_names (  -- Dot's name for a group of similar papers; key = sha1 of its sorted ids
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,

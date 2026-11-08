@@ -16,7 +16,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from . import checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, settings, themes
+from . import checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, settings, shelf, themes
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -564,6 +564,33 @@ def keep_concept(concept_id: str) -> dict[str, Any]:
 def delete_concept(concept_id: str) -> None:
     if not graph.delete_concept(concept_id):
         raise HTTPException(404, detail="This concept is not in the graph.")
+
+
+# ---------- the Library around Dot ----------
+
+class AskTurn(BaseModel):
+    q: str = Field(default="", max_length=500)
+    a: str = Field(default="", max_length=1500)
+
+
+class LibraryAskIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str = Field(min_length=1, max_length=500)
+    history: list[AskTurn] = Field(default_factory=list, max_length=4)
+
+
+@app.get("/library/map")
+def library_map() -> dict[str, Any]:
+    return shelf.library_map(settings.get_all())
+
+
+@app.post("/library/ask")
+def library_ask(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        req = LibraryAskIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    return shelf.ask(settings.get_all(), req.question.strip(), [t.model_dump() for t in req.history])
 
 
 @app.get("/model/status")
