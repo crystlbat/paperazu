@@ -220,7 +220,7 @@ body.lib-on .buddy { display: none !important; }
 
 /* ---------- peek card: everything a table row had ---------- */
 .lpeek { z-index: 15; width: 400px; max-width: calc(100% - 24px); box-sizing: border-box; display: flex; gap: 14px; padding: 14px; border-radius: 14px;
-  background: var(--sheet); color: var(--ink); border-top: 5px solid var(--tc, var(--dotc)); box-shadow: 0 24px 50px -18px #000; user-select: text;
+  background: var(--sheet); color: var(--ink); box-shadow: inset 0 5px 0 var(--tc, var(--dotc)), 0 24px 50px -18px #000; user-select: text;
   clip-path: inset(0 0 100% 0 round 14px); transition: clip-path .35s cubic-bezier(.3,.9,.3,1); pointer-events: none; }
 .lpeek.on { clip-path: inset(-40px -400px -400px -400px round 14px); pointer-events: auto; }
 .lpeek .cov { flex: none; width: 76px; height: 100px; border-radius: 3px; overflow: hidden; background: var(--desk); box-shadow: 0 2px 8px -3px #0006; display: grid; place-items: center; font: 600 12px var(--sans); color: var(--pencil); }
