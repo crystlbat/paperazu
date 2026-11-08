@@ -290,6 +290,16 @@ def get_guide(paper_id: str) -> dict[str, Any]:
     return {"stops": out}
 
 
+@app.post("/papers/{paper_id}/guide/stages")
+def guide_stages(paper_id: str) -> dict[str, Any]:
+    """The tour Dot walks: abstract, conclusion, figures, then the sections that matter. Runs on the local model only;
+    without it, the paper's own headings are used."""
+    out = guide.stages(paper_id, settings.get_all())
+    if out is None:
+        raise HTTPException(404, detail="This paper is not in the library.")
+    return out
+
+
 @app.get("/papers/{paper_id}/blocks/{page}")
 def get_blocks(paper_id: str, page: int) -> dict[str, Any]:
     out = marks.blocks(paper_id, page)
