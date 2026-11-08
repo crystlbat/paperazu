@@ -150,3 +150,21 @@ def test_web_route(tmp_path, monkeypatch) -> None:
     assert r.status_code == 200 and r.json()["results"][0]["url"] == "https://example.com"
     bad = TestClient(main.app).post("/library/web", json={"q": "  "})
     assert bad.status_code == 422
+
+
+def test_glued_titles_are_cut_apart() -> None:
+    text = ("Title: arXiv paper 2023[2106.04554] A Survey of Transformers - arXiv.orgTop Research Papers on Transformers\n"
+            "URL: https://arxiv.org/pdf/1\nSnippet: Attention maps queries. See full list on arxiv.org More.\n\n---\n\n"
+            "Title: [2106.04554] A Survey of Transformers - arXiv.orgTop Research Papers on Transformers\n"
+            "URL: https://arxiv.org/abs/2\nSnippet: A survey.\n\n---\n\n"
+            "Title: Top Research Papers on Transformers\nURL: https://example.com/3\nSnippet: A list.\n")
+    out = websearch.results_from_tool(text)["results"]
+    assert [r["title"] for r in out] == ["arXiv paper 2023", "[2106.04554] A Survey of Transformers - arXiv.org",
+                                         "Top Research Papers on Transformers"]
+    assert out[0]["snippet"] == "Attention maps queries. More."
+
+
+def test_html_snippet_keeps_text_after_bold_words() -> None:
+    page = ('<a class="result__a" href="https://en.wikipedia.org/wiki/T">T</a> '
+            '<a class="result__snippet" href="x"><b>Transformers</b> is a series of films.</a>')
+    assert websearch.pages_from_html(page)[0]["snippet"] == "Transformers is a series of films."

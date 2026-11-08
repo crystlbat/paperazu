@@ -148,7 +148,7 @@ def passages(s: Settings, question: str, allowed: set[str] | None = None) -> lis
         rows = [r for r in rows if r["paper_id"] in allowed]
     if not rows:
         return []
-    qv = graph.embed(s, [graph.QUERY + question], model)[0]
+    qv = graph.embed(s, [graph.query(model) + question], model)[0]
     per: dict[str, list[tuple[float, Any]]] = {}
     for r in rows:
         per.setdefault(r["paper_id"], []).append((graph._dot(qv, graph._vec(r["vec"])), r))
@@ -330,6 +330,7 @@ def ask(s: Settings, question: str, history: list[dict[str, str]]) -> dict[str, 
 
 # ---------- search for one question: meaning, words and concepts together ----------
 
+ABOUT_SHELF = re.compile(r"\b(?:papers?|library|shelf|my|mine|themes?|notes?|due|read|reading|summar\w*|steps?)\b", re.I)
 CONCEPT_ASK = re.compile(r"concept|idea|similar|related|match|notion|theme", re.I)
 WORDS_ONLY = "I am matching words, not meaning, because the embedding model is not available."
 
@@ -375,7 +376,7 @@ def _gather(s: Settings, question: str, history: list[dict[str, str]]) -> dict[s
              for w in words if w["paper_id"] not in have and w["page"] and w["snippet"]][:3]
     intent = bool(CONCEPT_ASK.search(question))
     cinfo = graph.concept_search(s, text) if intent else {"concepts": [], "meaning": True}
-    return {"topic": topic, "found": found + extra, "ev": ev, "rank": rank, "meaning": meaning and cinfo["meaning"],
+    return {"question": question, "topic": topic, "found": found + extra, "ev": ev, "rank": rank, "meaning": meaning and cinfo["meaning"],
             "intent": intent, "concepts": cinfo["concepts"]}
 
 
@@ -434,7 +435,7 @@ def _compose(g: dict[str, Any], ids: list[str], titles: dict[str, str]) -> str:
     why = {"meaning": f'page {e["page"]} is close in meaning', "title": "its title has your words",
            "text": f'page {e["page"]} uses your words'}[e["how"] if e["page"] else "title"]
     n = len(ids)
-    return f'{n} paper{"s" if n > 1 else ""} match "{topic}" by title and passages. The closest is "{_short(titles.get(ids[0], ""))}", because {why}.'
+    return f'{n} paper{"s match" if n > 1 else " matches"} "{topic}" by title and passages. The closest is "{_short(titles.get(ids[0], ""))}", because {why}.'
 
 
 def _settle(res: dict[str, Any], g: dict[str, Any], alias: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -446,6 +447,8 @@ def _settle(res: dict[str, Any], g: dict[str, Any], alias: dict[str, dict[str, A
         return res
     titles = {p["id"]: p["title"] for p in alias.values()}
     rank, ev = g["rank"], g["ev"]
+    if kind == "none" and rank and not res["papers"] and not ABOUT_SHELF.search(g["question"]):
+        kind = a["kind"] = "find"  # the model shrugged, but the search found papers: show them
     if kind == "find":
         keep = [x for x in res["papers"] if x["id"] in rank] if rank else list(res["papers"])
         keep.sort(key=lambda x: -rank.get(x["id"], 0.0))
@@ -460,12 +463,17 @@ def _settle(res: dict[str, Any], g: dict[str, Any], alias: dict[str, dict[str, A
     mentioned = sum(1 for n in names if n and n in reply.lower())
     rest = re.sub(r"\"[^\"]*\"", " ", reply)
     plain = len(re.findall(r"[A-Za-z]{2,}", rest)) >= 6 and not re.match(r"the request is about", reply, re.I)
-    if kind == "find" and not (plain and mentioned <= 1):
+    off_topic = not g["intent"] and re.search(r"\bconcepts?\b", reply, re.I)  # concepts nobody asked about
+    if kind == "find" and (off_topic or not (plain and mentioned <= 1)):
         reply = _compose(g, a["paper_ids"], titles)
     if g["intent"] and not (any(c["label"].lower() in reply.lower() for c in g["concepts"]) or "no concept" in reply.lower()):
         reply += " " + _concept_line(g)
     if not g["meaning"] and WORDS_ONLY not in reply:
         reply += " " + WORDS_ONLY
+    # nothing on the shelf is about it, and it is not a question about the library itself: offer the web instead
+    if not rank and not res["papers"] and not ABOUT_SHELF.search(g["question"]):  # passages below the bar are not evidence
+        reply = f'Nothing in your papers is about "{g["topic"] or g["question"]}". Want me to look it up on the web?'
+        res["web"], res["sources"] = g["question"], []
     res["reply"], res["concepts"] = reply.strip(), [{"id": c["id"], "label": c["label"], "paper_ids": c["paper_ids"]} for c in g["concepts"]]
     return res
 

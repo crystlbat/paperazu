@@ -5,7 +5,7 @@
 // Every animation here can be cut short by a click (it jumps to its end) and is instant with reduced motion.
 
 function canvasPanel(host, paperId, pdf) {
-  const view = host.parentElement;
+  const desk = host.parentElement;
   const KEY = `canvas-open:${paperId}`;
   const NS = "http://www.w3.org/2000/svg";
   const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -22,9 +22,6 @@ function canvasPanel(host, paperId, pdf) {
   const pan = { x: 0, y: 0 };
   let zoom = 1;
   let opened = false, busy = false, asking = false, sweeper = null, skipped = false, locked = false, loaded = null, gone = false, holdThreads = false, raf = 0;
-  const LAID = `canvas-laid:${paperId}`;
-  let laid = false;
-  try { laid = localStorage.getItem(LAID) === "1"; } catch { /* private mode: lay out once this visit */ }
 
   // ----- what is on the page -----
   const board = h("div", { class: "cv-board" });
@@ -33,9 +30,38 @@ function canvasPanel(host, paperId, pdf) {
   const zoomLabel = h("span", { class: "cv-zlabel", "aria-hidden": "true" }, "100%");
   const zoomIn = h("button", { type: "button", class: "cv-z", "aria-label": "Zoom in", onclick: () => zoomBy(1.15) }, "+");
   const writeBtn = h("button", { type: "button", class: "cv-writebtn", onclick: () => newNote() }, "Write a note");
-  const bar = h("div", { class: "cv-bar" }, hint, writeBtn, zoomOut, zoomLabel, zoomIn);
-  const wave = h("div", { class: "cv-wave", "aria-hidden": "true" });
-  host.append(wave, board, bar);
+  const allBtn = h("button", { type: "button", class: "cv-writebtn cv-all", hidden: true, onclick: () => fold() }, "\u2190 All blobs");
+  const bar = h("div", { class: "cv-bar" }, allBtn, hint, writeBtn, zoomOut, zoomLabel, zoomIn);
+  // the field: every question (with its answer and references) and every note lives here as one drifting blob
+  const field = h("div", { class: "cv-field", role: "list", "aria-label": "Your questions and notes" });
+  // drag the left edge to give the canvas more or less room; the width is remembered
+  const grip = h("div", { class: "cv-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize canvas", tabindex: "0" });
+  // two views: the Board (blobs and cards) and the Editor (your note for this paper, written in full)
+  const editor = h("div", { class: "cv-editor", hidden: true });
+  const boardBtn = h("button", { type: "button", "aria-pressed": "true", onclick: () => showView("board") }, "Board");
+  const editBtn = h("button", { type: "button", "aria-pressed": "false", onclick: () => showView("editor") }, "Editor");
+  const views = h("div", { class: "cv-views", role: "group", "aria-label": "Canvas view" }, boardBtn, editBtn);
+  let editing = false, editHooks = null, onViewChange = null;
+  host.append(board, field, editor, bar, views, grip);
+  const setW = (w) => {
+    const max = desk.clientWidth - 360, px = Math.round(Math.max(300, Math.min(max, w)));
+    desk.style.setProperty("--cv-w", `${px}px`); desk.style.setProperty("--cv-p", "minmax(0, 1fr)");
+    try { localStorage.setItem("cv-w", px); } catch {}
+  };
+  try { const w = +localStorage.getItem("cv-w"); if (w) { desk.style.setProperty("--cv-w", `${w}px`); desk.style.setProperty("--cv-p", "minmax(0, 1fr)"); } } catch {}
+  grip.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); e.stopPropagation(); grip.setPointerCapture(e.pointerId);
+    desk.classList.add("no-slide"); host.classList.add("sizing");
+    const right = desk.getBoundingClientRect().right;
+    const move = (ev) => setW(right - ev.clientX);
+    const up = () => { desk.classList.remove("no-slide"); host.classList.remove("sizing"); grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", up); grip.removeEventListener("pointercancel", up); };
+    grip.addEventListener("pointermove", move); grip.addEventListener("pointerup", up); grip.addEventListener("pointercancel", up);
+  });
+  grip.addEventListener("keydown", (e) => {
+    const k = { ArrowLeft: 40, ArrowRight: -40 }[e.key];
+    if (k) { e.preventDefault(); setW(host.clientWidth + k); }
+  });
+  grip.addEventListener("dblclick", () => { desk.style.removeProperty("--cv-w"); desk.style.removeProperty("--cv-p"); try { localStorage.removeItem("cv-w"); } catch {} });
   host.inert = true;
   const fx = h("div", { class: "cv-fx", "aria-hidden": "true" }); // rings, crumbs and flying cards; above the page, below Dot
   document.body.append(fx);
@@ -118,6 +144,7 @@ function canvasPanel(host, paperId, pdf) {
       role: "group", ...(d.kind !== "note" ? { tabindex: "0" } : {}) }, x, h("div", { class: "cv-head" }), h("div", { class: "cv-body" }), handle);
     fill(c);
     wireCard(c, handle);
+    grew.observe(c.el);
     return c.el;
   }
   function wireCard(c, handle) {
@@ -148,7 +175,7 @@ function canvasPanel(host, paperId, pdf) {
       const up = (ev) => {
         el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up);
         el.classList.remove("drag");
-        if (moved) call(`/cards/${c.d.id}`, "PUT", { x: Math.round(c.d.x), y: Math.round(c.d.y) }).catch(() => {});
+        if (moved) { call(`/cards/${c.d.id}`, "PUT", { x: Math.round(c.d.x), y: Math.round(c.d.y) }).catch(() => {}); }
         else if (ev.type === "pointerup") activate(c, ev.clientX, ev.clientY);
       };
       el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
@@ -232,27 +259,6 @@ function canvasPanel(host, paperId, pdf) {
     await Promise.all(list.map((c, i) => crumble(c, dx, dy, i * 90)));
     if (!fast()) await buddy.burp();
   }
-  // a copy of the card flies out of Dot on an arc to where the card sits
-  async function spit(c, delay) {
-    const el = ensureEl(c);
-    board.append(el);
-    if (fast()) return;
-    el.style.visibility = "hidden";
-    await wait(delay);
-    if (fast()) { el.style.visibility = ""; return; }
-    const r = el.getBoundingClientRect(), [dx, dy] = dotAt();
-    const ghost = el.cloneNode(true);
-    ghost.classList.add("cv-ghost"); ghost.removeAttribute("tabindex"); ghost.inert = true;
-    ghost.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;margin:0`;
-    fx.append(ghost);
-    buddy.burp();
-    const fx0 = dx - (r.left + r.width / 2), fy0 = dy - (r.top + r.height / 2);
-    await play(ghost, [{ transform: `translate(${fx0}px,${fy0}px) scale(.08)`, opacity: 0 },
-      { transform: `translate(${fx0 * 0.45}px,${fy0 * 0.45 - 110}px) scale(.6) rotate(-6deg)`, opacity: 1, offset: 0.5 },
-      { transform: "translate(0,0) scale(1) rotate(0)", opacity: 1 }], { duration: 650, easing: "cubic-bezier(.3,.7,.2,1.05)" });
-    ghost.remove();
-    el.style.visibility = "";
-  }
   // take a card off the board and clear what the swallow animation left on it
   const lift = (c) => { c.el.getAnimations().forEach((a) => a.cancel()); c.el.style.visibility = ""; c.el.remove(); };
   async function putAway(c) {
@@ -261,7 +267,7 @@ function canvasPanel(host, paperId, pdf) {
     call(`/cards/${c.d.id}`, "PUT", { hidden: true }).catch(() => {});
     await swallowAll([c]);
     lift(c);
-    updateEmpty(); redraw();
+    refreshView(); updateEmpty(); redraw();
   }
   async function del(c) {
     const gone1 = call(`/cards/${c.d.id}`, "DELETE").then(() => true, () => false);
@@ -269,7 +275,7 @@ function canvasPanel(host, paperId, pdf) {
     lift(c);
     cards.delete(c.d.id);
     links = links.filter((l) => l.from_card !== c.d.id && l.to_card !== c.d.id);
-    updateEmpty(); redraw();
+    refreshView(); updateEmpty(); redraw();
     if (!(await gone1)) { buddy.say("I could not delete that card. Is the app still running?", { mood: "worried" }); load(true); }
   }
 
@@ -347,8 +353,13 @@ function canvasPanel(host, paperId, pdf) {
     threads.forEach((t) => { t.path.remove(); t.mask.remove(); });
     threads.clear();
     gIn.replaceChildren(); gOut.replaceChildren(); gTags.replaceChildren();
-    if (!opened) { svg.classList.add("off"); paintPins(); return; }
+    if (!opened || tree == null) { svg.classList.add("off"); paintPins(); return; }
     svg.classList.remove("off");
+    for (const c of cards.values()) { // the tree's branches: question to answer to references and follow-ups
+      const pa = c.d.parent && cards.get(c.d.parent);
+      if (!pa?.el || !c.el || c.el.classList.contains("cv-out") || pa.el.classList.contains("cv-out") || c.wait || pa.wait) continue;
+      gIn.append(sv("path", { class: "cv-thread cv-branch", d: between(box(pa), box(c)) }));
+    }
     for (const l of links) {
       const a = cards.get(l.from_card), b = cards.get(l.to_card);
       if (!a?.el || !b?.el || a.d.hidden || b.d.hidden || a.wait || b.wait) continue;
@@ -395,33 +406,47 @@ function canvasPanel(host, paperId, pdf) {
       const hb = host.getBoundingClientRect();
       view.classList.remove("canvas-open"); void view.offsetWidth; view.classList.remove("no-slide"); view.classList.add("canvas-open");
       const lx = ox - hb.left, ly = oy - hb.top, R = reach(hb, lx, ly);
-      wave.style.setProperty("--ox", `${lx}px`); wave.style.setProperty("--oy", `${ly}px`);
       pending.push(play(host, [{ clipPath: circle(lx, ly, 0) }, { clipPath: circle(lx, ly, R) }], { duration: 800, easing: "cubic-bezier(.6,0,.2,1)" }));
-      tail.push(play(wave, [{ "--r": "-90px", opacity: 1 }, { "--r": `${R + 90}px`, opacity: 1 }], { duration: 1100, delay: 120, easing: "ease-out" }),
-        ring(ox, oy, 0), ring(ox, oy, 160)); // the wave and rings keep going while the cards come out
+      tail.push(ring(ox, oy, 0)); // one soft ring; the blobs do the rest
     }
     updateEmpty();
     await Promise.all(pending);
     host.getAnimations().forEach((a) => a.cancel());
     if (!quick && !fast()) await buddy.burp();
     const back = [...cards.values()].filter((c) => c.d.hidden);
-    back.forEach((c) => { c.d.hidden = false; call(`/cards/${c.d.id}`, "PUT", { hidden: false }).catch(() => {}); });
-    await Promise.all(back.map((c, i) => spit(c, i * 110)));
+    back.forEach((c) => { c.d.hidden = false; call(`/cards/${c.d.id}`, "PUT", { hidden: false }).catch(() => {}); board.append(ensureEl(c)); });
+    tree = null; setMode(); renderField(!quick && !fast());
     await Promise.all(tail);
-    wave.getAnimations().forEach((a) => a.cancel());
     busy = false; holdThreads = false; skipped = false;
     svg.classList.remove("off");
+    tidy();
     updateEmpty(); redraw(true);
+  }
+  function showView(name) {
+    const on = name === "editor";
+    if (on === editing) return;
+    editing = on;
+    host.classList.toggle("editing", on); editor.hidden = !on;
+    boardBtn.setAttribute("aria-pressed", String(!on)); editBtn.setAttribute("aria-pressed", String(on));
+    svg.style.visibility = on ? "hidden" : "";
+    if (on) editHooks?.show?.(); else { editHooks?.hide?.(); redraw(true); }
+    onViewChange?.(name);
+  }
+  async function edit() { // open the canvas, if it is not, on the Editor
+    if (!opened) await open();
+    if (opened) showView("editor");
+    return opened;
   }
   async function close(o = {}) {
     if (!opened || busy) return;
+    showView("board");
     busy = true; holdThreads = true; closeMenu();
     svg.classList.add("off");
     const quick = o.instant || reduced();
     const vis = [...cards.values()].filter((c) => !c.d.hidden);
     vis.forEach((c) => { c.d.hidden = true; call(`/cards/${c.d.id}`, "PUT", { hidden: true }).catch(() => {}); });
     updateEmpty();
-    if (!quick) await swallowAll(vis);
+    if (!quick) { if (tree == null) await swallowBlobs(); else await swallowAll(vis.filter((c) => !c.el.classList.contains("cv-out"))); }
     vis.forEach(lift);
     if (quick) view.classList.remove("canvas-open");
     else {
@@ -437,6 +462,7 @@ function canvasPanel(host, paperId, pdf) {
     busy = false; holdThreads = false; skipped = false;
     threads.forEach((t) => { t.path.remove(); t.mask.remove(); }); threads.clear();
     gTags.replaceChildren();
+    tree = null; setMode(); field.replaceChildren();
   }
   const toggle = () => (opened ? close() : open());
 
@@ -485,22 +511,31 @@ function canvasPanel(host, paperId, pdf) {
     await play(c.el, [{ transform: "scale(1.05)" }, { transform: "scale(1)" }], { duration: 220 });
     settle(c);
   }
-  async function runAsk({ question, page, from = null, at = null }) {
+  async function runAsk({ question, page, from = null, at = null, quote = "" }) {
     if (asking || busy || gone) return;
     asking = true; skipped = false;
+    let made = null;
     buddy.hold(true); // Dot stays where the work is; it does not trail the pointer meanwhile
     try {
       if (!opened) await open();
       if (!opened) return;
+      laying = true; // the new cards land on a clear board (a follow-up keeps its tree in view)
+      for (const c of cards.values()) if (c.el && (tree == null || rootOf(c)?.d.id !== tree)) c.el.classList.add("cv-out");
+      setMode();
       const p = at ?? place(380);
       sweeper = pdf.sweep();
+      trace.think([quote ? "reading your selection" : `reading page ${page}`, from ? "following the earlier cards" : null, "looking for the paragraphs", "asking the model"]);
       let r;
-      try { r = await call("/ask", "POST", { question, page, from_card: from, at: [Math.round(p.x), Math.round(p.y)] }); }
+      try { r = await call("/ask", "POST", { question, page, from_card: from, at: [Math.round(p.x), Math.round(p.y)], quote }); }
       catch (e) { r = { ok: false, error: e.body?.detail?.errors?.question ?? "I could not reach the app. Is it still running?" }; }
+      trace.done(r.trace || [r.ok ? "answered" : `failed: ${r.error}`], !r.ok);
       sweeper.stop(); await sweeper.done; sweeper = null;
       await buddy.shape("face");
       if (!r.ok) { buddy.say(r.error, { mood: "worried" }); return; }
+      made = r.answer.id;
       add(r.answer, { wait: true }); r.sources.forEach((d) => add(d, { wait: true }));
+      if (r.trace?.length) cards.get(made).el.append(h("details", { class: "cv-why" }, h("summary", {}, "how Dot got here"),
+        h("ol", {}, ...r.trace.map((t) => h("li", {}, t))))); // shortcut: kept in memory only, gone on reload; save it on the card if it proves useful
       const mine = [r.answer, ...r.sources].map((d) => cards.get(d.id));
       // the server only guesses how tall a card is: stack them again by their real heights, with a gap
       let top = r.sources.length ? r.sources[0].y : r.answer.y;
@@ -519,14 +554,40 @@ function canvasPanel(host, paperId, pdf) {
     } finally {
       buddy.hold(false); sweeper?.stop(); sweeper = null; asking = false; skipped = false;
       cards.forEach((c) => { if (c.wait) { reveal(c); } }); // if something broke half way, nothing stays hidden
+      laying = false;
+      const a = made != null && cards.get(made);
+      if (a && opened) unfold(rootOf(a)); else refreshView();
       redraw(true); buddy.shape("face");
     }
   }
+  // Dot's thinking, as a quiet log in the corner: guesses while it waits, then what the server really did
+  const trace = (() => {
+    const el = h("ol", { class: "cv-trace", "aria-live": "polite", hidden: true });
+    host.append(el);
+    let timers = [];
+    const clear = () => { timers.forEach(clearTimeout); timers = []; };
+    const line = (t, cls = "") => { const li = h("li", { class: cls }, t); el.append(li); return li; };
+    return {
+      think(steps) {
+        clear(); el.replaceChildren(); el.hidden = false; el.classList.remove("over", "bad");
+        steps.filter(Boolean).forEach((t, i) => timers.push(setTimeout(() => {
+          el.querySelector(".now")?.classList.replace("now", "was");
+          line(t, "now");
+        }, fast() ? 0 : i * 900)));
+      },
+      done(lines, bad = false) {
+        clear(); el.replaceChildren(); el.classList.toggle("bad", bad);
+        lines.forEach((t, i) => timers.push(setTimeout(() => line(t, "got"), fast() ? 0 : i * 140)));
+        timers.push(setTimeout(() => el.classList.add("over"), 5200 + lines.length * 140));
+        timers.push(setTimeout(() => { el.hidden = true; }, 6000 + lines.length * 140));
+      },
+    };
+  })();
   // "Ask about this part": the words come from the selection (or the page, if none), the answer's cards from the model
   async function ask(sel, at) {
     if (asking || busy || locked || gone) return;
     const q = await buddy.prompt({ x: at.x, y: at.y, placeholder: sel ? "Ask about this part..." : "Ask about this page..." });
-    if (q) await runAsk({ question: q, page: sel?.page ?? pdf.page() });
+    if (q) await runAsk({ question: q, page: sel?.page ?? pdf.page(), quote: sel?.text || "" });
   }
   // click an answer or a source card: Dot offers a follow-up question that grows from it
   async function followUp(c, x, y) {
@@ -570,13 +631,153 @@ function canvasPanel(host, paperId, pdf) {
 
   // dragging empty canvas pans it
   host.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || !opened || e.target.closest(".cv-card, .cv-menu, .cv-compose, button, input, textarea")) return;
+    if (e.button !== 0 || !opened || editing || e.target.closest(".cv-card, .cv-menu, .cv-compose, .cv-editor, button, input, textarea")) return;
     const sx = e.clientX - pan.x, sy = e.clientY - pan.y;
     grab(host, e); host.classList.add("panning");
     const move = (ev) => { pan.x = ev.clientX - sx; pan.y = ev.clientY - sy; redraw(); };
     const up = () => { host.classList.remove("panning"); host.removeEventListener("pointermove", move); host.removeEventListener("pointerup", up); host.removeEventListener("pointercancel", up); };
     host.addEventListener("pointermove", move); host.addEventListener("pointerup", up); host.addEventListener("pointercancel", up);
   });
+
+  // a card that grows or is dropped: an unfolded tree lays itself out again (the field shows no cards)
+  function tidy() {
+    if (busy || asking || !opened || laying || tree == null) return;
+    layoutTree(false);
+  }
+  let grewRaf = 0;
+  const grew = new ResizeObserver(() => {
+    if (!grewRaf) grewRaf = requestAnimationFrame(() => { grewRaf = 0; tidy(); });
+  });
+
+  // ----- the field of blobs, and the tree a blob unfolds into -----
+  let tree = null, laying = false; // the root id of the unfolded tree (null: the field); laying: an ask is laying out its cards
+  const order = (a, b) => (String(a.d.created_at ?? "") < String(b.d.created_at ?? "") ? -1 : String(a.d.created_at ?? "") > String(b.d.created_at ?? "") ? 1 : a.d.id - b.d.id);
+  function rootOf(c) {
+    const seen = new Set();
+    while (c?.d.parent != null && cards.get(c.d.parent) && !cards.get(c.d.parent).d.hidden && !seen.has(c.d.id)) { seen.add(c.d.id); c = cards.get(c.d.parent); }
+    return c;
+  }
+  const kids = (c) => [...cards.values()].filter((k) => k.d.parent === c.d.id && k !== c && !k.d.hidden).sort(order);
+  const treeOf = (r) => { const out = [r]; for (let i = 0; i < out.length && out.length < 200; i++) out.push(...kids(out[i]).filter((k) => !out.includes(k))); return out; };
+  function setMode() {
+    host.classList.toggle("fielded", tree == null && !laying);
+    allBtn.hidden = tree == null || laying;
+    writeBtn.hidden = laying;
+  }
+  function refreshView(changed = null) {
+    if (!opened || laying) return;
+    if (tree != null) { const r = cards.get(tree); if (!r || r.d.hidden) fold(); else layoutTree(); return; }
+    renderField(false, changed && rootOf(changed));
+  }
+  const kindOf = (d) => (d.kind === "answer" ? "q" : d.kind === "source" ? "s" : (d.entries || []).some((e) => e.who === "dot") ? "nd" : "n");
+  const KIND = { q: "Question", s: "Reference", n: "Note", nd: "Note, Dot replied" };
+  function renderField(popIn = false, fresh = null) {
+    const roots = [...cards.values()].filter((c) => !c.d.hidden && rootOf(c) === c).sort(order);
+    const W = Math.max(280, host.clientWidth), CW = 118, RH = 136, cols = Math.max(2, Math.floor((W - 32) / CW));
+    const first = (t) => String(t || "").trim().split("\n")[0].replace(/\s+/g, " ").trim();
+    const clip = (t, n) => (t.length > n ? `${t.slice(0, n - 2).trim()}\u2026` : t);
+    field.replaceChildren(...roots.map((c, i) => {
+      const d = c.d, all = treeOf(c), srcs = all.filter((k) => k.d.kind === "source"), more = all.filter((k) => k !== c && k.d.kind === "answer").length;
+      const kind = kindOf(d), raw = first(d.kind === "answer" ? d.question : d.kind === "source" ? d.text : d.entries?.[0]?.text || d.text) || KIND[kind];
+      const peek = clip(first(d.kind === "answer" ? d.text : d.kind === "source" ? "" : (d.entries || []).find((e) => e.who === "dot")?.text), 120);
+      const col = i % cols, row = Math.floor(i / cols);
+      const jx = ((d.id * 37) % 10) - 5, jy = ((d.id * 53) % 10) - 5; // a little scatter, never overlapping
+      const count = [d.page ? `p. ${d.page}` : "", srcs.length ? `${srcs.length} ref${srcs.length > 1 ? "s" : ""}` : "", more ? `${more} follow-up${more > 1 ? "s" : ""}` : ""].filter(Boolean).join(" \u00b7 ");
+      let off = [];
+      const b = h("button", { type: "button", role: "listitem", class: `cv-blob k-${kind}${popIn || c === fresh ? " pop" : ""}${row === 0 ? " low" : ""}${col === cols - 1 ? " end" : ""}`,
+        style: `left:${16 + col * CW + (row % 2 ? 12 : 0) + jx}px;top:${16 + row * RH + jy}px;--i:${i}`,
+        "aria-label": `${KIND[kind]}: ${raw}.${count ? ` ${count}.` : ""} Open`,
+        onclick: () => { off.forEach((f) => f?.()); off = []; b.classList.add("press"); setTimeout(() => unfold(c, b), fast() ? 0 : 160); },
+        onpointerenter: () => { // the passages it rests on light up on the paper
+          off = [d, ...srcs.map((k) => k.d)].filter((x) => x.page && x.rect).slice(0, 5).map((x) => pdf.light(x.page, x.rect));
+          field.classList.add("looking");
+        },
+        onpointerleave: () => { off.forEach((f) => f?.()); off = []; field.classList.remove("looking"); } },
+        h("span", { class: "bod", "aria-hidden": "true" }, h("span", { class: "eyes" }, h("i"), h("i")), h("span", { class: "act" })),
+        h("span", { class: "lbl" }, clip(raw, 48)),
+        count ? h("span", { class: "cnt" }, count) : null,
+        peek ? h("span", { class: "peek", "aria-hidden": "true" }, peek) : null);
+      return b;
+    }));
+    updateEmpty();
+  }
+  // every blob's eyes follow the pointer across the field; the one under it looks up at you
+  field.addEventListener("pointermove", (e) => {
+    if (reduced()) return;
+    for (const b of field.children) {
+      const r = b.firstChild.getBoundingClientRect(), dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2), m = Math.hypot(dx, dy) || 1;
+      const k = Math.min(1, m / 160);
+      b.style.setProperty("--ex", `${(dx / m) * 4 * k}px`); b.style.setProperty("--ey", `${(dy / m) * 3 * k}px`);
+    }
+  });
+  field.addEventListener("pointerleave", () => { for (const b of field.children) { b.style.removeProperty("--ex"); b.style.removeProperty("--ey"); } });
+  // now and then one blob hops, so the field feels lived in without everything drifting
+  const hopper = setInterval(() => {
+    if (!host.classList.contains("fielded") || reduced() || document.hidden) return;
+    const bs = [...field.children].filter((b) => !b.matches(":hover"));
+    const b = bs[Math.floor(Math.random() * bs.length)];
+    if (b) { b.classList.remove("hop"); void b.offsetWidth; b.classList.add("hop"); }
+  }, 2600);
+  // a blob opens into its tree: the question and answer first, the references beside it, follow-ups further out
+  function unfold(r, from = null) {
+    if (!r || busy) return;
+    tree = r.d.id; setMode();
+    const list = treeOf(r), ids = new Set(list.map((c) => c.d.id));
+    for (const c of cards.values()) if (c.el) c.el.classList.toggle("cv-out", !ids.has(c.d.id));
+    zoom = 1; pan.x = 0; pan.y = 0;
+    layoutTree(!from);
+    redraw();
+    const fr = from?.getBoundingClientRect();
+    if (fr && !fast()) list.forEach((c, i) => {
+      const cr = c.el.getBoundingClientRect();
+      c.el.animate([{ transform: `translate(${fr.left + fr.width / 2 - cr.left - cr.width / 2}px, ${fr.top + fr.height / 2 - cr.top - cr.height / 2}px) scale(.12)`, opacity: 0 },
+        { transform: "none", opacity: 1 }], { duration: 460, delay: i * 55, easing: "cubic-bezier(.3,1.25,.4,1)", fill: "backwards" });
+    });
+    setTimeout(() => redraw(), fast() ? 0 : 480 + list.length * 55);
+  }
+  function layoutTree(slide = true) {
+    const r = cards.get(tree);
+    if (!r) return fold();
+    const colY = [], COL = 300, before = new Map();
+    const list = treeOf(r);
+    if (slide && !fast()) list.forEach((c) => before.set(c, c.el.getBoundingClientRect()));
+    const put = (c, depth, y0, seen) => {
+      if (seen.has(c)) return; seen.add(c);
+      const x = 24 + depth * COL, y = Math.max(y0, colY[depth] ?? 24);
+      c.d.x = x; c.d.y = y; c.el.style.left = `${x}px`; c.el.style.top = `${y}px`;
+      colY[depth] = y + c.el.offsetHeight + 16;
+      for (const k of kids(c)) put(k, depth + 1, y, seen);
+    };
+    put(r, 0, 24, new Set());
+    before.forEach((was, c) => { // cards that were already on show slide to their place
+      const now = c.el.getBoundingClientRect();
+      if (was.width && (Math.abs(was.left - now.left) > 1 || Math.abs(was.top - now.top) > 1))
+        c.el.animate([{ translate: `${was.left - now.left}px ${was.top - now.top}px` }, { translate: "0 0" }], { duration: 380, easing: "cubic-bezier(.3,.8,.2,1)" });
+    });
+    later();
+  }
+  function fold() {
+    if (tree == null) return;
+    tree = null; setMode(); renderField(); redraw();
+  }
+  async function swallowBlobs() {
+    const bl = [...field.children];
+    if (!bl.length || fast()) return;
+    await buddy.gulp();
+    const [dx, dy] = dotAt();
+    await Promise.all(bl.map((b, i) => { const r = b.getBoundingClientRect();
+      return play(b, [{ transform: "none", opacity: 1 }, { transform: `translate(${dx - r.left - r.width / 2}px, ${dy - r.top - r.height / 2}px) scale(.1)`, opacity: 0.3 }],
+        { duration: 520, delay: i * 45, easing: "cubic-bezier(.5,0,.8,.5)" }); }));
+    if (!fast()) await buddy.burp();
+  }
+  // "Write a note" on the canvas: Dot becomes the note pill; the note becomes a new blob
+  async function newNote() {
+    if (laying || busy) return;
+    const r = writeBtn.getBoundingClientRect();
+    const text = await buddy.prompt({ x: r.left + r.width / 2 + 60, y: r.top - 34, placeholder: "Write a note" });
+    if (text) await note({ text });
+  }
+  host.addEventListener("keydown", (e) => { if (e.key === "Escape" && tree != null && !laying) { e.stopPropagation(); fold(); } });
 
   // a free spot near the top of what you can see, in canvas coordinates
   function place(hgt = 130) {
@@ -594,6 +795,7 @@ function canvasPanel(host, paperId, pdf) {
     const c = { d, el: null, wait: !!o.wait }; // wait: laid out but not shown yet (an answer's cards arrive one by one)
     cards.set(d.id, c);
     if (!d.hidden) { const el = ensureEl(c); el.classList.toggle("cv-wait", c.wait); board.append(el); }
+    if (!laying && !d.hidden) { c.el.classList.toggle("cv-out", tree == null || rootOf(c)?.d.id !== tree); refreshView(c); }
     updateEmpty(); redraw(true);
     return c.el;
   }
@@ -604,7 +806,12 @@ function canvasPanel(host, paperId, pdf) {
     if (on && opened) close({ instant: true });
   }
 
-  const ro = new ResizeObserver(() => redraw());
+  let fieldW = 0;
+  const ro = new ResizeObserver(() => { // the field re-flows when the canvas is resized
+    redraw();
+    const w = host.clientWidth;
+    if (host.classList.contains("fielded") && Math.abs(w - fieldW) > 40) { fieldW = w; renderField(); }
+  });
   ro.observe(host);
   pdf.onView(() => redraw(true));
   loaded = load().then(async () => {
@@ -650,13 +857,14 @@ function canvasPanel(host, paperId, pdf) {
     redraw();
   }
   return {
-    open, close, toggle, isOpen: () => opened, add, place, ask, followUp, note, el: host, redraw, lock, refresh, card: (id) => cards.get(id),
+    open, close, toggle, isOpen: () => opened, edit, view: showView, editing: () => editing,
+    mountEditor: (el, hooks) => { editor.append(el); editHooks = hooks; }, onViewChange: (f) => { onViewChange = f; }, add, place, ask, followUp, note, el: host, redraw, lock, refresh, card: (id) => cards.get(id),
     destroy() {
       gone = true; closeMenu();
       document.removeEventListener("pointerdown", skipAll, true);
       [...live].forEach((a) => { try { a.cancel(); } catch { /* done */ } });
-      ro.disconnect(); pdf.onView(null);
-      cancelAnimationFrame(raf);
+      ro.disconnect(); grew.disconnect(); pdf.onView(null); clearInterval(hopper);
+      cancelAnimationFrame(raf); cancelAnimationFrame(grewRaf);
       svg.remove(); tab.remove(); fx.remove();
       view.classList.remove("canvas-open");
     },

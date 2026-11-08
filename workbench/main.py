@@ -9,14 +9,14 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import Body, FastAPI, HTTPException, Request, Response
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from . import canvas, checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, settings, shelf, themes, websearch
+from . import canvas, checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, sections, settings, shelf, themes, websearch
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -226,7 +226,8 @@ def explain(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if pages is None:
         raise HTTPException(404, detail="This paper is not in the library.")
     box = marks.boxed(paper_id, req.page, req.rect) if req.rect else None
-    return llm.explain(settings.get_all(), req.words.strip(), paper["title"], pages, req.page - 1, box[1] if box else None)
+    near = marks.around(paper_id, req.page, req.rect) if req.rect else ("", "")
+    return llm.explain(settings.get_all(), req.words.strip(), paper["title"], pages, req.page - 1, box[1] if box else None, near)
 
 
 @app.get("/papers/{paper_id}/primer")
@@ -311,6 +312,14 @@ def get_blocks(paper_id: str, page: int) -> dict[str, Any]:
     out = marks.blocks(paper_id, page)
     if out is None:
         raise HTTPException(404, detail="This page is not in the library.")
+    return out
+
+
+@app.get("/papers/{paper_id}/section")
+def get_section(paper_id: str, heading: str = Query(..., max_length=300), page: int = Query(1, ge=1)) -> dict[str, Any]:
+    out = sections.find(paper_id, heading, page)
+    if out is None:
+        raise HTTPException(404, detail="I could not find that section in the paper.")
     return out
 
 
@@ -465,6 +474,7 @@ class CanvasAskIn(BaseModel):
     page: int = Field(ge=1)
     from_card: int | None = None
     at: tuple[float, float]
+    quote: str = Field("", max_length=3000)  # the part of the page the student selected, if any
 
 
 @app.post("/papers/{paper_id}/canvas/ask")
@@ -473,7 +483,7 @@ def canvas_ask(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any
         req = CanvasAskIn(**body)
     except ValidationError as e:
         raise HTTPException(422, detail={"errors": _errors(e)})
-    out = canvas.ask(settings.get_all(), paper_id, req.question.strip(), req.page, req.from_card, req.at)
+    out = canvas.ask(settings.get_all(), paper_id, req.question.strip(), req.page, req.from_card, req.at, req.quote.strip())
     if out is None:
         raise HTTPException(404, detail="This paper is not in the library.")
     return out

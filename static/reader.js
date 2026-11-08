@@ -35,7 +35,7 @@ async function renderReader(paperId, startPage) {
 
   const done = h("span", { class: "num" }, `${saved.steps_done}/${fw.steps.length}`);
   const stepsChip = h("button", { type: "button", class: "dchip", "aria-expanded": "false", onclick: () => drawers.toggle("steps") }, "Steps ", done);
-  const notesChip = h("button", { type: "button", class: "dchip", "aria-expanded": "false", onclick: () => drawers.toggle("notes") }, "Notes");
+  const notesChip = h("button", { type: "button", class: "dchip", "aria-expanded": "false", onclick: () => toggleNote() }, "Notes");
   const hideBtn = h("button", { class: "btn ghost", type: "button", "aria-pressed": "false",
     onclick: () => pdf.setHidden(!pdf.hidden()) }, "Hide paper");
   $("#page-extra").append(
@@ -81,12 +81,12 @@ async function renderReader(paperId, startPage) {
       ai.live = ai.live ?? streamPrimer(paperId, (e) => { ai.data.progress = e; ai.paint?.(); }).then(async () => {
         ai.data = (await api(`/papers/${paperId}/primer`).catch(() => null)) ?? ai.data;
         ai.live = null;
-        if (openReader === me) open(current, false);
+        if (openReader === me) open(current, false, false);
       });
       ai.paint?.();
     } };
 
-  function open(st, pop = true) {
+  function open(st, pop = true, tip = true) { // tip: Dot names the step; only when you move to it yourself
     timer.stop();
     queue.flush(); // the notes live in memory; this sends the last keystrokes now instead of in 500 ms
     current = st;
@@ -100,7 +100,7 @@ async function renderReader(paperId, startPage) {
     back.disabled = idx() === 0;
     next.disabled = idx() === fw.steps.length - 1;
     if (TIMER_AUTOSTART) timer.start();
-    stepTip(st, pop);
+    if (tip) stepTip(st, pop);
   }
 
   // Steps (the template) live in a drawer on the left; one plain note per paper in a drawer on the right,
@@ -111,15 +111,55 @@ async function renderReader(paperId, startPage) {
   const drawers = readerDrawers({
     steps: { side: "left", label: "Steps", chip: stepsChip, onClose: () => queue.flush(),
       content: h("div", { class: "drawer-steps" }, rail.el, h("section", { class: "notebook", "aria-label": "Step notes" }, body, foot)) },
+    // only used while the canvas is closed off (Self-test): otherwise the note is the canvas's Editor view
     notes: { side: "right", label: "Notes", chip: notesChip, onOpen: () => plain.show(), onClose: () => plain.flush(),
-      content: h("section", { class: "notebook", "aria-label": "Notes" }, plain.el) },
+      content: h("div", { class: "note-holder" }) },
   });
   const canvasHost = h("section", { class: "canvas-host", "aria-label": "Canvas" });
   view.append(pdf.el, canvasHost, drawers.steps.el, drawers.notes.el);
   const canvas = canvasPanel(canvasHost, paperId, pdf);
+  const research = researchPage({ paperId, title: paper.title, plain, pdf });
+  const appendNote = plain.append;
+  plain.append = async (text) => { const ok = await appendNote(text); research.render(); return ok; }; // the page shows what was just added
+  const noteBook = h("section", { class: "notebook", "aria-label": "Notes" }, research.el);
+  const noteHooks = { show: research.show, hide: research.hide };
+  canvas.mountEditor(noteBook, noteHooks);
+  canvas.onViewChange((name) => notesChip.classList.toggle("on", name === "editor"));
+  async function openNote() {
+    if (!canvasHost.hidden) {
+      drawers.closeAll(); canvas.mountEditor(noteBook, noteHooks);
+      if (await canvas.edit()) return;
+    }
+    drawers.notes.el.querySelector(".note-holder").append(noteBook); drawers.open("notes"); research.show();
+  }
+  function toggleNote() {
+    if (canvas.isOpen() && canvas.editing()) return canvas.view("board");
+    if (drawers.notes.isOpen()) return drawers.closeAll();
+    openNote();
+  }
   pdf.hooks.onAsk = (s, at) => canvas.ask(s, at);
-  const guide = guidedReading(paperId, pdf, (id) => { const st = fw.steps.find((x) => x.id === id); if (st && st !== current) open(st, false); },
-    () => drawers.open("notes"));
+  const guide = guidedReading(paperId, pdf, (id) => { const st = fw.steps.find((x) => x.id === id); if (st && st !== current) open(st, false, false); },
+    () => openNote(), (text) => plain.append(text));
+  // Highlight collector: your highlights, in page order, gathered into the note; ones already there are skipped
+  async function collectHighlights() {
+    const clean = (t) => String(t || "").normalize("NFKC").replace(/\s+/g, " ").trim();
+    const top = (q) => q.rects?.[0]?.[1] ?? 0;
+    const mine = pdf.highlights().filter((q) => q.kind === "me" && clean(q.text)).sort((a, b) => a.page - b.page || top(a) - top(b));
+    if (!mine.length) { buddy.say("You have no highlights yet. Mark some words with the highlighter first.", { mood: "idle" }); return; }
+    const have = await plain.text();
+    const fresh = mine.filter((q) => !have.includes(clean(q.text)));
+    openNote();
+    if (!fresh.length) { buddy.say("Your note already has all your highlights.", { mood: "happy" }); return; }
+    const lines = [`Highlights, ${new Date().toLocaleDateString()}`];
+    let pg = 0;
+    for (const q of fresh) {
+      if (q.page !== pg) { pg = q.page; lines.push(`p. ${pg}`); }
+      lines.push(`- "${clean(q.text)}"`);
+    }
+    const ok = await plain.append(lines.join("\n"));
+    buddy.say(ok ? `I gathered ${fresh.length} highlight${fresh.length === 1 ? "" : "s"} into your note.` : "I could not save the note. Is the app still running?", { mood: ok ? "happy" : "worried" });
+  }
+  plain.el.querySelector(".plain-foot").prepend(h("button", { type: "button", class: "plain-collect", onclick: collectHighlights }, "Collect highlights"));
   const ico = (inner) => `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
   const dotTools = () => buddy.tools([
     pdf.along()
@@ -128,14 +168,16 @@ async function renderReader(paperId, startPage) {
     { group: "With you", key: "watch", name: pdf.watching() ? "Proactive, on" : "Proactive", hint: pdf.watching() ? "Turn the check-ins off" : "I check in if you get stuck", color: "#7bd88f", on: pdf.watching(),
       icon: ico('<rect class="eye fill" x="5" y="6" width="4" height="12" rx="2"/><rect class="eye fill" x="15" y="6" width="4" height="12" rx="2"/>'),
       pick: () => { pdf.watch(!pdf.watching()); dotTools(); } },
-    ...(pdf.watching() ? [{ group: "With you", key: "clear", name: "Clear trail", hint: "Forget which parts you read", color: "#ff8a7e", icon: ico('<path d="M6 6l12 12M18 6 6 18"/>'), pick: () => pdf.clearTrail() }] : []),
+    ...(pdf.watching() ? [{ group: "With you", key: "clear", name: "Reset session", hint: "Start this session\u2019s count again", color: "#ff8a7e", icon: ico('<path d="M6 6l12 12M18 6 6 18"/>'), pick: () => pdf.clearTrail() }] : []),
     { group: "On the page", key: "lens", name: "Lens", hint: "Highlight words, I explain", color: "#5ec8d8", icon: ico('<circle cx="10" cy="10" r="5.5"/><path d="m14.2 14.2 5 5"/>'), pick: () => pdf.lens() },
     { group: "On the page", key: "guide", name: "Guide", hint: "I walk the paper with you", color: "#c6a0ff", icon: ico('<path class="route" d="M4 17c3 0 3-8 7-8s4 8 9 1"/><circle class="fill bug" cx="4" cy="17" r="2"/>'), pick: () => guide.start() },
+    { group: "On the page", key: "collect", name: "Collect highlights", hint: "Gather your highlights into your note", color: "#f7b955",
+      icon: ico('<path d="M5 6h9M5 10h7"/><path d="M4 15h16l-2 5H6z"/><path d="M17 4v7m-3-3 3 3 3-3"/>'), pick: collectHighlights },
     { group: "On the page", key: "canvas", name: "Canvas", hint: "Open or put away your cards", color: "#ff9e7a", icon: ico('<rect class="card a" x="3" y="6" width="11" height="13" rx="2"/><rect class="card b" x="10" y="4" width="11" height="13" rx="2"/>'),
       pick: () => (canvasHost.hidden ? buddy.say("The paper is closed for this step, so the canvas is too.") : canvas.toggle()) },
   ]);
   dotTools();
-  open(current, !greeted.has("reader")); greeted.add("reader");
+  open(current, false, false); greeted.add("reader");
   if (ai.data.progress.state === "making") ai.make(); // it was started elsewhere; follow it here
   buddy.look(true); buddy.follow(false); buddy.toolsOn("click"); // reading mode: Dot rests in its corner (the Library's yellow circle); pull it out to tag along
   pdf.hooks.onAlong = () => dotTools();
@@ -148,7 +190,7 @@ async function renderReader(paperId, startPage) {
   pdf.hooks.onNoteSaved = async (m) => {
     const card = await canvas.note?.({ page: m.page, rect: m.rect, text: m.text });
     const ok = await plain.append(`Note, page ${m.page}: ${m.text}`);
-    if (!card) drawers.open("notes");
+    if (!card) openNote();
     return !!card || ok;
   };
 
@@ -192,8 +234,9 @@ function readerDrawers(defs) {
 
 // Guided reading: with only the paper showing, Dot offers to take you to each part to read for each step,
 // hovers beside its heading and tells you what to look for. The places come from the paper's own headings.
-function guidedReading(paperId, pdf, onStep, openNotes) {
-  let stops = null, i = 0, live = 0, offered = false, on = false;
+function guidedReading(paperId, pdf, onStep, openNotes, save) {
+  let stops = null, i = 0, live = 0, offered = false, on = false, tuckT = 0;
+  const texts = new Map(), kept = new Map(); // what you wrote at each stage, and what of it is already in your note
   const label = h("p", { class: "gd-count num" });
   const what = h("p", { class: "gd-step" });
   const where = h("p", { class: "gd-where" });
@@ -201,10 +244,20 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
   const back = h("button", { type: "button", class: "btn ghost small-btn", onclick: () => show(i - 1) }, "Back");
   const home = h("button", { type: "button", class: "btn ghost small-btn", onclick: () => { stop(); pdf.tagAlong(false); } }, "Send Dot home");
   const next = h("button", { type: "button", class: "btn small-btn", onclick: () => show(i + 1) });
+  const ta = h("textarea", { class: "gd-note", rows: 4, "aria-label": "Your note for this stage", placeholder: "In your own words: what does this part say?" });
   const card = h("section", { class: "guide-card", hidden: true, "aria-label": "Guided reading", "aria-live": "polite" },
-    h("div", { class: "gd-top" }, h("span", { class: "buddy-name" }, "Dot guides"), label,
-      h("button", { type: "button", class: "buddy-x", "aria-label": "Stop guided reading", onclick: () => stop() }, "×")),
-    what, where, look, h("div", { class: "gd-actions" }, back, next, home));
+    h("div", { class: "gd-top" }, h("span", { class: "gd-eyes", "aria-hidden": "true" }, h("i"), h("i")), label,
+      h("button", { type: "button", class: "buddy-x", "aria-label": "Stop guided reading", onclick: () => stop() }, "\u00d7")),
+    what, look, ta, h("div", { class: "gd-actions" }, back, next));
+  // what you wrote goes into your paper note once per stage, again only if you changed it
+  async function keep() {
+    if (!stops || !on) return;
+    const t = ta.value.trim();
+    texts.set(i, ta.value);
+    if (!t || kept.get(i) === t || !save) return;
+    kept.set(i, t);
+    await save(`Stage ${i + 1} \u00b7 ${stops[i].title}: ${t}`);
+  }
   pdf.el.append(card);
   buddy.draggable(card, card.querySelector(".gd-top"));
   const onKey = (e) => { if (e.key === "Escape" && on && !document.querySelector(".dot-win")) stop(); };
@@ -226,34 +279,30 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
       if (r?.note) buddy.say(`${r.note} I used the paper's own headings instead.`, { mood: "worried" });
     }
     if (!stops.length) { stops = null; return buddy.say("I could not find the parts of this paper to guide you through.", { mood: "worried" }); }
-    on = true; card.hidden = true; // the tour is spoken by Dot, not a separate card
-    buddy.hold(true); // Dot stays at each stage; it does not trail the pointer while it guides
+    on = true; // Dot says each stage; the note for it sits beside the paper
     document.addEventListener("keydown", onKey);
     show(0);
   }
   async function show(k) {
+    await keep();
     if (k >= stops.length) return finish();
     i = Math.max(0, k);
+    ta.value = texts.get(i) || ""; card.hidden = false;
     const s = stops[i], my = ++live;
     label.textContent = `Stage ${i + 1} of ${stops.length}`;
     what.textContent = s.title;
     look.replaceChildren(h("li", {}, s.why));
+    card.classList.remove("tuck"); clearTimeout(tuckT);
     back.disabled = i === 0;
     next.textContent = i === stops.length - 1 ? "Finish" : "Next stage";
     const r = await pdf.point(s.heading, s.page);
     if (my !== live || !on) return;
-    where.textContent = r.found ? `Go to "${s.heading}" on page ${s.page}.` : `Go to page ${s.page}.`;
-    const stage = pdf.el.querySelector(".pdf-stage").getBoundingClientRect();
-    const left = r.left - 64 > stage.left + 30; // hover in the margin left of the heading (clear of its number), or else to its right
-    await buddy.goTo(left ? r.left - 64 : Math.min(r.left + r.w + 50, stage.right - 40), r.top + r.h / 2);
-    if (my !== live || !on) return;
+    where.textContent = r.found ? `"${s.heading}".` : `Page ${s.page}.`;
+    const parts = [...(r.subs || []), ...(r.more ? [`Runs on to page ${r.last}`] : [])];
+    if (parts.length) look.append(h("li", { class: "gd-parts" }, h("b", {}, "Read through"), h("ol", {}, ...parts.map((t) => h("li", {}, t)))));
+    tuckT = setTimeout(() => { if (on && !ta.value.trim()) card.classList.add("tuck"); }, 4000);
     buddy.lookAt(r.left + r.w / 2, r.top + r.h / 2, 4000);
-    const actions = [
-      ...(i > 0 ? [{ label: "Back", onClick: () => show(i - 1) }] : []),
-      { label: i === stops.length - 1 ? "Finish" : "Next", onClick: () => show(i + 1) },
-      { label: "Home", onClick: () => { stop(); pdf.tagAlong(false); } },
-    ];
-    buddy.say(`${s.title}. ${where.textContent} ${s.why}`, { sticky: true, actions });
+    buddy.say(`Stage ${i + 1} of ${stops.length}: ${s.title}.`, { mood: "happy", pop: false }); // the card says it; Dot's bubble would cover the text
   }
   function finish() {
     stop();
@@ -262,24 +311,161 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
   }
   function stop() {
     if (!on) return;
+    keep();
     on = false; live += 1; card.hidden = true; pdf.unmark();
     document.removeEventListener("keydown", onKey);
-    buddy.hold(false);
-    buddy.goHome();
   }
   return { offer, stop, start: () => (on ? show(i) : start()) };
 }
 
 // One free page of notes per paper. A line that starts with @ai, ended with Enter, asks the local model
 // about this paper; the answer is written into the note under the question.
+// The Editor: by the end of a reading this is your own research write-up. Your notes, the questions you asked Dot with
+// its answers and sources, your notes on passages and your highlights, as one page that links back into the paper.
+function researchPage({ paperId, title, plain, pdf }) {
+  const el = h("article", { class: "rp", "aria-label": "Your research page" });
+  let editing = false, seq = 0;
+  const jump = (page, rect) => () => (rect ? pdf.reveal(page, rect) : pdf.go(page));
+  const chip = (page, rect, label = `p. ${page}`) => (page ? h("button", { type: "button", class: "rp-page", title: `Show it in the paper, page ${page}`, onclick: jump(page, rect) }, label) : null);
+  const tag = (text, cls = "") => h("span", { class: `rp-tag ${cls}` }, text);
+  const fmt = (t) => buddy.format(String(t || ""));
+
+  // your typed note, sorted into the page's sections: what you wrote yourself, what you asked Dot in the note,
+  // the stages of a guided reading, and quotes gathered by the highlight collector
+  function noteParts(text) {
+    const p = { mine: [], asks: [], stages: [], quotes: [] };
+    let ul = null, q = null, inHl = false, page = 0;
+    for (const raw of text.split("\n")) {
+      const t = raw.trim();
+      if (!t) { ul = null; continue; }
+      let m;
+      if (inHl && (m = t.match(/^p\. (\d+)$/))) { page = +m[1]; continue; }
+      if (inHl && (m = t.match(/^(?:- )?"(.*)"$/))) { p.quotes.push({ page, text: m[1] }); continue; }
+      inHl = false;
+      if ((m = t.match(/^Highlights, (.*)$/))) { inHl = true; page = 0; continue; }
+      if ((m = t.match(/^@ai\b[:,]?\s*(.*)$/i)) || (m = t.match(/^Q:\s*(.*)$/))) { p.asks.push(q = h("section", { class: "rp-q" }, h("h3", {}, m[1]))); continue; }
+      if ((m = t.match(/^AI(?: could not answer)?:\s*(.*)$/))) {
+        const ans = h("div", { class: "rp-ans" }, tag("Dot", "dot"), ...fmt(m[1]));
+        if (q) q.append(ans); else p.asks.push(h("section", { class: "rp-q" }, ans));
+        q = null; continue;
+      }
+      if ((m = t.match(/^Stage (\d+) \u00b7 (.+?):\s*(.*)$/))) { p.stages.push(h("div", { class: "rp-stage" }, h("span", { class: "rp-step" }, m[1]), h("div", {}, h("b", {}, m[2]), h("p", {}, m[3])))); continue; }
+      if ((m = t.match(/^Note, page (\d+):\s*(.*)$/))) p.mine.push(h("div", { class: "rp-pnote" }, chip(+m[1]), h("p", {}, m[2])));
+      else if ((m = t.match(/^(?:- )?"(.*)"$/)) || (m = t.match(/^Marked: "(.*)"$/))) p.mine.push(h("blockquote", {}, m[1]));
+      else if ((m = t.match(/^[-*\u2022]\s+(.*)$/))) { if (!ul) p.mine.push(ul = h("ul")); ul.append(h("li", {}, m[1])); continue; }
+      else p.mine.push(h("p", {}, t));
+      ul = null;
+    }
+    return p;
+  }
+  // a quick way to add to your notes without opening the whole note
+  function composer() {
+    const ta = h("textarea", { class: "rp-add-text", rows: 2, "aria-label": "Add a note", placeholder: "Add a note. Enter adds it, Shift+Enter starts a new line." });
+    const add = async () => {
+      const t = ta.value.trim();
+      if (!t) return ta.focus();
+      btn.disabled = true;
+      if (await plain.append(t)) ta.value = "";
+      btn.disabled = false;
+    };
+    const btn = h("button", { type: "button", class: "rp-edit", onclick: add }, "Add");
+    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); add(); } });
+    ta.addEventListener("input", () => grow(ta));
+    return h("div", { class: "rp-add" }, ta, btn);
+  }
+  // one question with Dot's answer, its sources in the paper, and the follow-ups that grew from it
+  function thread(c, kids, depth = 0) {
+    const d = c, srcs = (kids.get(d.id) || []).filter((k) => k.kind === "source");
+    const later = [d, ...srcs].flatMap((x) => (kids.get(x.id) || []).filter((k) => k.kind === "answer"));
+    const body = String(d.text || "").replace(/\n\nNo exact lines found\.$/, "");
+    return h("section", { class: `rp-q${depth ? " follow" : ""}` },
+      h("h3", {}, d.question || "A question"),
+      h("div", { class: "rp-ans" }, tag("Dot", "dot"), ...fmt(body)),
+      srcs.length ? h("ul", { class: "rp-srcs" }, ...srcs.map((s) => h("li", {}, chip(s.page, s.rect), h("span", {}, s.text)))) : null,
+      ...later.map((k) => thread(k, kids, depth + 1)));
+  }
+  function passage(c, kids) {
+    const later = (kids.get(c.id) || []).filter((k) => k.kind === "answer");
+    return h("section", { class: "rp-q note" },
+      h("div", { class: "rp-note-head" }, tag("Note"), chip(c.page, c.rect)),
+      ...(c.entries || []).map((e) => (e.who === "dot" ? h("div", { class: "rp-ans" }, tag("Dot", "dot"), ...fmt(e.text)) : h("p", { class: "rp-mine" }, e.text))),
+      ...later.map((k) => thread(k, kids, 1)));
+  }
+  const SECTIONS = {
+    notes: ["My notes", "What you wrote, in your own words."],
+    asks: ["Questions", "What you asked Dot, its answers, and the lines they came from."],
+    passages: ["Notes on passages", "Notes pinned to a spot in the paper."],
+    quotes: ["Highlights", "The lines you marked yellow, in page order."],
+    stages: ["Guided reading", "What you wrote at each stage of the tour."],
+  };
+  let secN = 0;
+  const section = (id, count, ...body) => h("section", { class: `rp-sec rp-${id}-sec`, id: `rp-${id}` },
+    h("header", { class: "rp-sec-head" },
+      h("span", { class: "rp-n", "aria-hidden": "true" }, String(++secN).padStart(2, "0")),
+      h("div", {}, h("h2", {}, SECTIONS[id][0], count ? h("small", {}, String(count)) : null), h("p", { class: "rp-sec-sub" }, SECTIONS[id][1]))),
+    h("div", { class: "rp-sec-body" }, ...body));
+  const empty = (text) => h("p", { class: "rp-empty" }, text);
+
+  async function render() {
+    const my = ++seq;
+    const [text, cv] = await Promise.all([plain.text(), api(`/papers/${paperId}/canvas`).catch(() => ({ cards: [] }))]);
+    if (my !== seq || editing) return;
+    const cards = cv.cards || [], kids = new Map();
+    for (const c of cards) if (c.parent != null) (kids.get(c.parent) || kids.set(c.parent, []).get(c.parent)).push(c);
+    const ids = new Set(cards.map((c) => c.id)), root = (c) => c.parent == null || !ids.has(c.parent);
+    const asks = cards.filter((c) => c.kind === "answer" && root(c));
+    const notes = cards.filter((c) => c.kind === "note" && root(c) && (c.entries || []).some((e) => e.text?.trim()));
+    const part = noteParts(text);
+    const hls = pdf.highlights().filter((q) => q.kind === "me" && q.text?.trim()).map((q) => ({ page: q.page, text: q.text, rect: q.rects?.[0] }));
+    // quotes the collector put in the note whose highlight is gone still count
+    const key = (t) => t.replace(/\s+/g, " ").trim().slice(0, 60);
+    const have = new Set(hls.map((q) => key(q.text)));
+    const quotes = [...hls, ...part.quotes.filter((q) => !have.has(key(q.text)))].sort((a, b) => a.page - b.page);
+    const pages = new Set([...cards.map((c) => c.page), ...quotes.map((q) => q.page)].filter(Boolean));
+    const nAsk = cards.filter((c) => c.kind === "answer").length + part.asks.length;
+    const counts = { notes: part.mine.length, asks: nAsk, passages: notes.length, quotes: quotes.length, stages: part.stages.length };
+    const order = ["notes", "asks", "passages", "quotes", ...(part.stages.length ? ["stages"] : [])];
+    const toc = order.map((id) => h("button", { type: "button", class: `rp-${id}-tab`, onclick: () => el.querySelector(`#rp-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" }) },
+      SECTIONS[id][0], id !== "notes" ? h("small", {}, String(counts[id])) : null));
+    const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+    const tools = text.trim() ? h("div", { class: "rp-tools" }, h("button", { type: "button", class: "rp-ghost", onclick: () => setEdit(true) }, "Edit whole note")) : null;
+    secN = 0;
+    el.replaceChildren(
+      h("header", { class: "rp-head" },
+        h("p", { class: "rp-kicker" }, h("span", { class: "gd-eyes", "aria-hidden": "true" }, h("i"), h("i")), "My research"),
+        h("h1", {}, title),
+        h("p", { class: "rp-meta" }, `${plural(nAsk, "question")} \u00b7 ${plural(notes.length, "passage note")} \u00b7 ${plural(quotes.length, "highlight")} \u00b7 ${plural(pages.size, "page")} touched`)),
+      h("nav", { class: "rp-toc", "aria-label": "Sections" }, ...toc),
+      section("notes", null, tools, composer(),
+        ...(part.mine.length ? part.mine : [empty("Nothing written yet.")])),
+      section("asks", nAsk, ...(nAsk ? [...asks.map((c) => thread(c, kids)), ...part.asks] : [empty("No questions yet. Select a passage and ask Dot.")])),
+      section("passages", notes.length, ...(notes.length ? notes.map((c) => passage(c, kids)) : [empty("No passage notes yet.")])),
+      section("quotes", quotes.length, ...(quotes.length ? quotes.map((q) => h("figure", { class: "rp-quote" }, h("blockquote", {}, q.text), h("figcaption", {}, chip(q.page, q.rect)))) : [empty("No highlights yet.")])),
+      part.stages.length ? section("stages", part.stages.length, ...part.stages) : null);
+  }
+  // writing: the note's own editor takes the place of "My notes"; Done puts the page back
+  function setEdit(on) {
+    editing = on;
+    if (on) {
+      const sec = el.querySelector("#rp-notes");
+      const done = h("button", { type: "button", class: "rp-edit", onclick: async () => { await plain.flush(); setEdit(false); } }, "Done");
+      sec.querySelector(".rp-sec-body").replaceChildren(h("div", { class: "rp-tools" }, done), plain.el);
+      plain.show();
+    } else render();
+  }
+  return { el, render, show: () => { editing = false; render(); }, hide: () => plain.flush(), edit: () => setEdit(true) };
+}
+
 function plainNote(paperId, page) {
   const url = `/papers/${paperId}/note`;
   const ta = h("textarea", { class: "plain-text", "aria-label": "Note",
     placeholder: "Write your notes here." });
   const status = h("span", { class: "save-status", role: "status" });
   const el = h("div", { class: "plain", hidden: true },
-    ta, h("div", { class: "plain-foot" },
-      h("p", { class: "plain-hint" }, "Start a line with ", h("b", {}, "@ai"), " and press Enter to ask about this paper."), status));
+    h("div", { class: "plain-head" }, h("span", { class: "gd-eyes", "aria-hidden": "true" }, h("i"), h("i")), h("b", {}, "Your note"), status),
+    h("div", { class: "plain-sheet" }, ta),
+    h("div", { class: "plain-foot" },
+      h("p", { class: "plain-hint" }, h("b", {}, "@ai"), " at the start of a line, then Enter, asks Dot.")));
   let loaded = false, dirty = false, t = 0;
   const say = (text, cls = "") => { status.textContent = text; status.className = `save-status ${cls}`; };
 
@@ -319,6 +505,11 @@ function plainNote(paperId, page) {
 
   return {
     el, flush,
+    /** The note as it stands (loading it first). */
+    async text() {
+      if (!loaded) { loaded = true; const r = await api(url).catch(() => null); if (r && !dirty) ta.value = r.text; }
+      return ta.value;
+    },
     /** Add text at the end of the note (loading it first), and save. */
     async append(text) {
       if (!loaded) { loaded = true; const r = await api(url).catch(() => null); if (r && !dirty) ta.value = r.text; }
@@ -766,6 +957,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   const penHint = h("p", { class: "pen-hint", hidden: true }, "Drag over the words for Dot to explain.",
     h("button", { type: "button", class: "pen-stop", onclick: () => { endPen(); buddy.goHome(); } }, "Stop"));
   const guideMark = h("i", { class: "guide-mark", hidden: true, "aria-hidden": "true" });
+  const guideLine = h("div", { class: "guide-lines", hidden: true, "aria-hidden": "true" }); // lines down the margin of what to read, one per column
   const marksLayer = h("div", { class: "marks-layer" });
   const hlLayer = h("div", { class: "hl-layer", "aria-hidden": "true" }); // saved highlights, under the text
   const selLayer = h("div", { class: "sel-layer", "aria-hidden": "true" }); // the paragraph outline and the chosen box
@@ -813,15 +1005,16 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     ink.width = canvas.width; ink.height = canvas.height;
     ink.style.width = canvas.style.width; ink.style.height = canvas.style.height;
     if (shown && shown !== v.page) canvas.classList.add(v.page > shown ? "turn-next" : "turn-prev"); // zoom and resize redraws stay still
+    if (sel && sel.page === shown && shown !== v.page) sel.text = textIn(sel.blocks.reduce(union)); // its words, before that page's text goes
     shown = v.page;
     const layer = h("div", { class: "textLayer", style: `--scale-factor:${vp.scale}` });
     pdfjsLib.renderTextLayer({ textContentSource: await page.getTextContent(), container: layer, viewport: vp });
     if (seq !== v.seq) return;
     textLayer = layer;
-    pageBox.replaceChildren(canvas, hlLayer, hits, guideMark, textLayer, marksLayer, selLayer, trackLayer, ink);
+    pageBox.replaceChildren(canvas, hlLayer, hits, guideMark, guideLine, textLayer, marksLayer, selLayer, trackLayer, ink);
     drawTrack();
-    guideMark.hidden = true;
-    drawMarks(); loadBlocks(v.page); drawHl();
+    guideMark.hidden = true; guideLine.hidden = true;
+    drawMarks(); loadBlocks(v.page).then(regGuide); drawHl();
     if (sel && sel.page !== v.page && !job) clearSel(); else drawSel();
     sheet.replaceChildren(pageBox);
     search.paint();
@@ -829,32 +1022,72 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   }
   let viewCb = null; // the canvas redraws its threads when the page, zoom or scroll changes
   stage.addEventListener("scroll", () => viewCb?.(), { passive: true });
+  // Scroll on past the end of a page and the next one comes up (and back past the top), so reading runs down the whole paper.
+  let pushed = 0, turning = false;
+  stage.addEventListener("wheel", async (e) => {
+    if (turning || v.hidden || !v.doc || e.ctrlKey || Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+    const atEnd = stage.scrollTop + stage.clientHeight >= stage.scrollHeight - 2, atTop = stage.scrollTop <= 0;
+    const down = e.deltaY > 0;
+    if (!(down ? atEnd && v.page < v.doc.numPages : atTop && v.page > 1)) { pushed = 0; return; }
+    pushed += Math.abs(e.deltaY);
+    if (pushed < 160) return; // a small push at the edge is not a page turn
+    pushed = 0; turning = true;
+    try { await go(v.page + (down ? 1 : -1)); stage.scrollTop = down ? 0 : stage.scrollHeight; }
+    finally { setTimeout(() => { turning = false; }, 350); } // let the trackpad's momentum die out
+  }, { passive: true });
   // Select text with the mouse (formulas too): Dot, which trails the pointer, offers what it can do with the words.
   const picked = () => getSelection().toString().normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, 600);
   function clearPick() { getSelection().removeAllRanges(); }
   pageBox.addEventListener("mouseup", (e) => { if (e.button === 0 && !e.target.closest?.(NOT_PAGE)) setTimeout(() => wordsMenu(e.clientX, e.clientY), 0); });
 
   // Guided reading: go to a heading, mark it, scroll it near the top, and say where it is on screen.
-  async function point(heading, page) {
-    await go(page);
-    const norm = (t) => t.toLowerCase().replace(/\s+/g, " ").replace(/^[\d.]+\s+/, "").trim();
-    const want = norm(heading || "");
-    const items = (await (await v.doc.getPage(v.page)).getTextContent()).items.filter((i) => i.str?.trim());
-    const boxes = want ? items.filter((i) => { const t = norm(i.str); return t.length >= 3 && (want.startsWith(t) || t.startsWith(want)); })
-      .map((i) => itemBox(i, v.vp)) : [];
-    const b = boxes.sort((a, c) => c.h - a.h)[0]; // the biggest match is the heading, not a word in the text
-    if (b) {
-      guideMark.style.cssText = `left:${b.x - 8}px;top:${b.y - 5}px;width:${b.w + 16}px;height:${b.h + 8}px`;
-      guideMark.hidden = false; guideMark.classList.remove("on"); void guideMark.offsetWidth; guideMark.classList.add("on");
+  // The section being read, worked out by the server from the PDF's outline, fonts and columns: its heading and the
+  // stretches of text to read, page by page, in PDF points. A line runs down the margin of each stretch on the page shown,
+  // the rest of the page dims, and it all comes back after a zoom or when you turn to the next page of the section.
+  let guide = null;
+  function drawGuide() {
+    if (!guide || !v.vp) { guideLine.hidden = true; return; }
+    const k = v.vp.scale, W = v.vp.width, H = v.vp.height, pad = 8;
+    const segs = guide.segments.filter((s) => s.page === v.page).map((s) => s.box.map((q) => q * k));
+    if (guide.heading.page === v.page) {
+      const [x0, y0, x1, y1] = guide.heading.box.map((q) => q * k);
+      guideMark.style.cssText = `left:${x0 - 8}px;top:${y0 - 5}px;width:${x1 - x0 + 16}px;height:${y1 - y0 + 8}px`;
+      guideMark.hidden = false;
     }
-    const y = b ? b.y : 0;
-    const top = () => pageBox.getBoundingClientRect().top;
-    stage.scrollTop += top() + y - stage.getBoundingClientRect().top - stage.clientHeight * (b ? 0.3 : 0);
-    const pr = pageBox.getBoundingClientRect(), sr = stage.getBoundingClientRect();
-    return b ? { left: pr.left + b.x, top: pr.top + b.y, w: b.w, h: b.h, found: true }
-      : { left: Math.max(pr.left, sr.left) + 40, top: sr.top + 40, w: 0, h: 0, found: false };
+    if (!segs.length) { guideLine.hidden = true; return; }
+    const NS = "http://www.w3.org/2000/svg", dim = document.createElementNS(NS, "svg"), path = document.createElementNS(NS, "path");
+    for (const [a2, val] of Object.entries({ class: "guide-dim", width: W, height: H, viewBox: `0 0 ${W} ${H}` })) dim.setAttribute(a2, val);
+    path.setAttribute("fill-rule", "evenodd");
+    path.setAttribute("d", `M0 0H${W}V${H}H0z` + segs.map(([x0, y0, x1, y1]) => `M${x0 - pad} ${y0 - pad}h${x1 - x0 + pad * 2}v${y1 - y0 + pad * 2}h${-(x1 - x0 + pad * 2)}z`).join(""));
+    dim.append(path);
+    let delay = 0.9;
+    guideLine.replaceChildren(dim, ...segs.map(([x0, y0, , y1]) => {
+      const el = h("div", { class: "guide-line on", style: `left:${Math.max(4, x0 - 16)}px;top:${y0}px;height:${y1 - y0}px;--t:${Math.max(8, Math.round((y1 - y0) / 14))}s;--d:${delay}s` }, h("i"));
+      delay += 0.3;
+      return el;
+    }));
+    guideLine.hidden = false;
   }
-  function unmark() { guideMark.hidden = true; }
+  const regGuide = drawGuide;
+  async function point(heading, page) {
+    guide = null; guideLine.hidden = true; guideMark.hidden = true;
+    const q = new URLSearchParams({ heading: heading || "", page: String(page || 1) });
+    const sec = heading ? await api(`/papers/${paperId}/section?${q}`).catch(() => null) : null;
+    if (sec?.segments?.length) guide = sec;
+    await go(sec ? sec.heading.page : page);
+    drawGuide();
+    if (guide) { guideMark.classList.remove("on"); void guideMark.offsetWidth; guideMark.classList.add("on"); }
+    const k = v.vp.scale, hb = guide ? guide.heading.box.map((q2) => q2 * k) : null;
+    const top = () => pageBox.getBoundingClientRect().top;
+    stage.scrollTop += top() + (hb ? hb[1] : 0) - stage.getBoundingClientRect().top - stage.clientHeight * (hb ? 0.3 : 0);
+    const pr = pageBox.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+    const last = guide ? Math.max(...guide.segments.map((s) => s.page)) : v.page;
+    const plan = { subs: guide?.subs ?? [], more: last > v.page, last };
+    return hb ? { left: pr.left + hb[0], top: pr.top + hb[1], w: hb[2] - hb[0], h: hb[3] - hb[1], found: true, ...plan }
+      : { left: Math.max(pr.left, sr.left) + 40, top: sr.top + 40, w: 0, h: 0, found: false, ...plan };
+  }
+  function unmark() { guideMark.hidden = true; guideLine.hidden = true; guide = null; }
+
 
   // Dot explains in its own window, and takes follow-up questions there.
   // a page-pixel area, padded a little, as PDF points for the server to crop
@@ -1123,50 +1356,32 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
     }).map((sp) => sp.textContent).join(" ").normalize("NFKC").replace(/\s+/g, " ").trim();
   }
-  // A small Dot rides in the margin beside the part you are reading; parts you stayed on keep a rail.
-  const READ_MS = 10_000, trailKey = `dot-trail:${paperId}`, lastKey = `dot-last:${paperId}`;
-  const trail = new Set(JSON.parse(localStorage.getItem(trailKey) || "[]"));
-  const here = h("div", { class: "track-here", hidden: true }, h("i", {}, h("b"), h("b")));
-  let hereKey = "";
+  // Proactive keeps one quiet tally per reading session (this visit): pages and parts you stayed on, and minutes spent.
+  // shortcut: a session is the browser tab's sessionStorage, so a reload keeps it and a new tab starts fresh.
+  const READ_MS = 10_000, sessKey = `dot-session:${paperId}`, lastKey = `dot-last:${paperId}`;
+  let sess = { parts: [], ms: 0 };
+  try { sess = { ...sess, ...JSON.parse(sessionStorage.getItem(sessKey) || "{}") }; } catch {}
+  const trail = new Set(sess.parts);
+  const save = () => { try { sessionStorage.setItem(sessKey, JSON.stringify({ parts: [...trail], ms: sess.ms })); } catch {} };
+  const sessBar = h("i", { class: "sess-bar" }), sessLbl = h("span", { class: "sess-lbl" });
+  const sessEl = h("div", { class: "sess", hidden: true, role: "status", "aria-label": "This reading session" }, sessBar, sessLbl);
+  el.querySelector(".pdf-tools").append(sessEl);
   function drawTrack() {
-    trackLayer.replaceChildren(here);
-    trackLayer.hidden = !watchOn;
-    if (!watchOn || !v.vp) return;
-    for (const k of trail) {
-      const [pg, r] = k.split(":");
-      if (pg === String(v.page)) trackLayer.append(rail("track-read", r.split(",").map(Number)));
-    }
-    hereKey = ""; track();
+    trackLayer.hidden = true;
+    sessEl.hidden = !watchOn || !v.doc;
+    if (sessEl.hidden) return;
+    const pages = new Set([...trail].map((k) => k.split(":")[0])).size, min = Math.round(sess.ms / 60_000);
+    sessBar.style.setProperty("--p", pages / v.doc.numPages);
+    sessLbl.textContent = `This session: ${pages} of ${v.doc.numPages} pages \u00b7 ${trail.size} part${trail.size === 1 ? "" : "s"} \u00b7 ${min} min`;
   }
-  function rail(cls, b) {
-    const [x0, y0, , y1] = px(b);
-    return h("div", { class: cls, style: `left:${Math.max(2, x0 - 14)}px;top:${y0}px;height:${y1 - y0}px` });
-  }
-  function track() {
-    if (!watchOn || v.hidden || !v.vp) return;
-    const b = readingBlock();
-    if (!b) { here.hidden = true; return; }
-    const key = `${v.page}:${b.join()}`;
-    if (key === hereKey) return;
-    hereKey = key;
-    const [x0, y0, , y1] = px(b);
-    here.style.cssText = `left:${Math.max(2, x0 - 14)}px;top:${y0}px;height:${y1 - y0}px`;
-    here.hidden = false;
-  }
-  let trackRaf = 0;
-  const trackSoon = () => { if (!trackRaf) trackRaf = requestAnimationFrame(() => { trackRaf = 0; track(); }); };
-  stage.addEventListener("scroll", trackSoon, opt);
-  pageBox.addEventListener("pointermove", trackSoon, opt);
   function readIt(key) {
     localStorage.setItem(lastKey, key); // the last part you read, to pick up from next time
     if (trail.has(key)) return;
-    trail.add(key); localStorage.setItem(trailKey, JSON.stringify([...trail]));
-    const [pg, r] = key.split(":");
-    if (pg === String(v.page)) trackLayer.append(rail("track-read fresh", r.split(",").map(Number)));
+    trail.add(key); save(); drawTrack();
   }
   function tick() {
     if (!watchOn || asking || v.hidden || document.hidden || !v.vp) return;
-    track();
+    if (Date.now() - lastHere < AWAY_MS) { sess.ms += TICK; save(); drawTrack(); }
     if (document.querySelector(".dot-win, .mk-card") || search.penning()) { seen.ms = 0; return; } // busy with Dot already
     const b = readingBlock();
     if (!b) return;
@@ -1201,8 +1416,8 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       ask: (a) => post(`You asked me "${q.slice(0, 250)}" about this part: "${part.slice(0, 300)}". My answer: "${a}". Is it right? Say what is right and what is missing, in 2 to 4 sentences.`) });
   }
   function clearTrail() {
-    trail.clear(); localStorage.removeItem(trailKey); localStorage.removeItem(lastKey); drawTrack();
-    buddy.say("I cleared the reading trail for this paper.", { mood: "idle" });
+    trail.clear(); sess.ms = 0; save(); localStorage.removeItem(lastKey); drawTrack();
+    buddy.say("I cleared this session's progress.", { mood: "idle" });
   }
   // Opening the paper again: Dot offers to take you back to the last part you read.
   function offerResume() {
@@ -1306,14 +1521,15 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     if (!sel || sel.page !== v.page || !v.vp) { selBox.hidden = true; return; }
     setBox(selBox, sel.blocks.reduce(union));
     selBox.hidden = false;
-    selBox.querySelector("b").textContent = sel.blocks.length > 1 ? `+${sel.blocks.length - 1}` : "";
-    selBox.classList.toggle("more", sel.blocks.length > 1);
+    selBox.querySelector("b").textContent = sel.before ? `from p. ${sel.from}` : sel.blocks.length > 1 ? `+${sel.blocks.length - 1}` : "";
+    selBox.classList.toggle("more", sel.blocks.length > 1 || !!sel.before);
   }
   function clearSel() { sel = null; selBox.hidden = true; selBox.classList.remove("more", "grow"); }
   const selection = () => {
     if (!sel) return null;
     const rect = rnd(sel.blocks.reduce(union));
-    return { page: sel.page, rect, text: textIn(rect).slice(0, 3000) };
+    const here = sel.page === v.page ? textIn(rect) : sel.text || ""; // a box that runs over pages keeps the words before
+    return { page: sel.page, rect, text: [sel.before, here].filter(Boolean).join(" ").slice(-3000) };
   };
 
   // ----- tag along: Dot rests in its corner; you pull it out when you want it along, and send it home when you are done -----
@@ -1454,8 +1670,8 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   // ----- Add more: Dot squashes, rides the box's bottom edge, and the box grows over the next paragraph -----
   async function addMore() {
     const last = Math.max(...sel.blocks.map((q) => blocks.indexOf(q)));
-    const nx = blocks[last + 1];
-    if (!nx || sel.page !== v.page) { buddy.nudge(); return; } // nothing more on this page
+    const nx = sel.page === v.page ? blocks[last + 1] : null;
+    if (!nx) return morePage();
     await anim(async () => {
       await buddy.shape("squash");
       const box = () => pageBox.getBoundingClientRect();
@@ -1478,6 +1694,21 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       if (!fast()) await buddy.wait(150);
       selBox.classList.remove("grow");
     });
+  }
+
+  // the page ran out, or you scrolled on: the box carries its words over and starts again on the next page's first part
+  async function morePage() {
+    const to = sel.page + 1;
+    if (!v.doc || to > v.doc.numPages || (v.page !== sel.page && v.page !== to)) { buddy.nudge(); return; }
+    const words = sel.page === v.page ? textIn(sel.blocks.reduce(union)) : sel.text || "";
+    const before = [sel.before, words].filter(Boolean).join(" ").slice(-3000), from = sel.from ?? sel.page;
+    if (v.page !== to) { await go(to); stage.scrollTop = 0; }
+    await loadBlocks(to);
+    if (!blocks.length || v.page !== to) { buddy.nudge(); return; }
+    sel = { page: to, blocks: [blocks[0]], before, from };
+    selBox.classList.remove("grow"); void selBox.offsetWidth;
+    drawSel(); selBox.classList.add("grow");
+    setTimeout(() => selBox.classList.remove("grow"), fast() ? 0 : 500);
   }
 
   // ----- saved highlights: yellow are yours, blue are Dot's suggestions -----
@@ -1662,7 +1893,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       const b = pageBox.getBoundingClientRect(), s = stage.getBoundingClientRect();
       stage.scrollTop += b.top + px(r)[1] - s.top - stage.clientHeight * 0.3;
       const off = glow(r); setTimeout(off, 1800);
-    }, hidden: () => v.hidden, page: () => v.page, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
+    }, hidden: () => v.hidden, page: () => v.page, highlights: () => hls, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },
     destroy() { clearInterval(watchTimer); watchStop.abort(); buddy.tools(null); buddy.tagAlong(null); if (search.penning()) { endPen(); buddy.goHome(); } buddy.droppable(null); document.removeEventListener("keydown", onKey); ro.disconnect(); v.doc?.destroy(); },

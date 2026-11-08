@@ -166,13 +166,27 @@ body.lib-on .buddy { display: none !important; }
 .lweb form:focus-within { box-shadow: inset 0 0 0 2px var(--dotc); }
 .lweb input { flex: 1; width: 100%; height: 48px; padding: 0 18px; color: var(--tx); font: 500 16px/1.4 var(--sans); }
 .lweb input::placeholder { color: var(--tx2); }
-.lweb .hits { display: flex; flex-direction: column; gap: 8px; max-height: min(420px, calc(100vh - 300px)); overflow: auto; }
-.lweb .hit { display: block; padding: 10px 12px 11px; border-radius: 12px; background: var(--g1); color: var(--tx);
-  text-decoration: none; box-shadow: inset 3px 0 0 var(--dotc); user-select: text; }
-.lweb .hit:hover { background: var(--g2); }
-.lweb .hit strong { display: block; color: var(--dotc); font: 600 15px/1.3 var(--sans); }
-.lweb .hit .snip { display: block; margin-top: 4px; color: var(--tx); font: 450 14px/1.45 var(--sans); }
-.lweb .hit .host { display: block; margin-top: 4px; color: var(--tx2); font: 500 12px/1.3 var(--sans); }
+.lweb .hits { display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 330px); overflow: auto; padding: 4px 0 24px;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); }
+.lweb .hit { position: relative; display: grid; grid-template-columns: 34px 1fr 18px; gap: 12px; align-items: start; padding: 12px 14px; border-radius: 14px;
+  color: var(--tx); text-decoration: none; user-select: text; transition: background .18s, translate .18s;
+  animation: lhit .42s cubic-bezier(.2,.9,.3,1.15) backwards; animation-delay: calc(var(--i) * 55ms); }
+.lweb .hit:hover, .lweb .hit:focus-visible { background: rgb(255 255 255 / .06); translate: 3px 0; outline: none; }
+.lweb .hit + .hit::before { content: ""; position: absolute; left: 60px; right: 14px; top: -1px; height: 1px; background: rgb(255 255 255 / .06); }
+.lweb .hit:hover::before, .lweb .hit:hover + .hit::before { opacity: 0; }
+.lweb .fav { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; margin-top: 2px;
+  background: hsl(var(--hue) 45% 26%); color: hsl(var(--hue) 85% 82%); font: 700 15px/1 var(--sans); transition: rotate .25s, scale .25s; }
+.lweb .hit:hover .fav { rotate: -6deg; scale: 1.06; }
+.lweb .hbody { min-width: 0; }
+.lweb .hit .host { display: block; overflow: hidden; color: var(--tx2); font: 500 12px/1.3 var(--sans); white-space: nowrap; text-overflow: ellipsis; }
+.lweb .hit .path { opacity: .7; }
+.lweb .hit strong { display: block; margin-top: 2px; color: var(--tx); font: 600 15.5px/1.3 var(--sans); transition: color .18s; }
+.lweb .hit:hover strong { color: var(--dotc); }
+.lweb .hit .snip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 4px; color: var(--tx2); font: 450 13.5px/1.45 var(--sans); }
+.lweb .go { margin-top: 2px; color: var(--tx2); font: 600 15px/1 var(--sans); opacity: 0; translate: -4px 4px; transition: opacity .18s, translate .18s, color .18s; }
+.lweb .hit:hover .go { opacity: 1; translate: 0 0; color: var(--dotc); }
+@keyframes lhit { from { opacity: 0; translate: 0 10px; } }
+@media (prefers-reduced-motion: reduce) { .lweb .hit { animation: none; } }
 /* shelf-only blobs: simple marks under the eyes */
 .k-group .pr, .k-sort .pr, .k-show .pr, .k-theme .pr, .k-bubble .pr { left: 50%; bottom: 9px; translate: -50% 0; width: 14px; height: 7px; }
 .k-group .pr { background: radial-gradient(circle, #1f2023 2px, transparent 2.5px) 0 0 / 7px 7px; }
@@ -201,8 +215,8 @@ body.lib-on .buddy { display: none !important; }
 @keyframes wsettle { from { opacity: 0; top: 6px; } to { opacity: 1; top: 0; } }
 @keyframes wdone { from { opacity: .4; top: 4px; } to { opacity: 1; top: 0; } }
 .lfield .lcaret { position: absolute; z-index: 4; left: 0; top: 0; width: 2px; height: 20px; border-radius: 1px; background: #1f2023; opacity: 0; pointer-events: none;
-  animation: lblink 1.1s steps(1) infinite; }
-@keyframes lblink { 50% { background: transparent; } }
+  animation: lcaret 1.1s steps(1) infinite; }
+@keyframes lcaret { 50% { background: transparent; } } /* not lblink: that name is the blobs' blink */
 .lfield .line button { pointer-events: auto; font: inherit; color: #1f2023; background: none; border: 0; padding: 0 3px; margin-left: 4px; cursor: pointer; text-decoration: underline 2px; text-underline-offset: 3px; }
 .lfield input { position: absolute; z-index: 3; left: 22px; right: 20px; top: 0; height: 52px; padding: 0; border: 0; outline: 0; background: transparent;
   font: 500 16px var(--sans); color: transparent; caret-color: transparent; opacity: 0; transition: opacity .2s .25s; }
@@ -245,6 +259,8 @@ body.lib-on .buddy { display: none !important; }
 }
 .lst.chatting .lcard:not(.fetched):not(.lift):not(.gone) { opacity: .38; filter: saturate(.6); }
 .lst.chatting .lcount { opacity: 0 !important; }
+/* looking things up: the shelf steps back so the results have the room to themselves */
+.lst.webbing .lcard:not(.fetched):not(.lift):not(.gone) { opacity: 0; scale: .9; filter: blur(3px); pointer-events: none; }
 .lcard.fetched { z-index: 12; border-color: var(--tc); box-shadow: 0 18px 36px -14px #000, 0 0 0 2px color-mix(in srgb, var(--tc) 60%, transparent); }
 /* history: past turns, quiet glass pills that open on hover */
 .lhist { z-index: 12; display: flex; flex-direction: column; gap: 5px; align-items: flex-start; translate: 0 -100%; transition: opacity .3s; }

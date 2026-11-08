@@ -134,6 +134,42 @@ EXPLAIN_SYSTEM = (
     "formula says as a whole. If a picture of the marked part comes with the question, trust it over the copied text. No headings, no lists."
 )
 
+FORMULA_SYSTEM = (
+    "You help a student read a research paper. The student marked a formula (copied out of the PDF it may look "
+    "jumbled; if a picture of it comes with the question, read the picture). Take it apart term by term.\n"
+    "1. One plain sentence: what the formula computes and what it is for in this paper.\n"
+    "2. Then a list, one line per term, symbol or operation, in the order they appear, each line as "
+    "\"- term \u2014 what it is, in everyday words\". Cover every piece: each symbol, each fraction (top and "
+    "bottom), each sum (what it adds up over), indicator brackets, absolute values, and the subscripts and "
+    "superscripts. Write symbols plainly (F1, TP, sum over D^e, 1[f(x)=1 and a=0]), never LaTeX. Use the "
+    "paper's own definitions from the text around the formula.\n"
+    "3. Then a line starting \"In plain words:\" with 2 or 3 sentences that put it back together, and one tiny "
+    "example with made-up numbers if it helps.\n"
+    "Name each term once, at most 14 lines in the list. Keep step 1 to one sentence. If several formulas are "
+    "marked, do this for each in turn. Read what the paper says right after the formula (\"where ...\") and use "
+    "it. Do not guess what the paper does not say."
+)
+
+
+def _no_loops(text: str) -> str:
+    """Small models fall into a loop on long lists: keep each line once and stop where it starts going round."""
+    out, seen, again = [], set(), 0
+    for line in text.splitlines():
+        key = re.sub(r"\W+", " ", line).strip().lower()
+        if key and key in seen:
+            again += 1
+            if again >= 2:
+                break
+            continue
+        seen.add(key)
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def _formula(words: str) -> bool:
+    """Marked text that is math rather than prose."""
+    return ":=" in words or len(re.findall(r"[=\u2211\u03a3\u2227\u2228\u2208\u2206\u0394{}\[\]^_|\u223c~]", words)) >= 4 or not _readable(words)
+
 
 def _strip_thinking(text: str) -> str | None:
     """Drop <think> blocks some models print. None if the model never finished thinking."""
@@ -249,9 +285,15 @@ def _answer(s: Settings, system: str, question: str, title: str, pages: list[str
             "whole": len(keep) == len(pages), "total": len(pages), "seconds": round(time.perf_counter() - start, 1)}
 
 
-def explain(s: Settings, words: str, title: str, pages: list[str], page: int, image: str | None = None) -> dict[str, Any]:
+def explain(s: Settings, words: str, title: str, pages: list[str], page: int, image: str | None = None,
+            near: tuple[str, str] = ("", "")) -> dict[str, Any]:
     """Explain marked words with the whole paper as context (or as much as fits the budget), and a picture of them if given."""
     page = min(max(page, 0), max(len(pages) - 1, 0))
+    if _formula(words):
+        setup = (f"The paper just before it: \"{near[0]}\"\n" if near[0] else "") + (f"The paper just after it: \"{near[1]}\"\n" if near[1] else "")
+        question = f'{setup}The formula I marked on page {page + 1}: "{words}"\nTake it apart term by term, then simplify it.'
+        got = _answer(s, FORMULA_SYSTEM, question, title, pages, page, image)
+        return {**got, "text": _no_loops(got["text"])} if got.get("ok") and got.get("text") else got
     question = f'Words I marked on page {page + 1}: "{words}"\nWhat do they mean in this paper?'
     return _answer(s, EXPLAIN_SYSTEM, question, title, pages, page, image)
 
@@ -294,7 +336,8 @@ def note_reply(s: Settings, lines: list[dict[str, Any]], boxed_text: str, image:
     if last is None:
         return {"ok": False, "error": "There is no question to answer."}
     question = lines[last]["text"].strip()
-    question = question[3:].strip() if question.startswith("@ai") else question
+    if m := re.search(r"(?im)^\s*@ai\b[\s:,-]*(.*)$", question):  # "@ai" may start any line of the entry
+        question = m[1].strip() or "Explain this part in simple words."
     earlier = "".join(f"{'Student' if e['who'] == 'me' else 'Dot'}: {e['text'][:1000]}\n" for e in lines[:last])
     q = (f'The note is about this part of page {page + 1}:\n"""\n{boxed_text[:3000]}\n"""\n' if boxed_text else f"I am looking at page {page + 1}.\n")
     q += (f"The note so far:\n{earlier}\n" if earlier else "") + f"My question: {question}"
@@ -318,45 +361,140 @@ def pick_quotes(s: Settings, text: str, title: str) -> list[str]:
             {"role": "user", "content": f"Paper: {title}\n\nText:\n\"\"\"\n{text[:6000]}\n\"\"\""}]
     for _ in range(2):
         try:
-            out = json.loads(primer._complete(s, msgs, _QUOTES, "quotes"))["quotes"]
-            return [q.strip() for q in out if isinstance(q, str) and q.strip()][:3]
+            reply = primer._complete(s, msgs, _QUOTES, "quotes")
+            out = json.loads(reply[reply.find("{"):reply.rfind("}") + 1])["quotes"]  # some models wrap the JSON in words or fences
+            out = [out] if isinstance(out, str) else out  # one quote as a plain string, not a list of letters
+            return [q.strip() for q in out if isinstance(q, str) and len(q.split()) >= 3][:3]
         except (ValueError, KeyError, TypeError):
             continue
     return []
 
 
 SOURCES_SYSTEM = (
-    "You help a student read a research paper. Answer the question in simple English, in at most 6 short sentences. "
-    "You get the paper's paragraphs, each with an id like p3-b7. Name only ids from that list as sources, at most 4, "
-    "each with a gist of at most 12 words. Name only paragraphs that really answer the question. "
-    'Return JSON: {"answer": "...", "sources": [{"block": "p3-b7", "gist": "..."}]}.'
+    "You help a student read a research paper. Do exactly what the student asks, from the paragraphs you are given, in "
+    "simple English. The request may be an instruction, not a question: \"simplify this\", \"go term by term\", "
+    "\"in more detail\", \"give an example\". Then do that to the part they selected, or to the earlier answer if they "
+    "selected nothing. Never answer an instruction with \"Yes\" or by repeating the earlier answer: a follow-up must add something new. Simplify means everyday words with no symbols, subscripts or LaTeX, and one small example. Elaborate means explain each part and why it is there. Term by term means "
+    "one short line per symbol or term: what it stands for and why it is there. Keep a plain question to at most 6 "
+    "short sentences; when they ask for detail or steps, use up to 14 short lines. Say what this paper says, in its "
+    "own terms, not general knowledge. If the paragraphs do not answer it, say so in one sentence. Each paragraph has an id like p3-b7. As sources, name the ids of the "
+    "paragraphs your answer uses, best first, at most 4, each paragraph once. For each one write a gist: what that "
+    "paragraph says, in your own plain words, at most 12 words. Never copy a formula or symbols into a gist (formulas "
+    "look jumbled after copying out of the PDF); say what the formula is for instead. "
+    'Return JSON only: {"answer": "...", "sources": [{"block": "p3-b7", "gist": "..."}]}.'
 )
+
+_STOP = {"this", "that", "with", "from", "their", "they", "them", "these", "those", "which", "what", "when", "where",
+         "have", "been", "were", "will", "would", "could", "should", "about", "into", "than", "then", "also", "such",
+         "more", "most", "some", "other", "paper", "page", "does", "each", "only", "very", "much", "many", "there"}
+
+
+def _stems(text: str) -> set[str]:
+    """Content words cut to 6 letters, so "randomness" and "random" meet."""
+    return {w[:6] for w in re.findall(r"[a-z]{4,}", text.lower()) if w not in _STOP}
+
+
+def _readable(text: str) -> bool:
+    """Mostly plain words? Formulas copied out of a PDF are not ("F1(f, D) := 2TP P+ PP=")."""
+    toks = text.split()
+    word = re.compile(r"\(?(?:[A-Za-z][A-Za-z'-]*|\d+(?:\.\d+)?%?)[.,;:!?)]*")
+    return bool(toks) and sum(bool(word.fullmatch(t)) for t in toks) >= 0.75 * len(toks)
+
+
+def _short(text: str, most: int = 14) -> str:
+    words = text.split()
+    return " ".join(words[:most]) + ("..." if len(words) > most else "")
+
+
+def _block_id(b: Any) -> str:
+    """The model's id in our form: "P3_B7", "p3 - b7" and "p3-b7 (page 3)" all mean p3-b7."""
+    m = re.search(r"p\s*(\d+)\s*[-_ ]?\s*b\s*(\d+)", str(b), re.I)
+    return f"p{m[1]}-b{m[2]}" if m else str(b).strip()
+
+
+def _best_sentence(answer: str, para: str) -> tuple[int, str]:
+    """The answer sentence that shares the most words with a paragraph, and how many it shares."""
+    p = _stems(para)
+    return max(((len(_stems(x) & p), x) for x in re.split(r"(?<=[.!?])\s+", answer) if x.strip()), default=(0, ""))
+
+
+def _gist(gist: str, answer: str, page: int, para: str) -> str:
+    """A short readable line for a source card. A copied formula is swapped for words."""
+    gist = " ".join(gist.split())
+    if gist and _readable(gist):
+        return _short(gist, 16)
+    hit, sent = _best_sentence(answer, para)
+    if hit >= 2:
+        return _short(sent)
+    return _short(para) if _readable(para) else f"A formula on page {page}"
+
+
+def _match(answer: str, paras: list[tuple[str, int, list[float], str]], most: int = 4) -> list[dict[str, Any]]:
+    """When the model names no usable paragraph: the paragraphs the answer's sentences clearly come from."""
+    stems = {p[0]: _stems(p[3]) for p in paras}
+    out: list[dict[str, Any]] = []
+    for sent in re.split(r"(?<=[.!?])\s+", answer) if paras else []:
+        sw = _stems(sent)
+        if len(sw) < 4:
+            continue
+        best = max(paras, key=lambda p: len(sw & stems[p[0]]))
+        hit = len(sw & stems[best[0]])
+        if hit >= 3 and hit >= 0.4 * len(sw):
+            out.append({"block": best[0], "page": best[1], "rect": best[2], "gist": _short(sent)})
+    return out[:most]
+
+
+def _dedupe(src: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One card per paragraph, and none that says the same as another on its page."""
+    def same(a: str, b: str) -> bool:
+        x, y = _stems(a), _stems(b)
+        return bool(x | y) and len(x & y) >= 0.6 * len(x | y)
+    out: list[dict[str, Any]] = []
+    for x in src:
+        if not any(o["block"] == x["block"] or (o["page"] == x["page"] and same(o["gist"], x["gist"])) for o in out):
+            out.append(x)
+    return out
+
+
+def _fit(s: Settings, paras: list[tuple[str, int, list[float], str]], overhead: str) -> list[tuple[str, int, list[float], str]]:
+    """The paragraphs that fit the context budget, taken in the order given (best pages first), then in page order."""
+    room = int((s.max_context_tokens - s.max_output_tokens - context.tokens(overhead) - 300) * context.CHARS_PER_TOKEN)
+    out, used = [], 0
+    for p in paras:
+        used += len(p[3][:1500]) + 24
+        if used > room and out:
+            break
+        out.append(p)
+    return sorted(out, key=lambda p: p[1])  # stable: paragraphs keep their order inside a page
 
 
 def ask_with_sources(s: Settings, question: str, title: str, paras: list[tuple[str, int, list[float], str]],
-                     context: str = "") -> dict[str, Any]:
-    """Answer and name the paragraphs that back it up. Each para is (id, page, rect, text)."""
+                     earlier: str = "") -> dict[str, Any]:
+    """Answer and name the paragraphs that back it up. Each para is (id, page, rect, text), best pages first."""
     from pydantic import BaseModel, ValidationError
 
     from . import primer
 
     class Src(BaseModel):
-        block: str
-        gist: str
+        block: str | int
+        gist: str = ""
 
     class Reply(BaseModel):
         answer: str
-        sources: list[Src] = []
+        sources: list[Src | str] | None = None
 
-    ids = [p[0] for p in paras]
+    had = len(paras)
+    paras = _fit(s, paras, SOURCES_SYSTEM + title + earlier + question)
+    by = {p[0]: p for p in paras}
+    trace = [f"{len(paras)} paragraphs fit the model" + (f" ({had - len(paras)} cut for room)" if had > len(paras) else "")]
     schema = {"type": "object", "required": ["answer", "sources"], "properties": {
         "answer": {"type": "string"},
         "sources": {"type": "array", "items": {"type": "object", "required": ["block", "gist"], "properties": {
-            "block": {"type": "string", "enum": ids}, "gist": {"type": "string"}}}}}}
-    listing = "\n\n".join(f"{i} (page {pg}): {t[:700]}" for i, pg, _, t in paras)
+            "block": {"type": "string", "enum": list(by)}, "gist": {"type": "string"}}}}}}
+    listing = "\n\n".join(f"{i} (page {pg}): {t[:1500]}" for i, pg, _, t in paras)
     messages = [{"role": "system", "content": SOURCES_SYSTEM},
                 {"role": "user", "content": f"Paper: {title}\n\n<paragraphs>\n{listing}\n</paragraphs>\n\n"
-                                            f"{context}My question: {question}\n\nReturn the JSON."}]
+                                            f"{earlier}My question: {question}\n\nReturn the JSON."}]
     try:
         for _ in range(2):
             reply = primer._complete(s, messages, schema, "sources")
@@ -364,17 +502,21 @@ def ask_with_sources(s: Settings, question: str, title: str, paras: list[tuple[s
             try:
                 out = Reply.model_validate_json(reply[a:b + 1] if a >= 0 else reply)
             except ValidationError as e:
+                trace.append("reply was not valid JSON, asked again")
                 messages += [{"role": "assistant", "content": reply},
                              {"role": "user", "content": f"That answer was not valid: {str(e)[:300]}\nReturn only JSON."}]
                 continue
-            by = {p[0]: p for p in paras}
-            src = [{"page": by[x.block][1], "rect": by[x.block][2], "gist": x.gist.strip()[:120]}
-                   for x in out.sources if x.block in by]
-            return {"ok": True, "text": out.answer.strip(), "sources": src[:4]}
+            text = out.answer.strip()
+            named = [Src(block=x) if isinstance(x, str) else x for x in out.sources or []]
+            src = [{"block": k, "page": by[k][1], "rect": by[k][2], "gist": _gist(x.gist, text, by[k][1], by[k][3])}
+                   for x in named if (k := _block_id(x.block)) in by]
+            trace.append(f"model named {len(src)} of its sources" if src else "model named no valid paragraph, matched by shared words")
+            return {"ok": True, "text": text, "sources": _dedupe(src or _match(text, paras))[:4], "trace": trace}
     except primer.PrimerError as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e), "trace": trace + [f"model error: {str(e)[:120]}"]}
+    trace.append("JSON failed twice, plain answer, matched by shared words")
     pages = [""] * max(p[1] for p in paras)  # paragraph text by page, for the plain answer
     for _, pg, _, t in paras:
         pages[pg - 1] += t + "\n\n"
-    plain = ask(s, context + question, title, pages, min(p[1] for p in paras) - 1)
-    return {"ok": True, "text": plain["text"], "sources": []} if plain["ok"] else plain
+    plain = ask(s, earlier + question, title, pages, min(p[1] for p in paras) - 1)
+    return {**plain, "sources": _dedupe(_match(plain["text"], paras)) if plain["ok"] else [], "trace": trace}

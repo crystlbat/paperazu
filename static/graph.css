@@ -36,6 +36,7 @@ body:has(.page-graph) { --g-side: 400px; --g0: #17181b; --g1: #222326; --g2: #2b
 .g-node.sugg .label { font-weight: var(--fw-ui); opacity: 0; transition: opacity .2s; }
 .zoomed .g-node.sugg .label, .g-node.sugg:hover .label, .g-node.sugg:focus-visible .label, .g-node.sugg.near .label { opacity: 1; }
 .g-node.sugg { opacity: .85; }
+.g-node.sugg.crowd .label { opacity: 0; }
 .g-node.sugg { animation: g-pop .4s cubic-bezier(.3,1.5,.5,1) both; }
 .g-node.ghost .body { fill: var(--dotc); stroke: none; }
 .g-node.ghost .label { fill: #1f2023; stroke: none; font: 600 15px/1 var(--sans); }
@@ -105,7 +106,7 @@ body:has(.page-graph) { --g-side: 400px; --g0: #17181b; --g1: #222326; --g2: #2b
 }
 .g-row:hover { border-color: var(--dotc); background: var(--g2); }
 .g-row-title { font: 400 18px/1.2 var(--serif); color: #f3f3f3; overflow-wrap: break-word; }
-.g-row-sub { font: 450 14px/1.45 var(--sans); color: var(--tx); overflow-wrap: break-word; white-space: normal; }
+.g-row-sub { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font: 450 13.5px/1.45 var(--sans); color: var(--tx2); overflow-wrap: break-word; white-space: normal; }
 .g-pick { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; }
 .g-pick input { width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: var(--ink); }
 .g-pick-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }

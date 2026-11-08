@@ -51,9 +51,20 @@ def results_from_tool(text: str) -> dict[str, Any]:
         })
         if len(results) == _MAX:
             break
+    _unglue(results)
     if not results:
         note = note or "Nothing came back for that."
     return {"results": results, "note": note}
+
+
+def _unglue(results: list[dict[str, str]]) -> None:
+    """The search tool sometimes runs the next results' titles into one title; cut each where another one starts."""
+    heads = [r["title"][:20] for r in results if len(r["title"]) >= 20]
+    for r in results:
+        cuts = [i for h in heads if (i := r["title"].find(h)) > 0]
+        if cuts:
+            r["title"] = r["title"][:min(cuts)].strip()
+        r["snippet"] = re.sub(r"\s*See full list on \S+", "", r["snippet"]).strip()
 
 
 def _tool_result(resp: Any) -> str:
@@ -135,7 +146,7 @@ _UA = (
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
 _HTML_HIT = re.compile(
-    r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</',
+    r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</a>',
     re.S,
 )
 

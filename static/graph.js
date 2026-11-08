@@ -383,6 +383,26 @@ async function renderGraph() {
     for (const n of st.nodes.values()) n.el.setAttribute("transform", `translate(${n.x.toFixed(1)} ${n.y.toFixed(1)})`);
     world.setAttribute("transform", `translate(${st.t.x} ${st.t.y}) scale(${st.t.k})`);
     svg.classList.toggle("zoomed", st.t.k >= 1.6);
+    crowd();
+  }
+  // An AI idea's name only shows when it has room: a name that would sit on a paper's title or on another name stays
+  // hidden until you hover it. The hovered or selected one always wins its spot.
+  function crowd() {
+    const taken = [], box = (x, y, w, h) => ({ x: x - w / 2, y, w, h });
+    const hits = (b) => taken.some((t) => b.x < t.x + t.w && t.x < b.x + b.w && b.y < t.y + t.h && t.y < b.y + b.h);
+    for (const n of st.nodes.values()) {
+      if (n.kind === "paper") taken.push(box(n.x, n.y + n.r + 12, Math.min(200, n.label.length * 8), 36), box(n.x, n.y - n.r, 2 * n.r, 2 * n.r));
+      else if (n.kind === "theme") taken.push(box(n.x, n.y - 38, Math.min(260, n.label.length * 10), 22));
+      else if (n.kind !== "sugg") taken.push(box(n.x, n.y - 18, 2 * n.r, 36));
+    }
+    const first = (n) => (n.id === st.hover || n.id === st.sel ? 0 : 1);
+    const sugg = [...st.nodes.values()].filter((n) => n.kind === "sugg").sort((a, b) => first(a) - first(b));
+    for (const n of sugg) {
+      const b = box(n.x, n.y + 12, Math.min(34, n.label.length) * 7.2, 18);
+      const hide = first(n) === 1 && hits(b);
+      n.el.classList.toggle("crowd", hide);
+      if (!hide) taken.push(b);
+    }
   }
   // Hovering or selecting a node lights it and its neighbours; the rest steps back.
   function paintFocus() {
@@ -394,6 +414,7 @@ async function renderGraph() {
     svg.classList.toggle("focusing", !!f);
     for (const n of st.nodes.values()) { n.el.classList.toggle("near", near.has(n.id)); n.el.classList.toggle("sel", n.id === st.sel); }
     for (const e of st.edges) e.el.classList.toggle("near", !!f && (e.a === f || e.b === f));
+    crowd();
   }
 
   // ---------- forces ----------

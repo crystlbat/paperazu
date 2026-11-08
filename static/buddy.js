@@ -151,7 +151,7 @@ const buddy = (() => {
   // ---------- talking ----------
   let typing = 0, mouthTimer = 0, hideTimer = 0;
   function show(msg) {
-    if (st.away) home(); // talk from the corner, where the bubble has room
+    if (st.away && !st.ui) home(); // talk from the corner, unless something (the guide, a menu) holds Dot where it is
     clearInterval(typing); clearInterval(mouthTimer); clearTimeout(hideTimer);
     st.mood = msg.mood; st.talking = false; draw();
     actionsEl.replaceChildren(...(msg.actions || []).map((a) => {
@@ -163,6 +163,9 @@ const buddy = (() => {
     }));
     bubble.hidden = false;
     root.classList.add("talking");
+    // away from the corner there may be no room on Dot's left: then the message opens on its right
+    root.classList.remove("say-right");
+    if (st.away && bubble.getBoundingClientRect().left < 8) root.classList.add("say-right");
     if (reduced()) { textEl.textContent = msg.text; return autoHide(msg); }
     textEl.textContent = "";
     const start = performance.now();
@@ -212,11 +215,11 @@ const buddy = (() => {
     if (dragged) { dragged = false; return; } // the end of a drag is not a click
     if (pressed) { pressed = false; return; } // the end of a long press is not a click
     // with "context" a mouse click shows the tip; a keyboard Enter (detail 0) still opens the menu
-    if (tools && toolsHow === "click" && atHome()) { // a click at home opens the circle, not the icon pile
-      if (nestHeld) { nestHeld = false; return; }
-      if (nest.classList.contains("show")) hideNest(); else showNest();
-      return;
+    if (tools && toolsHow === "click" && atHome()) { // a click at home fans the tools out (and back in); the circle is for dragging
+      nestHeld = false; hideNest();
+      return toggleTools();
     }
+    if (tools && toolsHow === "click" && st.away && !st.follow) { goHome().then(() => { hide(); toggleTools(); }); return; } // parked somewhere: come home, then fan out
     if (tools && (toolsHow === "click" || e.detail === 0)) return toggleTools();
     if (!bubble.hidden) return hide();
     if (st.muted) setMuted(false);
@@ -359,8 +362,11 @@ const buddy = (() => {
       if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
       clearTimeout(pressTimer);
       drag.on = true; st.trip += 1; hide(); root.classList.add("dragging"); st.mood = "surprised"; draw();
+      if (!drag.pull && along && st.away) showNest(); // the corner lights up so you can put Dot back
     }
-    place(e.clientX, e.clientY);
+    const caught = nest.classList.contains("show") && overNest(e.clientX, e.clientY);
+    if (caught) place(...homeCentre()); else place(e.clientX, e.clientY); // near home, the home catches Dot
+    if (caught !== root.classList.contains("caught")) root.classList.toggle("caught", caught);
     if (drag.pull) { // leaving the home circle wakes tag-along. It is not the highlighter.
       root.classList.remove("pen", "penning", "reading");
       if (nest.classList.contains("show")) {
@@ -370,6 +376,7 @@ const buddy = (() => {
       }
       return;
     }
+    if (nest.classList.contains("show")) nest.classList.toggle("ready", overNest(e.clientX, e.clientY));
     const live = !along || st.follow;
     root.classList.toggle("pen", live && !!target?.over(e.clientX, e.clientY));
     if (live) target?.hover?.(e.clientX, e.clientY);
@@ -381,7 +388,7 @@ const buddy = (() => {
     const was = drag.on, wasPull = drag.pull; drag = null;
     if (!was) return;
     dragged = true; nestHeld = false; setTimeout(() => { dragged = false; }, 0);
-    root.classList.remove("dragging");
+    root.classList.remove("dragging", "caught");
     target?.hover?.(null);
     const back = nest.classList.contains("show") && overNest(e.clientX, e.clientY);
     if (along && (wasPull || back)) { // this drag woke Dot, or it landed back in the corner
@@ -389,10 +396,12 @@ const buddy = (() => {
       if (back) {
         const wasAwake = root.classList.contains("awake");
         chill(); goHome();
-        if (wasAwake) { along.home(); hideNest(); }
+        if (wasAwake || st.follow) along.home();
+        hideNest();
       } else if (!root.classList.contains("awake")) wake();
       return;
     }
+    hideNest();
     if (target?.over(e.clientX, e.clientY)) { st.mood = "idle"; draw(); target.drop(e.clientX, e.clientY); }
     else { root.classList.remove("pen"); st.mood = "idle"; draw(); goHome(); }
   });
@@ -525,11 +534,9 @@ const buddy = (() => {
     const layer = document.querySelector(".page-read .textLayer");
     return !!(layer && layer.contains(s.anchorNode));
   };
+  // at home the tools stay folded until you click Dot, so they never sit over the page or Dot's messages
   function showHome() {
-    if (!tools || !atHome() || paperSelection()) return closeTools();
-    homeStay = true;
-    if (!toolsEl.hidden) return;
-    toggleTools();
+    if (!tools || !atHome() || paperSelection()) closeTools();
   }
   document.addEventListener("selectionchange", () => { if (tools && atHome()) showHome(); });
   document.addEventListener("pointerdown", (e) => { if (!homeStay && !toolsEl.hidden && !root.contains(e.target)) closeTools(); });
@@ -591,29 +598,21 @@ const buddy = (() => {
     return reduced() ? Promise.resolve() : waitSkippable(380);
   }
 
+  // names sit on opaque pills right beside their moon; they only step out to clear another moon
   function nudgeMoonNames(orbs, angles) {
-    const words = [...document.querySelectorAll(".page-read .textLayer span")]
-      .filter((sp) => sp.textContent.trim()).map((sp) => sp.getBoundingClientRect()).filter((r) => r.width > 1);
-    const passages = [...document.querySelectorAll(".sel-box:not([hidden])")].map((el) => el.getBoundingClientRect());
-    const over = (r, list) => list.some((s) => r.left < s.right && r.right > s.left && r.top < s.bottom && r.bottom > s.top);
     orbs.forEach((b, i) => {
       const ux = Math.cos(angles[i]), uy = Math.sin(angles[i]);
-      let dist = 46;
       const tag = b.querySelector(".tag");
-      const stage = document.querySelector(".pdf-stage")?.getBoundingClientRect();
-      for (let k = 0; k < 14; k++) {
+      for (let dist = 52; dist <= 52 + 3 * 14; dist += 14) {
         b.style.setProperty("--lx", `${Math.round(ux * dist)}px`);
         b.style.setProperty("--ly", `${Math.round(uy * dist)}px`);
-        const box = tag.getBoundingClientRect();
-        const r = { left: box.left - 4, right: box.right + 4, top: box.top - 3, bottom: box.bottom + 3 };
+        const r = tag.getBoundingClientRect();
         const moon = orbs.some((o) => {
           if (o === b) return false;
           const m = (o.querySelector(".bod") || o).getBoundingClientRect();
           return r.left < m.right && r.right > m.left && r.top < m.bottom && r.bottom > m.top;
         });
-        const offStage = stage && (box.left < stage.left + 4 || box.right > stage.right - 4 || box.top < stage.top + 4 || box.bottom > stage.bottom - 4);
-        if (offStage || (!over(r, words) && !over(r, passages) && !moon)) break;
-        dist += 28;
+        if (!moon) break;
       }
     });
   }
@@ -621,7 +620,7 @@ const buddy = (() => {
   // Moons: one even ring around Dot. The old column of places is not used.
   // Face is 92px while the ring is open, so the centre stays 46px clear of the paper edge.
   function moonSpot(hintX, hintY, n) {
-    const FACE = 46, MOON = 32;
+    const FACE = 38, MOON = 32; // Dot is 76px while the tools are out; each tool is a 64px blob split off it
     const stage = document.querySelector(".pdf-stage")?.getBoundingClientRect();
     const bar = Math.max(
       document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0,
@@ -664,7 +663,7 @@ const buddy = (() => {
       }),
       angles: Array.from({ length: n }, (_, i) => -Math.PI / 2 + (i * 2 * Math.PI) / n),
     });
-    const radii = [124, 116, 108, 100, 92];
+    const radii = [100, 96, 92];
     const seeds = [[hintX, hintY]];
     if (passages.length) {
       const top = Math.min(...passages.map((r) => r.top));
@@ -727,7 +726,8 @@ const buddy = (() => {
     cap.style.cssText = `left:${x}px;top:${y + 70}px`;
     wrap.style.cssText = "left:0;top:0";
     const n = items.length;
-    const at = (i) => spot.moons[i];
+    const pos = spot.moons.map((q) => [...q]); // where each blob is now (they drift)
+    const at = (i) => pos[i];
     let over = false, resolve;
     const result = new Promise((r) => { resolve = r; });
     wrap.addEventListener("wheel", (e) => {
@@ -739,7 +739,7 @@ const buddy = (() => {
       const b = document.createElement("button");
       b.type = "button"; b.setAttribute("role", "menuitem"); b.setAttribute("aria-label", it.label); b.disabled = !!it.disabled;
       b.className = `obuddy ob-${it.key}`; b.style.setProperty("--bc", it.color || "#ffe347"); b.style.setProperty("--i", i);
-      b.innerHTML = `<span class="bod"><span class="who" aria-hidden="true"><i></i><i></i></span><span class="scene" aria-hidden="true"><span class="prop"></span><span class="mx"></span></span></span><span class="tag"><b></b><small></small></span>`;
+      b.innerHTML = `<span class="bod"><span class="who" aria-hidden="true"><i></i><i></i></span><span class="act" aria-hidden="true">${it.icon || ""}</span></span><span class="ico" aria-hidden="true">${it.icon || ""}</span><span class="tag"><b></b><small></small></span>`;
       b.querySelector(".tag b").textContent = it.label;
       b.querySelector(".tag small").textContent = it.hint || "";
       const [sx, sy] = at(i);
@@ -749,14 +749,39 @@ const buddy = (() => {
       wrap.append(b); return b;
     });
     wrap.append(cap);
-    document.body.append(wrap);
+    // the goo: under Dot, a copy of its face plus a neck and a blob per tool, melted together by the filter,
+    // so the tools read as Dot growing new limbs rather than separate moons
+    if (!document.getElementById("ogoo")) document.body.insertAdjacentHTML("beforeend",
+      '<svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="ogoo"><feGaussianBlur in="SourceGraphic" stdDeviation="6"/><feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9"/></filter></svg>');
+    const goo = document.createElement("div");
+    goo.className = "ob-goo"; goo.setAttribute("aria-hidden", "true");
+    const core = document.createElement("i");
+    core.className = "core"; core.style.cssText = `left:${x}px;top:${y}px`;
+    goo.append(core);
+    const limbs = items.map((it, i) => {
+      const [px, py] = at(i);
+      const neck = document.createElement("i"), sprout = document.createElement("i");
+      neck.className = "neck"; sprout.className = "sprout";
+      neck.style.cssText = `left:${x}px;top:${y}px;width:${Math.hypot(px - x, py - y)}px;rotate:${Math.atan2(py - y, px - x)}rad;--bc:${it.color || "#ffe347"}`;
+      sprout.style.setProperty("--bc", it.color || "#ffe347");
+      sprout.style.transition = "none"; sprout.style.transform = `translate3d(${x}px, ${y}px, 0) scale(.2)`; // born inside Dot, not at the corner
+      goo.append(neck, sprout);
+      return { neck, sprout };
+    });
+    document.body.append(goo, wrap);
+    // each orb's blob in the goo moves with it
+    const sync = () => orbs.forEach((b, i) => {
+      const sp = limbs[i].sprout;
+      sp.style.transition = b.style.transition; sp.style.transitionDelay = b.style.transitionDelay; sp.style.transform = b.style.transform;
+      limbs[i].neck.style.transitionDelay = b.style.transitionDelay;
+    });
     void wrap.offsetWidth;
     const pose = (i, px, py) => `translate3d(${px}px, ${py}px, 0)`;
     orbs.forEach((b, i) => {
       const [px, py] = at(i);
       const ux = Math.cos(spot.angles[i]), uy = Math.sin(spot.angles[i]);
-      b.style.setProperty("--lx", `${Math.round(ux * 48)}px`);
-      b.style.setProperty("--ly", `${Math.round(uy * 48)}px`);
+      b.style.setProperty("--lx", `${Math.round(ux * 52)}px`);
+      b.style.setProperty("--ly", `${Math.round(uy * 52)}px`);
       b.style.transition = "none";
       b.style.transform = pose(i, px, py);
     });
@@ -772,10 +797,47 @@ const buddy = (() => {
       b.style.transitionDelay = reduced() ? "0s" : `${i * 45}ms`;
       b.style.transform = pose(i, px, py);
       b.classList.add("on");
+      limbs[i].neck.classList.add("on");
+    });
+    sync();
+    if (!reduced()) burp(); // Dot gives a squash as the blobs split off it
+    const pinch = setTimeout(() => { limbs.forEach((l) => l.neck.classList.remove("on")); goo.classList.add("gone"); }, reduced() ? 0 : 420 + n * 45);
+    // Alive: once out, the blobs drift slowly around Dot, each bobbing on its own beat, and stop to listen
+    // while you point at one. Their eyes follow the pointer. Nothing moves with reduced motion.
+    let spin = 0, last = 0, loop = 0, near = false;
+    const drift = (t) => {
+      if (over) return;
+      const dt = last ? Math.min(50, t - last) : 0; last = t;
+      if (!near) spin += dt * 0.00012;
+      orbs.forEach((b, i) => {
+        const a = spot.angles[i] + spin, bob = Math.sin(t * 0.0021 + i * 1.7) * 3;
+        const px = x + Math.cos(a) * (spot.r + bob), py = y + Math.sin(a) * (spot.r + bob) + Math.cos(t * 0.0017 + i) * 2;
+        pos[i] = [px, py];
+        b.style.transition = "opacity .25s"; b.style.transitionDelay = "0s";
+        b.style.transform = `translate3d(${px}px, ${py}px, 0)`;
+        b.style.setProperty("--lx", `${Math.round(Math.cos(a) * 52)}px`); b.style.setProperty("--ly", `${Math.round(Math.sin(a) * 52)}px`);
+        const sp = limbs[i].sprout; sp.style.transition = "none"; sp.style.transform = b.style.transform;
+      });
+      loop = requestAnimationFrame(drift);
+    };
+    const startDrift = reduced() ? 0 : setTimeout(() => { loop = requestAnimationFrame(drift); }, 560 + n * 45);
+    const eyes = (e) => orbs.forEach((b, i) => {
+      const dx = e.clientX - pos[i][0], dy = e.clientY - pos[i][1], d = Math.hypot(dx, dy) || 1, k = Math.min(1, d / 60) * 2.5;
+      b.style.setProperty("--ex", `${(dx / d) * k}px`); b.style.setProperty("--ey", `${(dy / d) * k}px`);
+    });
+    if (!reduced()) document.addEventListener("pointermove", eyes);
+    orbs.forEach((b) => { b.addEventListener("pointerenter", () => { near = true; }); b.addEventListener("pointerleave", () => { near = false; }); });
+    // Dot watches the blob you point at
+    const show = (i) => { if (!over) { const [px, py] = at(i); lookAt(px, py, 1500); } };
+    orbs.forEach((b, i) => {
+      b.addEventListener("pointerenter", () => show(i)); b.addEventListener("focus", () => show(i));
     });
     (orbs.find((b) => !b.disabled) ?? orbs[0])?.focus({ preventScroll: true });
     const finish = (key) => {
       if (over) return; over = true;
+      clearTimeout(pinch); clearTimeout(startDrift); goo.classList.remove("gone"); // the goo comes back as they melt home cancelAnimationFrame(loop);
+      document.removeEventListener("pointermove", eyes);
+      orbs.forEach((b) => { b.style.transition = reduced() ? "none" : "transform .45s cubic-bezier(.22,1,.36,1), opacity .25s"; });
       document.removeEventListener("keydown", onKey, true); document.removeEventListener("pointerdown", onOut, true);
       st.ui = Math.max(0, st.ui - 1);
       const [cx, cy] = centre();
@@ -785,9 +847,10 @@ const buddy = (() => {
         if (reduced()) b.style.transition = "none";
         b.style.transform = `translate3d(${cx}px, ${cy}px, 0) scale(.2)`; // each one is taken back into Dot
       });
+      sync();
       cap.hidden = true;
       if (key && !reduced()) gulp().then(() => burp()); // Dot opens wide for the one it takes, then settles
-      setTimeout(() => { wrap.remove(); if (!document.querySelector(".buddy-opts")) root.classList.remove("attached"); }, reduced() ? 0 : 520);
+      setTimeout(() => { wrap.remove(); goo.remove(); if (!document.querySelector(".buddy-opts")) root.classList.remove("attached"); }, reduced() ? 0 : 520);
       resolve(key ?? null);
     };
     const onKey = (e) => {
@@ -896,8 +959,13 @@ const buddy = (() => {
     for (const raw of text.split(/\n+/)) {
       const line = raw.replace(/\*\*(.+?)\*\*/g, "$1").replace(/(^|\s)\*(\S.*?)\*/g, "$1$2").replace(/^#+\s*/, "").trim();
       if (!line) continue;
-      const item = line.match(/^(?:[-*•]|\d+[.)])\s+(.*)/);
-      if (item) { if (!list) out.push(list = document.createElement("ul")); const li = document.createElement("li"); li.textContent = item[1]; list.append(li); continue; }
+      const item = line.match(/^(?:(?:[-*•]|\d+[.)])\s+)+(.*)/); // "2. - term" is one item, not a dash
+      if (item) {
+        if (!list) out.push(list = document.createElement("ul"));
+        const li = document.createElement("li"), term = item[1].match(/^(.{1,48}?)\s+[\u2014\u2013:-]\s+(.+)/); // "term — meaning": the term in bold
+        if (term) { const b = document.createElement("b"); b.textContent = term[1]; li.append(b, ` \u2014 ${term[2]}`); } else li.textContent = item[1];
+        list.append(li); continue;
+      }
       list = null;
       const p = document.createElement("p"); p.textContent = line; out.push(p);
     }

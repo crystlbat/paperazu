@@ -25,6 +25,16 @@ SUGGEST_TOP = 3      # at most this many suggested links per paper
 AUTO_PICK = 0.62     # a search result is ticked for you at or above this score...
 PICK_MARGIN = 0.08   # ...and only if it is this close to the best result (unrelated papers sit at 0.55-0.66)
 DOC, QUERY = "search_document: ", "search_query: "  # nomic-embed-text task prefixes; harmless for others
+# EmbeddingGemma is trained with its own prompts; it reads much better than nomic, so it is picked first when loaded
+GEMMA_DOC, GEMMA_QUERY = "title: none | text: ", "task: search result | query: "
+
+
+def doc(model: str) -> str:
+    return GEMMA_DOC if "embeddinggemma" in model.lower() else DOC
+
+
+def query(model: str) -> str:
+    return GEMMA_QUERY if "embeddinggemma" in model.lower() else QUERY
 
 _working: dict[str, str] = {}  # base_url -> embed model that answered
 
@@ -62,7 +72,7 @@ def embed_model(s: Settings) -> str:
         return s.embed_model
     if s.base_url in _working:
         return _working[s.base_url]
-    models = [m for m in llm.model_status(s)["models"] if "embed" in m.lower()]
+    models = sorted((m for m in llm.model_status(s)["models"] if "embed" in m.lower()), key=lambda m: "embeddinggemma" not in m.lower())
     for m in models:
         try:
             llm.client(s, timeout=60).embeddings.create(model=m, input=["test"])
@@ -118,7 +128,7 @@ def needs_index(con: sqlite3.Connection, model: str) -> list[str]:
 def index_paper(s: Settings, paper_id: str, model: str) -> int:
     pages = library.page_texts(paper_id) or []
     parts = split(pages)
-    vecs = embed(s, [DOC + t for _, t in parts], model) if parts else []
+    vecs = embed(s, [doc(model) + t for _, t in parts], model) if parts else []
     con = db.connect()
     with con:
         con.execute("DELETE FROM chunks WHERE paper_id = ?", (paper_id,))
@@ -189,7 +199,7 @@ def search(s: Settings, q: str, limit: int = 8) -> dict[str, Any]:
     con.close()
     if not rows:
         return {"results": [], "model": model}
-    qv = embed(s, [QUERY + q], model)[0]
+    qv = embed(s, [query(model) + q], model)[0]
     best: dict[str, tuple[float, sqlite3.Row]] = {}
     for r in rows:
         sc = _dot(qv, _vec(r["vec"]))
@@ -285,9 +295,9 @@ def concept_search(s: Settings, q: str, limit: int = 5) -> dict[str, Any]:
         try:
             model = embed_model(s)
             need = [c["label"] for c in concepts if (model, c["label"]) not in _label_vecs]
-            for label, v in zip(need, embed(s, [DOC + t for t in need], model) if need else []):
+            for label, v in zip(need, embed(s, [doc(model) + t for t in need], model) if need else []):
                 _label_vecs[(model, label)] = v
-            qv = embed(s, [QUERY + " ".join(words)], model)[0]
+            qv = embed(s, [query(model) + " ".join(words)], model)[0]
             sims = {c["id"]: _dot(qv, _label_vecs[(model, c["label"])]) for c in concepts}
             bar = max(CONCEPT_BAR, max(sims.values()) - CONCEPT_MARGIN)
             for cid, sim in sims.items():
@@ -311,7 +321,7 @@ def pages_for(s: Settings, paper_id: str, question: str, most: int = 2) -> list[
         con.close()
         if not rows:
             return []
-        qv = embed(s, [QUERY + question], model)[0]
+        qv = embed(s, [query(model) + question], model)[0]
     except GraphError:
         return []
     out: list[int] = []

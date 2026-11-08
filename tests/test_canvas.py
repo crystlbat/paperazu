@@ -133,7 +133,7 @@ def test_a_page_with_no_text_still_gets_an_answer(monkeypatch) -> None:
 def test_follow_up_gets_the_chain_and_branches(monkeypatch) -> None:
     ok = '{"answer": "Noise on small groups.", "sources": []}'
     prompts: list[str] = []
-    _fake_model(monkeypatch, [ok, ok], prompts)
+    _fake_model(monkeypatch, [ok, '{"answer": "Few samples per group.", "sources": []}'], prompts)
     pid, c = _paper(), TestClient(main.app)
     first = _ask(c, pid)
     second = _ask(c, pid, from_card=first["answer"]["id"])
@@ -144,7 +144,8 @@ def test_model_unreachable_saves_nothing(monkeypatch) -> None:
     import openai
     _fake_model(monkeypatch, openai.APIConnectionError(request=None))
     pid, c = _paper(), TestClient(main.app)
-    assert _ask(c, pid) == {"ok": False, "error": "Could not reach the model. Is Unsloth running?"}
+    r = _ask(c, pid)
+    assert r["ok"] is False and r["error"] == "Could not reach the model. Is Unsloth running?" and "model error" in r["trace"][-1]
     assert c.get(f"/papers/{pid}/canvas").json()["cards"] == []
 
 
@@ -256,3 +257,123 @@ def test_say_needs_a_note_on_this_paper() -> None:
     assert c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "   "}).status_code == 422
     assert c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "x" * 1001}).status_code == 422
 
+
+
+# ---------- better sources ----------
+
+def test_odd_ids_are_read_duplicates_dropped_and_formula_gists_reworded(monkeypatch) -> None:
+    import json
+    reply = {"answer": "The second paragraph sits far below the first one.", "sources": [
+        {"block": "P1_B1", "gist": "F1(f, D) := 2TP P+ PP= 2 Í De1[f(x)=y∧y=1] (3)"},
+        {"block": "p1-b1", "gist": "Again the second one."},
+        {"block": "p1-b0 (page 1)", "gist": "Where the first paragraph is."},
+        {"block": 7}]}
+    _fake_model(monkeypatch, [json.dumps(reply)])
+    pid, c = _paper(), TestClient(main.app)
+    r = _ask(c, pid)
+    assert [s["text"] for s in r["sources"]] == ["The second paragraph sits far below the first one.", "Where the first paragraph is."]
+    assert "No exact lines found" not in r["answer"]["text"]
+
+
+def test_an_answer_with_no_named_lines_gets_the_lines_it_comes_from(monkeypatch) -> None:
+    from workbench import marks
+    _fake_model(monkeypatch, ['{"answer": "The second paragraph sits far below the first one.", "sources": []}'])
+    pid, c = _paper(), TestClient(main.app)
+    r = _ask(c, pid)
+    assert [s["rect"] for s in r["sources"]] == [marks.blocks(pid, 1)["blocks"][1]]
+    assert "No exact lines found" not in r["answer"]["text"]
+
+
+def test_the_plain_fallback_also_finds_its_lines(monkeypatch) -> None:
+    _fake_model(monkeypatch, ["not json", "still not json", "The second paragraph sits far below the first one."])
+    pid, c = _paper(), TestClient(main.app)
+    assert len(_ask(c, pid)["sources"]) == 1
+
+
+def test_the_paragraph_list_fits_the_context_budget() -> None:
+    from workbench import llm
+    from workbench.settings import Settings
+    paras = [(f"p{i}-b0", i, [0, 0, 1, 1], "word " * 200) for i in (3, 1, 2)]
+    kept = llm._fit(Settings(max_context_tokens=2048, max_output_tokens=1024), paras, "")
+    assert [p[1] for p in kept] == [1, 3]  # the first pages given win; the list is in page order
+
+
+def test_a_follow_up_on_a_source_card_sends_what_it_says(monkeypatch) -> None:
+    prompts: list[str] = []
+    _fake_model(monkeypatch, ['{"answer": "More on that.", "sources": []}'], prompts)
+    pid, c = _paper(), TestClient(main.app)
+    a, s, n = _three(pid, c)
+    r = _ask(c, pid, from_card=s["id"])
+    assert r["answer"]["parent"] == s["id"] and "Earlier source (page 1): Gist." in prompts[-1] and "Earlier answer: Because." in prompts[-1]
+
+
+def test_the_selected_part_goes_with_the_question(monkeypatch) -> None:
+    prompts: list[str] = []
+    _fake_model(monkeypatch, ['{"answer": "F1 is a score.", "sources": []}'] * 2, prompts)
+    pid, c = _paper(), TestClient(main.app)
+    _ask(c, pid, question="simplify this term by term", quote="F1(f, D) := 2TP / (P + PP)")
+    r = _ask(c, pid, question="again", quote="x")
+    assert "The part I selected on page 1" in prompts[0] and "2TP / (P + PP)" in prompts[0]
+    assert r["trace"][0] == "your selection, 1 characters" and any(t.startswith("read pages 1") for t in r["trace"])
+
+
+def test_a_follow_up_that_repeats_the_answer_is_asked_again(monkeypatch) -> None:
+    same = "The equation defines how the neural network model is trained at every step from the previous model."
+    _fake_model(monkeypatch, [f'{{"answer": "{same}", "sources": []}}'] * 2 + ['{"answer": "Each round, the model takes a small step to fix its mistakes.", "sources": []}'])
+    pid, c = _paper(), TestClient(main.app)
+    first = _ask(c, pid)
+    r = _ask(c, pid, question="simplify it", from_card=first["answer"]["id"])
+    assert r["answer"]["text"].startswith("Each round") and "first reply repeated the earlier answer, asked again" in r["trace"]
+
+
+def test_a_section_or_summary_question_reads_the_right_page() -> None:
+    texts = ["Abstract\nWe study noise.", "1 Intro\ntext", "7.2 Results\nMore.", "see section 7.2 above"]
+    assert canvas._also("explain section 7.2", texts) == [3]
+    assert canvas._also("summary", texts) == [1] and canvas._also("Why?", texts) == []
+
+
+def test_an_ai_request_is_sent_without_the_tag(monkeypatch) -> None:
+    calls = _recording_model(monkeypatch)
+    pid, c = _paper(), TestClient(main.app)
+    n = _note(c, pid)
+    c.post(f"/papers/{pid}/canvas/cards/{n['id']}/say", json={"text": "@ai simplify"})
+    assert calls[0]["messages"][1]["content"].endswith("My question: simplify")
+
+
+def test_quotes_in_fences_or_as_one_string_are_read(monkeypatch) -> None:
+    from workbench import llm, primer, settings
+    monkeypatch.setattr(primer, "_complete", lambda *a, **k: '```json\n{"quotes": "enough words to count"}\n```')
+    assert llm.pick_quotes(settings.get_all(), "text", "t") == ["enough words to count"]
+
+
+def test_a_failed_json_object_retry_keeps_json_schema_on(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import openai
+
+    from workbench import llm, primer, settings
+
+    def create(**kw):
+        raise openai.APIStatusError("too long", response=SimpleNamespace(status_code=400, headers={}, request=None), body=None)
+    monkeypatch.setattr(llm, "pick_model", lambda s: "m")
+    monkeypatch.setattr(llm, "client", lambda *a, **k: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    monkeypatch.setattr(primer, "_json_schema_ok", True)
+    with pytest.raises(primer.PrimerError):
+        primer._complete(settings.get_all(), [{"role": "user", "content": "x"}])
+    assert primer._json_schema_ok is True
+
+
+def test_a_marked_formula_gets_the_term_by_term_prompt(monkeypatch) -> None:
+    from workbench import llm
+    seen = {}
+    monkeypatch.setattr(llm, "_answer", lambda s, system, q, *a, **k: seen.update(system=system, q=q) or {"ok": True, "text": ""})
+    llm.explain(None, "F 1 ( f , D ) : = 2 T P P + P P = 2 ∑ D e 1 [ f ( x ) = y ∧ y = 1 ]", "T", ["x"], 0)
+    assert seen["system"] is llm.FORMULA_SYSTEM and "term by term" in seen["q"]
+    llm.explain(None, "group fairness", "T", ["x"], 0)
+    assert seen["system"] is llm.EXPLAIN_SYSTEM
+
+
+def test_a_looping_answer_is_cut_where_it_goes_round() -> None:
+    from workbench import llm
+    text = "Intro.\n- a — one\n- b — two\n- a — one\n- b — two\n- c — three"
+    assert llm._no_loops(text) == "Intro.\n- a — one\n- b — two"

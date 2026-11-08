@@ -290,3 +290,22 @@ def test_clean_swaps_labels_for_titles() -> None:
     out = shelf.clean({"reply": "P1: Fairness under randomness: a study fits.", "kind": "find", "papers": [{"p": "Fairness under randomness", "why": "x [S1]"}]}, alias)
     assert "P1" not in out["reply"] and out["reply"].startswith('"Fairness under randomness"')
     assert out["papers"] == [{"id": "x1", "why": "x"}]
+
+
+def test_nothing_on_the_shelf_offers_the_web(bias_lib: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    _model(monkeypatch, reply="No concept is close to that.", kind="none")
+    monkeypatch.setattr(shelf, "passages", lambda *a, **k: [])  # the fake embedder calls every paper close
+    out = shelf.ask(S, "who is abraham lincoln", [])
+    assert out.get("web") == "who is abraham lincoln", out
+    assert "web" in out["reply"] and not out["papers"]
+
+
+def test_library_questions_never_go_to_the_web(bias_lib: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    _model(monkeypatch, reply="You have a few.", kind="none")
+    assert "web" not in shelf.ask(S, "how many papers do I have", [])
+
+
+def test_stray_concept_reply_on_a_find_becomes_the_plain_summary(bias_lib: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    _model(monkeypatch, reply="No concept is close to bias.", kind="find", papers=[{"p": "P1", "why": ""}])
+    out = shelf.ask(S, "can you find bias", [])
+    assert "concept" not in out["reply"].lower() and "matches" in out["reply"]

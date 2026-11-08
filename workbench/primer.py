@@ -207,7 +207,11 @@ def _complete(s: Settings, messages: list[dict[str, str]], schema: dict[str, Any
     except APIStatusError as e:
         if _json_schema_ok and e.status_code in (400, 422, 500, 501):
             _json_schema_ok = False
-            return _complete(s, messages, schema, name)
+            try:
+                return _complete(s, messages, schema, name)
+            except PrimerError:
+                _json_schema_ok = True  # json_object failed too (say, a prompt too long), so the schema was not the problem
+                raise
         raise PrimerError(e.message)
     except APIError as e:
         raise PrimerError(e.message)

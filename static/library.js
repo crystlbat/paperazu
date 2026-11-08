@@ -276,7 +276,7 @@ function libHome(soft = false) {
   if (L.f && !L.f.el.hidden) libCloseField(true);
   L.mode = "bubble"; L.job = null; libStore.set("lib-mode", "bubble");
   if (L.web) { L.web.hidden = true; L.webGen++; L.webHits.replaceChildren(); L.webIn.disabled = false; L.webIn.value = ""; }
-  L.st.classList.remove("chatting", "shelfing");
+  L.st.classList.remove("chatting", "shelfing", "webbing");
   L.shelf.hidden = true; L.sblobs.hidden = true; L.strip.classList.remove("on");
   L.dotEl.className = "ldot abs"; L.dotEl.tabIndex = 0; L.dotEl.querySelector("input").tabIndex = -1;
   L.back.classList.remove("on"); L.lineGap = 150; L.count.style.opacity = 1;
@@ -413,18 +413,25 @@ function libWebPanel() {
   L.st.append(el);
   L.web = el; L.webIn = input; L.webHits = hits; L.webGen = 0;
 }
-function libWebHit(r) {
-  let host = "";
-  try { host = new URL(r.url).host.replace(/^www\./, ""); } catch { host = ""; }
-  if (!/^https?:\/\//.test(r.url || "")) return null;
-  return h("a", { class: "hit", href: r.url, target: "_blank", rel: "noopener noreferrer" },
-    h("strong", {}, r.title || host || "Page"),
-    r.snippet ? h("span", { class: "snip" }, r.snippet) : null,
-    host ? h("span", { class: "host" }, host) : null);
+function libWebHit(r, i = 0) {
+  let u = null;
+  try { u = new URL(r.url); } catch { u = null; }
+  if (!u || !/^https?:$/.test(u.protocol)) return null;
+  const host = u.host.replace(/^www\./, "");
+  const path = decodeURIComponent(u.pathname).split("/").filter(Boolean).slice(0, 2).join(" \u203a ");
+  // a letter tile tinted from the site's name: no icon fetched, so only your query ever leaves the Mac
+  const hue = [...host].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
+  return h("a", { class: "hit", href: r.url, target: "_blank", rel: "noopener noreferrer", style: `--i:${i};--hue:${hue}` },
+    h("span", { class: "fav", "aria-hidden": "true" }, host[0]?.toUpperCase() || "?"),
+    h("span", { class: "hbody" },
+      h("span", { class: "host" }, host, path ? h("span", { class: "path" }, ` \u203a ${path}`) : null),
+      h("strong", {}, r.title || host),
+      r.snippet ? h("span", { class: "snip" }, r.snippet) : null),
+    h("span", { class: "go", "aria-hidden": "true" }, "\u2197"));
 }
 function libWeb() {
   if (!L.web) libWebPanel();
-  L.st.classList.add("chatting");
+  L.st.classList.add("chatting", "webbing");
   for (const id of L.cards.keys()) L.cards.get(id).el.classList.add("dim");
   L.web.hidden = false; L.webHits.replaceChildren(); L.webIn.value = ""; L.webIn.disabled = false;
   libWebPlace();
@@ -450,7 +457,7 @@ async function libWebGo(raw) {
   }
   if (!L || L.job !== "web" || L.webGen !== gen) return;
   L.dotEl.classList.remove("think"); L.webIn.disabled = false;
-  const rows = (res.results || []).map(libWebHit).filter(Boolean);
+  const rows = (res.results || []).map((r, i) => libWebHit(r, i)).filter(Boolean);
   L.webHits.replaceChildren(...rows);
   const lead = rows.length ? `I found ${plural(rows.length, "page")}.` : "Nothing came back for that.";
   libSay(res.note && rows.length ? `${lead} ${res.note}` : lead);
@@ -906,6 +913,11 @@ async function libSend(q) {
   if ((res.papers || []).length || (res.sources || []).length) libRaise(res); else { libCardsReset(); L.fetched = []; libPlaceRing(1, new Set()); }
   if (a.kind === "delete") {
     await libReplyTo(reply, [["Yes, delete", () => libRunJob(a, ids, "Deleted.")], ["No", () => libReplyTo("Kept them. Nothing was deleted.").then(() => libReady())]]);
+    return;
+  }
+  if (res.web) { // not in the papers: one tap takes the question to the web search
+    const q2 = res.web;
+    await libReplyTo(reply, [["Search the web", async () => { libCloseField(true); await libJob("web"); if (L?.job === "web") { L.webIn.value = q2; libWebGo(q2); } }], ["No", () => libReady()]]);
     return;
   }
   if (a.kind !== "export" && !(LIB_JOB[a.kind] && ids.length)) { libReplyTo(reply); libReady(); return; } // the typing line is usable while the reply settles in

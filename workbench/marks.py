@@ -109,6 +109,16 @@ def paragraphs(paper_id: str, page: int) -> list[tuple[list[float], str]] | None
         return [(r, " ".join(got[1].get_text("text", clip=pymupdf.Rect(*r)).split())) for r in _layout(got[1])]
 
 
+def around(paper_id: str, page: int, rect: list[float], most: int = 600) -> tuple[str, str]:
+    """The paragraph just above a box and the one just below it, in the same column: where a formula is set up and explained."""
+    paras = [(r, t) for r, t in paragraphs(paper_id, page) or [] if t and r[0] < rect[2] and r[2] > rect[0]]
+    above = [p for p in paras if p[0][3] <= rect[1] + 3]
+    below = [p for p in paras if p[0][1] >= rect[3] - 3]
+    up = max(above, key=lambda p: p[0][3], default=(None, ""))[1]
+    down = min(below, key=lambda p: p[0][1], default=(None, ""))[1]
+    return up[-most:], down[:most]
+
+
 def boxed(paper_id: str, page: int, rect: list[float]) -> tuple[str, str] | None:
     """The text inside a box, and a PNG of it as a data: URL. None if there is no such page."""
     path = db.PAPERS_DIR / f"{paper_id}.pdf"
