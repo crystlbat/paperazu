@@ -33,23 +33,26 @@ async function renderReader(paperId, startPage) {
   const notes = Object.fromEntries(fw.steps.map((st) => [st.id, noteFor(st, saved.steps[st.id])]));
   let current = fw.steps.find((st) => notes[st.id].state !== "done") ?? fw.steps[0];
 
-  const done = h("span", { class: "num" }, `${saved.steps_done} / ${fw.steps.length}`);
+  const done = h("span", { class: "num" }, `${saved.steps_done}/${fw.steps.length}`);
+  const stepsChip = h("button", { type: "button", class: "dchip", "aria-expanded": "false", onclick: () => drawers.toggle("steps") }, "Steps ", done);
+  const notesChip = h("button", { type: "button", class: "dchip", "aria-expanded": "false", onclick: () => drawers.toggle("notes") }, "Notes");
   const hideBtn = h("button", { class: "btn ghost", type: "button", "aria-pressed": "false",
     onclick: () => pdf.setHidden(!pdf.hidden()) }, "Hide paper");
   $("#page-extra").append(
     h("a", { href: "#library", class: "paper-title", title: "Back to the Library" }, paper.title),
-    h("span", { class: "quiet nowrap" }, done, " steps done"), hideBtn,
+    hideBtn,
     h("details", { class: "menu" },
       h("summary", {}, "Export"),
       h("div", { class: "menu-list" },
         h("button", { type: "button", onclick: () => exportDialog(paper, "markdown", () => queue.flush()) }, "Export Markdown"),
-        h("button", { type: "button", onclick: () => exportDialog(paper, "reflection", () => queue.flush()) }, "Export reflection outline"))));
+        h("button", { type: "button", onclick: () => exportDialog(paper, "reflection", () => queue.flush()) }, "Export reflection outline"))),
+    h("div", { class: "dchip-group" }, stepsChip, notesChip));
 
   const status = h("span", { class: "save-status", role: "status" });
   const queue = saveQueue(paperId, notes, status, (id, r) => {
     const was = notes[id].state;
     notes[id].state = r.state;
-    done.textContent = `${r.steps_done} / ${r.total_steps}`;
+    done.textContent = `${r.steps_done}/${r.total_steps}`;
     rail.paint(id);
     if (r.state === "done" && was !== "done" && openReader === me) {
       const st = fw.steps.find((x) => x.id === id);
@@ -58,7 +61,7 @@ async function renderReader(paperId, startPage) {
   });
   const pdf = pdfViewer(`/papers/${paperId}/pdf`, hideBtn, paperId, Number(startPage) || 1,
     ({ quote, question, answer }) => plain.append([`Marked: "${quote}"`, question && `Q: ${question}`, `AI: ${answer}`].filter(Boolean).join("\n")));
-  const rail = stepRail(fw, notes, (st) => { setMode("steps"); open(st); });
+  const rail = stepRail(fw, notes, (st) => open(st));
   const timer = stepTimer(() => notes[current.id], () => queue.touch(current.id));
   const body = h("div", { class: "nb-body" });
   const back = h("button", { type: "button", class: "btn ghost", onclick: () => open(fw.steps[idx() - 1]) }, "Back");
@@ -89,6 +92,7 @@ async function renderReader(paperId, startPage) {
     current = st;
     rail.mark(st.id);
     pdf.autoHide(st.paper_hidden);
+    canvasHost.hidden = !!st.paper_hidden; // Self-test: the canvas hides with the paper
     body.replaceChildren(...notebook(st, notes[st.id], timer, () => queue.touch(st.id), ai));
     body.querySelectorAll("textarea").forEach(grow);
     body.scrollTop = 0;
@@ -99,23 +103,21 @@ async function renderReader(paperId, startPage) {
     stepTip(st, pop);
   }
 
-  // Steps (the template) or one plain note per paper, where "@ai question" asks the local model.
+  // Steps (the template) live in a drawer on the left; one plain note per paper in a drawer on the right,
+  // where "@ai question" asks the local model. Only the paper shows until you ask for one.
   const foot = h("footer", { class: "nb-foot" }, back, status, next);
   const plain = plainNote(paperId, () => pdf.page());
-  const tab = (m, label) => h("button", { type: "button", role: "tab", class: "nb-tab", "data-mode": m,
-    onclick: () => setMode(m) }, label);
-  const tabs = h("div", { class: "nb-mode", role: "tablist", "aria-label": "Notes view" }, tab("steps", "Steps"), tab("note", "Note"));
-  function setMode(m) {
-    localStorage.setItem("reader-mode", m);
-    tabs.querySelectorAll(".nb-tab").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === m)));
-    body.hidden = foot.hidden = m !== "steps";
-    plain.el.hidden = m !== "note";
-    if (m === "note") plain.show(); else plain.flush();
-  }
-  const nbEl = h("section", { class: "notebook", "aria-label": "Notebook" }, tabs, body, plain.el, foot);
-  view.append(rail.el, pdf.el, splitter(view), nbEl);
+  plain.el.hidden = false;
+  const drawers = readerDrawers({
+    steps: { side: "left", label: "Steps", chip: stepsChip, onClose: () => queue.flush(),
+      content: h("div", { class: "drawer-steps" }, rail.el, h("section", { class: "notebook", "aria-label": "Step notes" }, body, foot)) },
+    notes: { side: "right", label: "Notes", chip: notesChip, onOpen: () => plain.show(), onClose: () => plain.flush(),
+      content: h("section", { class: "notebook", "aria-label": "Notes" }, plain.el) },
+  });
+  const canvasHost = h("section", { class: "canvas-host", "aria-label": "Canvas" });
+  view.append(pdf.el, canvasHost, drawers.steps.el, drawers.notes.el);
   const guide = guidedReading(paperId, pdf, (id) => { const st = fw.steps.find((x) => x.id === id); if (st && st !== current) open(st, false); },
-    () => panes.set("notes", false));
+    () => drawers.open("notes"));
   const dotTools = () => buddy.tools([
     { name: "Lens", hint: "Highlight words, I explain", pick: () => pdf.lens(),
       pic: ["..###....", ".#...#...", "#.....#..", "#.....#..", "#.....#..", ".#...#...", "..###.#..", ".......#.", "........#"] },
@@ -128,43 +130,46 @@ async function renderReader(paperId, startPage) {
       pic: [".........", "#.......#", ".#.....#.", "..#...#..", "...#.#...", "..#...#..", ".#.....#.", "#.......#", "........."] }] : []),
   ]);
   dotTools();
-  const panes = paneToggles([["rail", rail.el, "Steps", "paneRail"], ["paper", pdf.el, "Paper", "panePaper"], ["notes", nbEl, "Notes", "paneNotes"]],
-    (shut) => { if (shut.has("notes") && !shut.has("paper")) guide.offer(); else guide.stop(); });
   open(current, !greeted.has("reader")); greeted.add("reader");
   if (ai.data.progress.state === "making") ai.make(); // it was started elsewhere; follow it here
-  setMode(localStorage.getItem("reader-mode") === "note" ? "note" : "steps");
+  buddy.follow(true); buddy.toolsOn("context"); // reading mode: Dot trails the pointer; right-click it for its tools
 
   // Saves (and retries) can finish after you leave; Dot only speaks while this Reader is open.
   const me = openReader = {
-    leave() { guide.stop(); timer.stop(); queue.flush(); plain.flush(); pdf.destroy(); },
+    leave() { guide.stop(); timer.stop(); queue.flush(); plain.flush(); drawers.destroy(); buddy.follow(false); buddy.toolsOn("click"); pdf.destroy(); },
     flushOnExit() { queue.flushKeepalive(); plain.flush(true); },
   };
 }
 
-// Three icons in the top bar fold each Reader pane down to a slim strip; the strip's icon opens it again.
-function paneToggles(panes, onChange) {
-  const shut = new Set(JSON.parse(localStorage.getItem("reader-min") || "[]"));
-  const btns = {};
-  function set(key, min) {
-    if (min) shut.add(key); else shut.delete(key);
-    if (shut.has("paper") && shut.has("notes")) shut.delete(key === "paper" ? "notes" : "paper"); // keep one to read or write in
-    for (const [k, el, label] of panes) {
-      const m = shut.has(k);
-      el.classList.toggle("is-min", m); view.classList.toggle(`min-${k}`, m);
-      btns[k].setAttribute("aria-pressed", String(!m));
-      btns[k].title = `${m ? "Show" : "Fold away"} ${label.toLowerCase()}`;
-    }
-    localStorage.setItem("reader-min", JSON.stringify([...shut]));
-    onChange?.(shut);
+// Steps and Notes are drawers over the paper's edges. One is open at a time; Escape or a click outside closes it.
+function readerDrawers(defs) {
+  const out = {};
+  for (const [key, d] of Object.entries(defs)) {
+    const el = h("aside", { class: `drawer drawer-${d.side}`, "aria-label": d.label }, d.content);
+    el.inert = true;
+    out[key] = { el, d, isOpen: () => el.classList.contains("open") };
   }
-  for (const [k, el, label, ico] of panes) {
-    btns[k] = h("button", { type: "button", class: "btn ghost tool pane-tog", "aria-label": label, onclick: () => set(k, !shut.has(k)) }, icon(ico));
-    el.prepend(h("button", { type: "button", class: "pane-strip", title: `Show ${label.toLowerCase()}`, onclick: () => set(k, false) },
-      icon(ico), h("span", { class: "strip-label" }, label)));
-  }
-  $("#page-extra").append(h("div", { class: "pane-toggles", role: "group", "aria-label": "Show or fold away panes" }, ...Object.values(btns)));
-  set("rail", shut.has("rail"));
-  return { set };
+  const set = (key, on) => {
+    const x = out[key];
+    if (x.isOpen() === on) return;
+    x.el.classList.toggle("open", on); x.el.inert = !on;
+    x.d.chip.setAttribute("aria-expanded", String(on));
+    if (on) x.d.onOpen?.(); else x.d.onClose?.();
+  };
+  const open = (key) => { Object.keys(out).forEach((k) => k !== key && set(k, false)); set(key, true); };
+  const closeAll = () => Object.keys(out).forEach((k) => set(k, false));
+  const onKey = (e) => {
+    if (e.key !== "Escape" || document.querySelector(".dot-win, .buddy-opts, .buddy-pill")) return;
+    if (Object.values(out).some((x) => x.isOpen())) { closeAll(); e.stopPropagation(); }
+  };
+  const onDown = (e) => {
+    if (e.target.closest?.(".drawer, .dchip, .buddy, .buddy-opts, .buddy-pill, .dot-win")) return;
+    closeAll();
+  };
+  document.addEventListener("keydown", onKey, true);
+  document.addEventListener("pointerdown", onDown, true);
+  return { ...out, open, closeAll, toggle: (key) => (out[key].isOpen() ? set(key, false) : open(key)),
+    destroy() { document.removeEventListener("keydown", onKey, true); document.removeEventListener("pointerdown", onDown, true); } };
 }
 
 // Guided reading: with only the paper showing, Dot offers to take you to each part to read for each step,
@@ -325,10 +330,6 @@ const ICONS = {
   questions: '<path d="M9.5 17.5h5M10.5 20.5h3M12 3.5a6 6 0 0 0-3.4 10.9c.4.3.6.7.6 1.2v.4h5.6v-.4c0-.5.2-.9.6-1.2A6 6 0 0 0 12 3.5z"/>',
   review: '<path d="M4.5 12a7.5 7.5 0 0 1 13-5.1M19.5 12a7.5 7.5 0 0 1-13 5.1"/><path d="M17.5 3.5v3.4h-3.4M6.5 20.5v-3.4h3.4"/>',
   check: '<path pathLength="1" d="M6.5 12.5l3.6 3.6L17.5 8.5"/>',
-  // the three Reader panes: a window outline with the pane's part filled in
-  paneRail: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><rect x="5" y="6.5" width="3.5" height="11" rx=".8" fill="currentColor" stroke="none"/>',
-  panePaper: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><rect x="8.5" y="6.5" width="7" height="11" rx=".8" fill="currentColor" stroke="none"/>',
-  paneNotes: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><rect x="15.5" y="6.5" width="3.5" height="11" rx=".8" fill="currentColor" stroke="none"/>',
   prev: '<path d="M14.5 6 8.5 12l6 6"/>',
   next: '<path d="M9.5 6l6 6-6 6"/>',
   minus: '<path d="M6 12h12"/>',
@@ -635,41 +636,6 @@ function writtenMeter(st, note) {
   };
   paint();
   return { el, paint };
-}
-
-// Drag (or arrow keys) to trade width between the paper and the notes. Double-click resets.
-const NB_KEY = "reader-notes-width";
-function splitter(page) {
-  const el = h("div", { class: "split", role: "separator", tabindex: 0, "aria-orientation": "vertical",
-    "aria-label": "Notes width. Use the left and right arrow keys.", title: "Drag to resize. Double-click to reset." });
-  const notesWidth = () => page.lastElementChild.getBoundingClientRect().width;
-  const set = (w) => {
-    if (w == null) { page.style.removeProperty("--nb-w"); localStorage.removeItem(NB_KEY); return; }
-    const max = page.clientWidth - 232 - 320; // keep the rail and a usable paper
-    w = Math.round(Math.max(340, Math.min(max, w)));
-    page.style.setProperty("--nb-w", `${w}px`);
-    el.setAttribute("aria-valuenow", w);
-    localStorage.setItem(NB_KEY, w);
-  };
-  const saved = Number(localStorage.getItem(NB_KEY));
-  if (saved) set(saved);
-  el.addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    el.setPointerCapture(e.pointerId);
-    document.body.classList.add("resizing");
-    const right = page.getBoundingClientRect().right;
-    const move = (ev) => set(right - ev.clientX);
-    const up = () => { el.removeEventListener("pointermove", move); document.body.classList.remove("resizing"); };
-    el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", up, { once: true });
-    el.addEventListener("pointercancel", up, { once: true });
-  });
-  el.addEventListener("keydown", (e) => {
-    const d = { ArrowLeft: 32, ArrowRight: -32 }[e.key];
-    if (d) { e.preventDefault(); set(notesWidth() + d); }
-  });
-  el.addEventListener("dblclick", () => set(null));
-  return el;
 }
 
 function grow(t) {
