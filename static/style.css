@@ -733,13 +733,13 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 @media (max-width: 480px) { .buddy { right: 12px; bottom: 12px; } }
 
 /* ---------- At home, Dot reads inside a faint glow. The icons sit on that circle. ---------- */
-.buddy > .buddy-tools { position: absolute; left: 50%; top: 50%; width: 180px; height: 180px; margin: -90px 0 0 -90px; border-radius: 50%; pointer-events: none;
-  background: radial-gradient(circle, rgb(255 227 71 / .34) 0 34%, rgb(255 227 71 / .12) 58%, transparent 74%);
-  box-shadow: 0 0 42px 12px rgb(255 227 71 / .22); animation: lamp 3.6s ease-in-out infinite; }
+.buddy > .buddy-tools { position: absolute; left: 50%; top: 50%; width: 400px; height: 400px; margin: -200px 0 0 -200px; border-radius: 50%; pointer-events: none; background: none; box-shadow: none; overflow: visible; }
 .buddy-tools[hidden] { display: none; }
-.buddy-tool { --bc: #ffe347; position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; pointer-events: auto; color: #1f2023;
+.buddy-tool { --bc: #ffe347; --ox: 0px; --oy: 0px; position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; pointer-events: auto; color: #1f2023;
   background: var(--bc); box-shadow: 0 10px 18px -10px rgb(0 0 0 / .5); display: grid; place-items: center;
-  animation: tool-in .28s cubic-bezier(.22,1,.36,1) both; animation-delay: calc(var(--k) * 40ms); }
+  translate: var(--ox) var(--oy);
+  animation: tool-out .45s cubic-bezier(.22,1,.36,1) both; animation-delay: calc(var(--k) * 40ms); }
+@keyframes tool-out { from { translate: 0 0; opacity: 0; scale: .35; } }
 .buddy-tool .tip { position: absolute; z-index: 3; left: 50%; bottom: calc(100% + 8px); translate: -50% 4px; opacity: 0; pointer-events: none;
   width: max-content; max-width: 148px; padding: 3px 7px 4px; border-radius: 8px; background: #fff; color: #1f2023; text-align: center;
   box-shadow: 0 6px 14px -8px #000; transition: opacity .15s, translate .15s; }
@@ -765,7 +765,7 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 @keyframes lamp { 50% { box-shadow: 0 0 56px 18px rgb(255 227 71 / .32); } }
 @keyframes page-turn { 0%, 28% { transform: rotateY(0); } 58% { transform: rotateY(-68deg); } 100% { transform: rotateY(0); } }
 .buddy-tool:hover, .buddy-tool:focus-visible { scale: 1.14; outline: none; box-shadow: 0 0 0 4px color-mix(in srgb, var(--bc) 50%, #fff), 0 12px 20px -10px rgb(0 0 0 / .45); }
-.buddy-tool svg { width: 26px; height: 26px; overflow: visible; }
+.buddy-tool svg { width: 30px; height: 30px; overflow: visible; }
 .buddy-tool svg * { stroke: #1f2023; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .buddy-tool svg .fill { fill: #1f2023; stroke: none; }
 .buddy-tool svg .fill, .buddy-tool svg .eye, .buddy-tool svg .card { transform-box: fill-box; transform-origin: center; }
@@ -1143,10 +1143,14 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .buddy.follows .buddy-grid, .buddy.follows .buddy-led { display: none; }
 .buddy.follows .buddy-eyes { display: flex; gap: 8px; pointer-events: none; translate: var(--ex, 0px) var(--ey, 0px); transition: translate .25s cubic-bezier(.22,1,.36,1); }
 .buddy-eyes i { width: 10px; height: 22px; border-radius: 5px; background: #1f2023; transition: height .12s, width .12s; }
-.buddy.follows .buddy-eyes i { width: 8px; height: 11px; border-radius: 50%; }
-.buddy.follows.awake .buddy-eyes i { width: 9px; height: 13px; }
+.buddy.follows .buddy-eyes i, .buddy.follows.awake .buddy-eyes i, .buddy.follows[data-eyes] .buddy-eyes i { width: 9px; height: 9px; border-radius: 50%; }
 .buddy.blinking .buddy-eyes i, .buddy[data-eyes="closed"] .buddy-eyes i { height: 3px; }
 .buddy[data-eyes="wide"] .buddy-eyes i { height: 26px; width: 11px; }
+.buddy.follows .buddy-eyes i { width: 9px; height: 9px; border-radius: 50%; }
+.buddy.follows.attached { --k: 1; }
+.buddy.follows.attached .buddy-face { width: 92px; height: 92px; }
+.buddy.follows.attached .buddy-eyes { gap: 14px; }
+.buddy.follows.attached .buddy-eyes i { width: 16px; height: 24px; border-radius: 9px; }
 .buddy[data-eyes="happy"] .buddy-eyes i { height: 16px; }
 .buddy.busy .buddy-eyes i { animation: lthink .45s ease-in-out infinite alternate; }
 @keyframes lthink { to { height: 7px; } }
@@ -1176,21 +1180,46 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .buddy-opts { position: fixed; left: 0; top: 0; width: 0; height: 0; z-index: 70; pointer-events: none; }
 .obuddy { --bc: #ffe347; position: fixed; left: 0; top: 0; width: 54px; height: 52px; margin: -26px 0 0 -27px; padding: 0; border: 0; background: none; cursor: pointer;
   pointer-events: auto; opacity: 0; will-change: transform;
-  transition: transform .6s cubic-bezier(.22,1,.36,1), opacity .25s; animation: bfloat 3.6s ease-in-out infinite; animation-delay: calc(var(--i) * -.5s); }
+  transition: transform .55s cubic-bezier(.22,1,.36,1), opacity .25s; }
 .obuddy.on { opacity: 1; }
 .obuddy > span { position: absolute; pointer-events: none; }
-.obuddy .bod { inset: 5px; z-index: 1; background: var(--bc); border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%; box-shadow: 0 10px 16px -10px #000;
-  animation: bwob 3.4s ease-in-out infinite; transition: scale .3s cubic-bezier(.3,1.6,.4,1); }
-.obuddy:nth-child(2n) .bod { animation-duration: 3.9s; animation-delay: -1.2s; }
+.obuddy .bod { inset: 5px; z-index: 1; overflow: hidden; background: var(--bc, #ffe347); border-radius: 50%; box-shadow: 0 8px 14px -10px #000;
+  transition: scale .3s cubic-bezier(.3,1.6,.4,1); }
+.obuddy .who, .obuddy .scene { position: absolute; inset: 0; }
+.obuddy .who { z-index: 2; display: flex; align-items: center; justify-content: center; gap: 4px; animation: mo-face 2.2s cubic-bezier(.22,1,.36,1) infinite; }
+.obuddy .who i { width: 6px; height: 9px; border-radius: 4px; background: #1f2023; }
+.obuddy .scene { z-index: 1; opacity: 0; animation: mo-scene 2.2s cubic-bezier(.22,1,.36,1) infinite; }
+.obuddy .bod { animation: mo-shape 2.2s cubic-bezier(.22,1,.36,1) infinite; }
+.obuddy .prop, .obuddy .mx { position: absolute; }
+@keyframes mo-face { 0%, 16% { opacity: 1; } 34%, 66% { opacity: 0; } 84%, 100% { opacity: 1; } }
+@keyframes mo-scene { 0%, 16% { opacity: 0; } 34%, 66% { opacity: 1; } 84%, 100% { opacity: 0; } }
+@keyframes mo-shape { 0%, 16%, 100% { border-radius: 50%; } 34%, 66% { border-radius: 18%; } }
+.ob-suggest .scene::before, .ob-suggest .scene::after, .ob-suggest .mx::before { content: "?"; position: absolute; color: #1f2023; font: 800 16px/1 var(--sans); opacity: 0; animation: mo-qmark 2.2s cubic-bezier(.22,1,.36,1) infinite; }
+.ob-suggest .scene::before { left: 16%; top: 18%; }
+.ob-suggest .scene::after { right: 16%; top: 30%; font-size: 13px; animation-delay: .12s; }
+.ob-suggest .mx::before { left: 34%; top: 48%; animation-delay: .22s; }
+.ob-find .prop { left: 18%; right: 18%; top: 12%; bottom: 12%; background: #fff; border-radius: 3px; overflow: hidden; }
+.ob-find .mx { left: 18%; right: 18%; top: 12%; height: 7px; background: rgb(31 32 35 / .45); animation: mo-scan 2.2s cubic-bezier(.22,1,.36,1) infinite; }
+.ob-more .prop, .ob-more .mx { width: 16px; height: 16px; border-radius: 50%; background: #1f2023; top: 50%; margin-top: -8px; box-shadow: none; animation: mo-blob 2.2s cubic-bezier(.22,1,.36,1) infinite; }
+.ob-more .prop { left: 14%; }
+.ob-more .mx { right: 14%; left: auto; animation-delay: .14s; }
+@keyframes mo-qmark { 0%, 18% { opacity: 0; scale: .2; } 40%, 66% { opacity: 1; scale: 1; } 84%, 100% { opacity: 0; scale: .3; } }
+@keyframes mo-scan { 0%, 20% { translate: 0 0; opacity: 0; } 34% { opacity: 1; translate: 0 0; } 62% { opacity: 1; translate: 0 20px; } 80%, 100% { opacity: 0; translate: 0 20px; } }
+@keyframes mo-blob { 0%, 18% { scale: .15; opacity: 0; } 42%, 66% { scale: 1; opacity: 1; } 84%, 100% { scale: .2; opacity: 0; } }
+.obuddy:nth-child(2n) .bod { animation-duration: 2.2s; animation-delay: 0s; }
 .obuddy .e { left: 50%; top: 34%; translate: -50% -50%; z-index: 2; display: flex; gap: 5px; }
 .obuddy .e i { width: 4px; height: 8px; border-radius: 2px; background: #1f2023; animation: bblink 4.5s infinite; }
 .obuddy:nth-child(3n) .e i { animation-delay: -2s; }
-.obuddy .pr { z-index: 3; left: 50%; top: 50%; width: 22px; height: 22px; translate: -50% -50%; }
-.obuddy .pr svg { display: block; width: 22px; height: 22px; stroke: #1f2023; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.obuddy .pr { position: absolute; z-index: 3; left: 50%; top: 50%; width: 60%; height: 60%; translate: -50% -50%; }
+.obuddy .pr svg { display: block; width: 100%; height: 100%; overflow: hidden; }
+.obuddy .pr svg * { stroke: #1f2023; fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.obuddy .pr svg .wisp, .obuddy .pr svg .lens, .obuddy .pr svg .q, .obuddy .pr svg .pen, .obuddy .pr svg .arrow { transform-box: fill-box; transform-origin: center; }
+.buddy-opts.names-right .obuddy .tag { top: 50%; left: calc(100% + 8px); translate: 0 -50%; text-align: left; }
+.buddy-opts.names-left .obuddy .tag { top: 50%; left: auto; right: calc(100% + 8px); translate: 0 -50%; text-align: right; }
+.buddy-opts.ring .obuddy .tag { left: 50%; top: 50%; right: auto; text-align: center;
+  translate: calc(-50% + var(--lx, 0px)) calc(-50% + var(--ly, 0px)); }
 .obuddy .tag { z-index: 4; left: 50%; top: 48px; translate: -50% 0; width: max-content; max-width: none; padding: 3px 8px 4px; border-radius: 8px; text-align: center; white-space: nowrap;
   background: #fff; color: #1f2023; box-shadow: 0 6px 14px -8px #000; }
-.ob-ties { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; overflow: visible; }
-.ob-ties path { fill: none; stroke-width: 1.75; stroke-linecap: round; opacity: .7; }
 .obuddy .tag b { display: block; font: 700 12px/1.2 var(--sans); }
 .obuddy .tag small { display: none; margin-top: 2px; font: 500 11px/1.3 var(--sans); color: #565a62; }
 .obuddy:hover .tag small { display: block; white-space: normal; max-width: 160px; }
@@ -1198,14 +1227,24 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .obuddy:focus-visible { outline: none; }
 .obuddy:focus-visible .tag { box-shadow: 0 0 0 2px var(--marker); }
 .obuddy:disabled { cursor: default; }
-.ob-suggest .bod { background: linear-gradient(#ffe347, #ffe347) 0 72% / 100% 0 no-repeat, var(--bc); animation: bwob 3.4s ease-in-out infinite, act-sweep 2.4s ease-in-out infinite; }
-.ob-ask .e i { animation: bblink 4.5s infinite, act-look 2.2s ease-in-out infinite; }
-.ob-note .bod { animation: bwob 3.4s ease-in-out infinite, act-card 2.8s ease-in-out infinite; }
-.ob-explain .bod { animation: bwob 3.4s ease-in-out infinite, act-glow 2s ease-in-out infinite; }
-.ob-find .bod { animation: bwob 3.4s ease-in-out infinite, act-lens 2.6s ease-in-out infinite; }
-.ob-more .bod { animation: bwob 3.4s ease-in-out infinite, act-grow 2.2s ease-in-out infinite; }
-.ob-back .bod { animation: bwob 3.4s ease-in-out infinite, act-lean 2.4s ease-in-out infinite; }
-.ob-mark .bod { background: linear-gradient(#1f2023, #1f2023) 8px 68% / 0 4px no-repeat, var(--bc); animation: bwob 3.4s ease-in-out infinite, act-stroke 2.2s ease-in-out infinite; }
+.obuddy .pr svg .grow { transform-box: fill-box; transform-origin: center; }
+.ob-suggest .ink { stroke-dasharray: 28; animation: ob-ink 1.5s cubic-bezier(.22,1,.36,1) infinite; }
+.ob-more .grow { animation: ob-grow 1.4s ease-in-out infinite; }
+.ob-explain .wisp { animation: ob-wisp 1.6s ease-in-out infinite; }
+.ob-explain .wisp.b { animation-delay: -.4s; }
+.ob-mark .ink { stroke-dasharray: 28; animation: ob-ink 1.5s cubic-bezier(.22,1,.36,1) infinite; }
+.ob-find .lens { animation: ob-scan 1.8s ease-in-out infinite; }
+.ob-ask .q { animation: ob-tip 1.5s ease-in-out infinite; }
+.ob-note .pen { animation: ob-write 1.4s ease-in-out infinite; }
+.ob-note .line { stroke-dasharray: 24; animation: ob-ink 1.4s cubic-bezier(.22,1,.36,1) infinite; }
+.ob-back .arrow { animation: ob-home 1.4s ease-in-out infinite; }
+@keyframes ob-wisp { 50% { transform: translate(2px, -3px) scale(1.08); opacity: .55; } }
+@keyframes ob-ink { 0% { stroke-dashoffset: 28; } 55%, 100% { stroke-dashoffset: 0; } }
+@keyframes ob-scan { 50% { transform: translate(2px, 2px) rotate(-8deg); } }
+@keyframes ob-tip { 40% { transform: translateY(-2px) rotate(-10deg) scale(1.06); } }
+@keyframes ob-write { 50% { transform: translate(2px, 2px) rotate(6deg); } }
+@keyframes ob-home { 50% { transform: translate(-3px, 0) rotate(-10deg); } }
+@keyframes ob-grow { 50% { transform: translateY(2px); } }
 @keyframes act-sweep { 40%, 70% { background-size: 100% 26%, auto; } }
 @keyframes act-look { 40%, 60% { height: 11px; translate: 0 -3px; } }
 @keyframes act-card { 45%, 70% { border-radius: 5px; scale: .82 1.08; } }
@@ -1220,8 +1259,10 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
   font: var(--fw-ui) 12px/1.3 var(--sans); text-align: center; pointer-events: none; }
 .ob-cap[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) {
-  .obuddy, .obuddy .bod, .obuddy .e i, .buddy.sh-blob .buddy-face,
-  .ob-suggest .bod, .ob-ask .e i, .ob-note .bod, .ob-explain .bod, .ob-find .bod, .ob-more .bod, .ob-back .bod, .ob-mark .bod { animation: none; transition: none; }
+  .obuddy, .obuddy .bod, .obuddy .who, .obuddy .scene, .obuddy .scene::before, .obuddy .scene::after, .obuddy .prop, .obuddy .mx, .obuddy .mx::before, .buddy.sh-blob .buddy-face { animation: none; transition: none; }
+  .obuddy .scene { opacity: 0; }
+  .obuddy .who { opacity: 1; }
+  .obuddy .bod { border-radius: 50%; }
 }
 
 .buddy-pill { position: fixed; z-index: 70; height: 36px; display: flex; align-items: center; box-sizing: border-box; border-radius: 18px; margin: 0;
@@ -1302,14 +1343,17 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .canvas-host[hidden] { display: none; }
 .canvas-host:not(.on) { visibility: hidden; }
 .canvas-host.panning { cursor: grabbing; }
-.cv-board { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.canvas-host.on { display: block; overflow: hidden; }
+.cv-board { position: absolute; inset: 0; transform-origin: 0 0; }
+.cv-bar { position: absolute; left: 12px; bottom: 12px; z-index: 6; display: flex; align-items: center; gap: 8px; }
+.cv-pin { position: absolute; z-index: 6; width: 10px; height: 10px; padding: 0; border: 0; border-radius: 50%; background: #ffe347; box-shadow: 0 0 0 2px #1f2023; cursor: pointer; }
 .cv-wave { position: absolute; inset: 0; pointer-events: none; opacity: 0;
   background: radial-gradient(var(--marker) 1.7px, transparent 2.2px) 0 0 / 22px 22px;
   -webkit-mask-image: radial-gradient(circle at var(--ox, 50%) var(--oy, 50%), transparent calc(var(--r) - 90px), #000 var(--r), transparent calc(var(--r) + 6px));
   mask-image: radial-gradient(circle at var(--ox, 50%) var(--oy, 50%), transparent calc(var(--r) - 90px), #000 var(--r), transparent calc(var(--r) + 6px)); }
-.cv-compose { position: absolute; z-index: 5; left: 16px; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 10px; pointer-events: auto; }
+.cv-compose { position: sticky; bottom: 0; z-index: 5; margin-top: auto; display: flex; flex-direction: column; gap: 10px; pointer-events: auto; padding: 12px 16px 16px; background: var(--paper); border-top: 1px solid var(--rule); }
 .cv-compose[hidden] { display: none; }
-.cv-compose.bare { inset: 0; bottom: auto; left: 0; right: 0; margin: auto; height: max-content; max-width: 420px; padding: 0 28px; }
+.cv-compose.bare { position: relative; inset: auto; margin: auto; height: max-content; max-width: 420px; padding: 0 28px; border: 0; background: transparent; }
 .cv-compose .cv-hint { margin: 0; text-align: center; color: var(--pencil); font: var(--fw-ui) var(--fs-ui)/1.5 var(--sans); }
 .cv-compose .cv-hint[hidden] { display: none; }
 .cv-compose textarea { width: 100%; min-height: 84px; resize: vertical; box-sizing: border-box; font: var(--fw-ui) var(--fs-ui)/1.45 var(--sans); }
@@ -1326,7 +1370,7 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .cv-tab:focus-visible { outline: 2px solid var(--marker); outline-offset: 2px; }
 .cv-tab.on { background: var(--marker); border-color: var(--marker); color: var(--on-marker); }
 .cv-tab[hidden] { display: none; }
-.cv-svg { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 6; overflow: visible; pointer-events: none; transition: opacity .25s; }
+.cv-svg, .cv-handle { display: none; }
 .cv-svg.off { opacity: 0; }
 .cv-thread { fill: none; stroke-linecap: round; }
 .cv-parent { stroke: color-mix(in srgb, var(--marker) 78%, #b39700); stroke-width: 2.5; stroke-dasharray: 7 6; filter: drop-shadow(0 0 1px rgb(0 0 0 / .35)); }

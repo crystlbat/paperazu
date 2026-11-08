@@ -145,7 +145,12 @@ async function renderReader(paperId, startPage) {
     if (!pdf.along()) buddy.say("Pull me out when you want me along.", { mood: "happy" });
   }, 1500);
   pdf.hooks.onCanvasChanged = () => canvas.refresh?.();
-  pdf.hooks.onNoteSaved = async (m) => { const ok = await plain.append(`Note, page ${m.page}: ${m.text}`); drawers.open("notes"); return ok; };
+  pdf.hooks.onNoteSaved = async (m) => {
+    const card = await canvas.note?.({ page: m.page, rect: m.rect, text: m.text });
+    const ok = await plain.append(`Note, page ${m.page}: ${m.text}`);
+    if (!card) drawers.open("notes");
+    return !!card || ok;
+  };
 
   // Saves (and retries) can finish after you leave; Dot only speaks while this Reader is open.
   const me = openReader = {
@@ -221,7 +226,7 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
       if (r?.note) buddy.say(`${r.note} I used the paper's own headings instead.`, { mood: "worried" });
     }
     if (!stops.length) { stops = null; return buddy.say("I could not find the parts of this paper to guide you through.", { mood: "worried" }); }
-    on = true; card.hidden = false;
+    on = true; card.hidden = true; // the tour is spoken by Dot, not a separate card
     buddy.hold(true); // Dot stays at each stage; it does not trail the pointer while it guides
     document.addEventListener("keydown", onKey);
     show(0);
@@ -241,7 +246,14 @@ function guidedReading(paperId, pdf, onStep, openNotes) {
     const stage = pdf.el.querySelector(".pdf-stage").getBoundingClientRect();
     const left = r.left - 64 > stage.left + 30; // hover in the margin left of the heading (clear of its number), or else to its right
     await buddy.goTo(left ? r.left - 64 : Math.min(r.left + r.w + 50, stage.right - 40), r.top + r.h / 2);
-    if (my === live && on) buddy.lookAt(r.left + r.w / 2, r.top + r.h / 2, 4000);
+    if (my !== live || !on) return;
+    buddy.lookAt(r.left + r.w / 2, r.top + r.h / 2, 4000);
+    const actions = [
+      ...(i > 0 ? [{ label: "Back", onClick: () => show(i - 1) }] : []),
+      { label: i === stops.length - 1 ? "Finish" : "Next", onClick: () => show(i + 1) },
+      { label: "Home", onClick: () => { stop(); pdf.tagAlong(false); } },
+    ];
+    buddy.say(`${s.title}. ${where.textContent} ${s.why}`, { sticky: true, actions });
   }
   function finish() {
     stop();
@@ -1234,14 +1246,14 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   document.addEventListener("pointerdown", () => { if (animating) { skipAnim = true; buddy.skip(); } }, { capture: true, signal: watchStop.signal });
 
   const ICON = {
-    suggest: '<svg viewBox="0 0 24 24"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>',
-    ask: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
-    note: '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
-    more: '<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>',
-    back: '<svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
-    explain: '<svg viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2V16h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3Z"/></svg>',
-    mark: '<svg viewBox="0 0 24 24"><path d="m4 20 3-1 10-10-2-2L5 17Z"/><path d="m14 6 2-2 4 4-2 2"/><path d="M4 21h8"/></svg>',
-    find: '<svg viewBox="0 0 24 24"><path d="M3 6h12"/><path d="M3 11h6"/><path d="M3 16h6"/><circle cx="16" cy="15" r="4"/><path d="m21 20-2.2-2.2"/></svg>',
+    suggest: '<svg viewBox="0 0 24 24"><path d="m8 12-5 5v3h8l2-2"/><path class="ink" d="M14 6h7"/></svg>',
+    ask: '<svg viewBox="0 0 24 24"><path class="q" d="M9.2 9a2.8 2.8 0 1 1 4.2 2.5c-.8.4-1.4 1-1.4 2V15"/><path class="q" d="M12 18.2h.01"/></svg>',
+    note: '<svg viewBox="0 0 24 24"><path class="line" d="M6 18h12"/><path class="pen" d="M15.2 4.2a2 2 0 0 1 2.8 2.8L8 17l-3.2.8.8-3.2Z"/></svg>',
+    more: '<svg viewBox="0 0 24 24"><path class="grow" d="M12 5v10"/><path class="grow" d="m18 11-6 6-6-6"/></svg>',
+    back: '<svg viewBox="0 0 24 24"><g class="arrow"><path d="M10 15 4 9l6-6"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></g></svg>',
+    explain: '<svg viewBox="0 0 24 24"><circle class="wisp" cx="8" cy="15" r="2.4"/><circle class="wisp b" cx="15" cy="9" r="3.6"/></svg>',
+    mark: '<svg viewBox="0 0 24 24"><path d="m15 5 4 4-9 9H6v-4Z"/><path class="ink" d="M5 19h14"/></svg>',
+    find: '<svg viewBox="0 0 24 24"><g class="lens"><circle cx="10" cy="10" r="6"/><path d="m14.5 14.5 6 6"/></g></svg>',
   };
   // Each tool is a coloured blob with its icon and its name. The longer line shows when you point at it.
   const TOOL = { suggest: ["Suggest", "#8ecbff", "Mark the lines worth keeping"], ask: ["Ask", "#c6a0ff", "Ask me about this part"],
@@ -1321,24 +1333,41 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   const clientRect = (r) => { const [x0, y0, x1, y1] = px(r), b = pageBox.getBoundingClientRect(); return [b.left + x0, b.top + y0, b.left + x1, b.top + y1]; };
   function planBuddies(chosen, n, near) {
     const vp = stage.getBoundingClientRect();
-    const toRight = (vp.right - chosen[2]) >= (chosen[0] - vp.left);
-    let dotX = toRight ? chosen[2] + 64 : chosen[0] - 64;
-    let dotY = (chosen[1] + chosen[3]) / 2;
-    dotX = Math.max(vp.left + 56, Math.min(vp.right - 56, dotX));
-    dotY = Math.max(vp.top + 72, Math.min(vp.bottom - 72, dotY));
-    // the face landed on the chosen words: sit just above them instead of locking a column down the page
-    if (dotX > chosen[0] - 8 && dotX < chosen[2] + 8 && dotY > chosen[1] && dotY < chosen[3]) dotY = Math.max(vp.top + 72, chosen[1] - 64);
-    const step = 0.42, span = Math.max(0, n - 1) * step, R = 112;
-    const mid = toRight ? -0.2 : Math.PI + 0.2;
-    const places = Array.from({ length: n }, (_, i) => {
-      const a = mid + (i - (n - 1) / 2) * (n > 1 ? span / (n - 1) : 0);
-      let x = dotX + Math.cos(a) * R, y = dotY + Math.sin(a) * R;
-      if (x > chosen[0] - 6 && x < chosen[2] + 6 && y > chosen[1] - 6 && y < chosen[3] + 6) x = toRight ? chosen[2] + 72 : chosen[0] - 72;
-      x = Math.max(vp.left + 70, Math.min(vp.right - 70, x));
-      y = Math.max(vp.top + 44, Math.min(vp.bottom - 56, y));
-      return [x, y];
-    });
-    return { x: dotX, y: dotY, a: mid, places, labelsRight: false };
+    const bar = Math.max(
+      document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0,
+      document.querySelector(".pdf-tools")?.getBoundingClientRect().bottom ?? 0,
+    );
+    const top = Math.max(vp.top, bar) + 40;
+    const left = vp.left + 36, right = vp.right - 52, bottom = vp.bottom - 16;
+    const step = 72; // equal gap, circle to circle, Dot included as the first piece
+    const tall = n * step;
+    const hits = (x, y) => {
+      const box = [x - 28, y - 28, x + 28, y + 28];
+      if (box[2] > chosen[0] - 6 && box[0] < chosen[2] + 6 && box[3] > chosen[1] - 6 && box[1] < chosen[3] + 6) return true;
+      for (const sp of textLayer?.querySelectorAll("span") ?? []) {
+        if (!sp.textContent.trim()) continue;
+        const r = sp.getBoundingClientRect();
+        if (r.width && box[0] < r.right && box[2] > r.left && box[1] < r.bottom && box[3] > r.top) return true;
+      }
+      return false;
+    };
+    const column = (x, y0) => {
+      y0 = Math.max(top, Math.min(y0, bottom - tall));
+      return { x, y: y0, places: Array.from({ length: n }, (_, i) => [x, y0 + (i + 1) * step]) };
+    };
+    const clear = (col) => col && [[col.x, col.y], ...col.places].every(([x, y]) => x >= left && x <= right && y >= top && y <= bottom && !hits(x, y));
+    const y0 = chosen[1];
+    const rightCol = column(chosen[2] + 46, y0);
+    const leftCol = column(chosen[0] - 46, y0);
+    let plan = clear(rightCol) ? { ...rightCol, labelsRight: true }
+      : clear(leftCol) ? { ...leftCol, labelsRight: false }
+      : null;
+    if (!plan) {
+      const y = Math.max(top, Math.min(chosen[3] + 40, bottom - tall));
+      const x = Math.max(left + 36, Math.min(chosen[0] + 36, right - 140));
+      plan = { ...column(x, y), labelsRight: true };
+    }
+    return { x: plan.x, y: plan.y, a: 0, places: plan.places, labelsRight: plan.labelsRight };
   }
   // Dot walks to the spot the bloom grows from. It stays the round face.
   async function attach(plan) {

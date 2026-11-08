@@ -5,8 +5,9 @@
 // Uses app.js globals (h, api, themeList, streamPrimer, themePicker, rowMenu, ...). Positions are set every frame
 // with transforms in one loop; CSS does the rest. Design: docs/superpowers/specs/2026-11-07-library-dot-design.md
 
-const LIB_BLOBS = [["find", "Ask", "#8ecbff"], ["next", "What next?", "#7bd88f"], ["talks", "Talks", "#ff9e7a"],
+const LIB_BLOBS = [["find", "Ask", "#8ecbff"], ["web", "Web", "#3ddec8"], ["next", "What next?", "#7bd88f"], ["talks", "Talks", "#ff9e7a"],
   ["pick", "Pick up", "#c6a0ff"], ["add", "Add paper", "#ffe347"], ["shelf", "Shelf", "#ff7ab8"], ["persona", "Persona", "#ffa86b"], ["set", "Settings", "#c9cdd6"]];
+const LIB_HINT = { web: "I search the web and bring pages back." };
 const SHELF_BLOBS = [["group", "#7bd88f"], ["sort", "#8ecbff"], ["show", "#ff9e7a"], ["theme", "#c6a0ff"],
   ["add", "#ffe347"], ["set", "#c9cdd6"], ["bubble", "#ff7ab8"]];
 const HUES = ["#6fb6ff", "#6fd08a", "#ff9673", "#b993ff", "#ff74b0", "#4fd1c5", "#f2b84b", "#d8c3a0"];
@@ -61,7 +62,7 @@ function libraryStage({ s, fw, list }) {
   L.keys = (e) => {
     if (e.key !== "Escape" || document.querySelector("dialog[open]")) return;
     if (L.peekId) return libPeekClose();
-    if (L.job === "ask") return libCloseField();
+    if (L.job === "ask") return libEscape();
     if (L.job) return libHome();
     if (L.mode === "shelf" && L.dotEl.querySelector("input").value) { L.dotEl.querySelector("input").value = ""; libFilter(""); }
   };
@@ -201,7 +202,6 @@ function libLoop(t) {
     b.style.transform = `translate3d(${b.bx}px, ${b.by}px, 0)${b.gulping ? " scale(.3)" : ""}`;
     i++;
   }
-  if (L.f && !L.f.el.hidden) libPenStep(t, dt);
   L.raf = requestAnimationFrame(libLoop);
 }
 
@@ -250,7 +250,10 @@ function libRing() {
 
 // ---------- the small blobs ----------
 function libBlob(k, name, color, run, calm = false) {
-  const b = h("button", { type: "button", class: `lblob k-${k}${calm ? " calm named" : " abs"}`, "aria-label": name, style: `--bc:${color}` },
+  const hint = LIB_HINT[k] || "";
+  const attrs = { type: "button", class: `lblob k-${k}${calm ? " calm named" : " abs"}`, "aria-label": hint ? `${name}. ${hint}` : name, style: `--bc:${color}` };
+  if (hint) attrs.title = hint;
+  const b = h("button", attrs,
     h("span", { class: "bod" }), h("span", { class: "e" }, h("i"), h("i")), h("span", { class: "pr" }), h("span", { class: "tag" }, name));
   b.dataset.k = k; b.bx = 0; b.by = 0;
   b.addEventListener("click", (e) => { e.stopPropagation(); run(); });
@@ -259,7 +262,7 @@ function libBlob(k, name, color, run, calm = false) {
 function libBlobsOut(on) {
   const empty = !L.total;
   L.blobs.forEach((b) => {
-    b.hidden = empty && !["add", "set"].includes(b.dataset.k);
+    b.hidden = empty && !["add", "set", "web"].includes(b.dataset.k);
     b.classList.toggle("out", !on); b.tabIndex = on ? 0 : -1; b.gulping = false;
     b.classList.toggle("bounce", empty && b.dataset.k === "add");
   });
@@ -272,6 +275,7 @@ function libHome(soft = false) {
   libClear(); libPeekClose();
   if (L.f && !L.f.el.hidden) libCloseField(true);
   L.mode = "bubble"; L.job = null; libStore.set("lib-mode", "bubble");
+  if (L.web) { L.web.hidden = true; L.webGen++; L.webHits.replaceChildren(); L.webIn.disabled = false; L.webIn.value = ""; }
   L.st.classList.remove("chatting", "shelfing");
   L.shelf.hidden = true; L.sblobs.hidden = true; L.strip.classList.remove("on");
   L.dotEl.className = "ldot abs"; L.dotEl.tabIndex = 0; L.dotEl.querySelector("input").tabIndex = -1;
@@ -288,6 +292,7 @@ function libRelayout() {
   if (L.mode === "shelf") { L.dot.tx = W / 2; L.dot.ty = 46; L.sblobs.style.transform = `translate3d(${W / 2}px, 84px, 0)`;
     L.count.style.transform = `translate3d(24px, 22px, 0)`; return; }
   if (L.job === "ask") return libAskLayout();
+  if (L.job === "web") return libWebPlace();
   if (L.job) return;
   L.dot.tx = W / 2; L.dot.ty = H / 2 + 10;
   libPlaceRing(1, new Set());
@@ -325,7 +330,7 @@ async function libJob(k) {
   const W = libW(), H = libH();
   L.dot.tx = W / 2; L.dot.ty = k === "add" ? H / 2 - 20 : 150;
   L.back.style.transform = `translate3d(${W / 2 + (k === "add" ? 110 : 78)}px, ${L.dot.ty}px, 0)`;
-  ({ next: libNext, talks: libTalks, pick: libPick, add: libAdd })[k]();
+  ({ next: libNext, talks: libTalks, pick: libPick, add: libAdd, web: libWeb })[k]();
 }
 
 function libFocusOn(p, msg) {
@@ -390,6 +395,66 @@ function libAdd() {
   L.dotEl.classList.add("tray");
   for (const id of L.cards.keys()) L.cards.get(id).el.classList.add("dim");
   libSay("Drop a PDF on me, or anywhere on the page.", [["Choose PDF", () => L.picker.click()]]);
+}
+
+// Web: the blob opens a query, Unsloth searches, and the pages land under Dot.
+function libWebPlace() {
+  const W = libW();
+  L.dot.tx = W / 2; L.dot.ty = 150;
+  L.back.style.transform = `translate3d(${W / 2 + 78}px, ${L.dot.ty}px, 0)`;
+  if (L.web) L.web.style.transform = `translate3d(${W / 2}px, ${L.dot.ty + 78}px, 0) translate(-50%, 0)`;
+}
+function libWebPanel() {
+  const input = h("input", { type: "search", maxlength: "200", "aria-label": "Words to look up", placeholder: "Words to look up",
+    onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); libWebGo(input.value); } } });
+  const hits = h("div", { class: "hits" });
+  const el = h("div", { class: "lweb abs", hidden: true }, h("form", { onsubmit: (e) => { e.preventDefault(); libWebGo(input.value); } }, input), hits);
+  el.addEventListener("pointerdown", (e) => e.stopPropagation());
+  L.st.append(el);
+  L.web = el; L.webIn = input; L.webHits = hits; L.webGen = 0;
+}
+function libWebHit(r) {
+  let host = "";
+  try { host = new URL(r.url).host.replace(/^www\./, ""); } catch { host = ""; }
+  if (!/^https?:\/\//.test(r.url || "")) return null;
+  return h("a", { class: "hit", href: r.url, target: "_blank", rel: "noopener noreferrer" },
+    h("strong", {}, r.title || host || "Page"),
+    r.snippet ? h("span", { class: "snip" }, r.snippet) : null,
+    host ? h("span", { class: "host" }, host) : null);
+}
+function libWeb() {
+  if (!L.web) libWebPanel();
+  L.st.classList.add("chatting");
+  for (const id of L.cards.keys()) L.cards.get(id).el.classList.add("dim");
+  L.web.hidden = false; L.webHits.replaceChildren(); L.webIn.value = ""; L.webIn.disabled = false;
+  libWebPlace();
+  libSay("What should I look up?");
+  libLater(280, () => { if (L && L.job === "web") L.webIn.focus(); });
+}
+async function libWebGo(raw) {
+  const q = raw.trim();
+  if (!q || !L || L.job !== "web" || L.webIn.disabled) return;
+  const gen = ++L.webGen;
+  L.webIn.disabled = true; L.webHits.replaceChildren();
+  L.dotEl.classList.add("think");
+  libSay("Looking that up.");
+  let res;
+  try {
+    res = await api("/library/web", { method: "POST", body: JSON.stringify({ q }) });
+  } catch (e) {
+    if (!L || L.job !== "web" || L.webGen !== gen) return;
+    L.dotEl.classList.remove("think"); L.webIn.disabled = false;
+    const why = typeof e.body?.detail === "string" ? e.body.detail : "Something went wrong on my side. Try again.";
+    libSay(why); L.webIn.focus();
+    return;
+  }
+  if (!L || L.job !== "web" || L.webGen !== gen) return;
+  L.dotEl.classList.remove("think"); L.webIn.disabled = false;
+  const rows = (res.results || []).map(libWebHit).filter(Boolean);
+  L.webHits.replaceChildren(...rows);
+  const lead = rows.length ? `I found ${plural(rows.length, "page")}.` : "Nothing came back for that.";
+  libSay(res.note && rows.length ? `${lead} ${res.note}` : lead);
+  L.webIn.focus();
 }
 
 // Drag Dot onto a paper to peek at it. A plain click on Dot says hello again.
@@ -488,90 +553,161 @@ function libPeekClose() {
   L.st.querySelectorAll(".lspine.peek").forEach((s) => s.classList.remove("peek"));
 }
 
-// ---------- Ask: the blob becomes the field, a typist stamps your letters ----------
+// ---------- Ask and Persona: the blob becomes the field; the bubble itself reacts as you type ----------
 function libField() {
   const el = h("div", { class: "lfield abs", hidden: true });
-  const goo = h("div", { class: "goo" }, h("div", { class: "body" }), h("div", { class: "bump" }));
-  const head = h("div", { class: "head" }, h("span", { class: "ey" }, h("i"), h("i")));
+  const goo = h("div", { class: "goo" }, h("div", { class: "body" }));
   const line = h("div", { class: "line" });
+  const mirror = h("div", { class: "pmirror", "aria-hidden": "true" });
+  const caret = h("span", { class: "lcaret", "aria-hidden": "true" });
   const input = h("input", { type: "text", maxlength: 500, "aria-label": "Ask Dot", placeholder: "Ask me anything about your papers" });
-  el.append(goo, head, line, input);
+  const cap = h("p", { class: "pcap" });
+  const area = h("textarea", { class: "parea", rows: 2, maxlength: 300, "aria-label": "Who Dot is now", placeholder: "A calm tutor who loves puns" });
+  const clear = h("button", { type: "button", class: "pclear" }, "Back to my usual self");
+  el.append(goo, line, caret, input, cap, area, mirror, clear);
   L.st.append(el);
-  L.f = { el, goo, bump: goo.lastChild, head, line, input, shown: "", pen: { x: 30, y: 60, vx: 0, vy: 0, tx: 30, ty: 60, snap: true } };
-  input.addEventListener("input", () => libStampTo(input.value));
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && input.value.trim() && !input.disabled) { e.preventDefault(); (L.f.persona ? libSetPersona : libSend)(input.value.trim()); }
+  L.f = { el, goo, body: goo.firstChild, line, mirror, caret, input, cap, area, clear, shown: "", persona: false, gen: 0, ctl: null, retry: "" };
+  input.addEventListener("input", () => {
+    if (L.f.persona) return;
+    if (el.classList.contains("dot")) { const v = input.value; libNewTurn(false); input.value = v; } // first key clears the reply
+    libTypeTo(input.value);
   });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && input.value.trim() && !input.disabled && !L.f.persona) { e.preventDefault(); libSend(input.value.trim()); }
+  });
+  // the Ask caret is drawn by hand (the input is invisible), so keep it where the real caret is
+  for (const ev of ["keyup", "click", "select", "focus", "blur"]) input.addEventListener(ev, () => { if (!L.f.persona) libCaret(); });
+  area.addEventListener("input", () => {
+    if (!L.f.persona) return;
+    L.f.cap.textContent = area.value.trim() ? "Right now I am" : "No persona yet";
+    libTypeTo(area.value);
+  });
+  area.addEventListener("scroll", () => { mirror.scrollTop = area.scrollTop; });
+  area.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !area.disabled) { e.preventDefault(); if (area.value.trim()) libSetPersona(area.value.trim()); }
+  });
+  clear.addEventListener("click", (e) => { e.stopPropagation(); if (!L.f.asking) libSetPersona(""); });
   el.addEventListener("pointerdown", (e) => e.stopPropagation());
-  el.addEventListener("click", () => { if (input.disabled && !L.f.asking) libNewTurn(); });
+  el.addEventListener("click", () => { if (!L.f.asking && el.classList.contains("dot") && !L.f.persona) libNewTurn(); });
   L.histEl.addEventListener("pointerdown", (e) => e.stopPropagation());
-  L.st.addEventListener("click", (e) => { if (L.job === "ask" && !e.target.closest(".lfield, .lcard, .lpeek, .lhist, dialog") && !L.f.asking) libCloseField(); });
+  L.st.addEventListener("click", (e) => { if (L.job === "ask" && !e.target.closest(".lfield, .lcard, .lpeek, .lhist, dialog") && (!L.f.asking || L.f.ctl)) libCloseField(); });
 }
-function libPenStep(t, dt) {
-  const { pen, head, bump, el } = L.f, k = 0.14, c = 0.34;
-  pen.vx += ((pen.tx - pen.x) * k - pen.vx * c) * dt; pen.vy += ((pen.ty - pen.y) * k - pen.vy * c) * dt;
-  pen.x += pen.vx * dt; pen.y += pen.vy * dt;
-  const think = el.classList.contains("think") && !libRM();
-  const squash = 1 + Math.max(-0.12, Math.min(0.12, -pen.vy * 0.03));
-  const hy = pen.y - 16 + (think ? Math.sin(t / 140) * 2.5 : 0);
-  const tilt = Math.max(-8, Math.min(8, pen.vx * 1.2)) + (think ? Math.sin(t / 200) * 6 : 0);
-  head.style.transform = `translate3d(${pen.x - 17}px, ${hy}px, 0) rotate(${tilt}deg) scale(${2 - squash}, ${squash})`;
-  bump.style.transform = `translate3d(${pen.x - 25 + 30}px, ${hy - 10 + 30}px, 0) scale(${2 - squash}, ${squash})`;
-}
-function libPenTo(x, y) { const p = L.f.pen; p.tx = x; p.ty = y; if (p.snap || libRM()) { p.x = x; p.y = y; p.vx = p.vy = 0; p.snap = false; } }
-function libAimPen() {
-  const { line, el } = L.f, last = line.querySelectorAll("s"), fb = el.getBoundingClientRect();
-  if (!last.length) return libPenTo(30, fb.height + 9);
-  const r = last[last.length - 1].getBoundingClientRect();
-  libPenTo(Math.min(fb.width - 20, r.left - fb.left + r.width / 2 + 3), fb.height + 9);
-}
-function libFitField() { L.f.el.style.height = `${Math.max(52, L.f.line.offsetHeight)}px`; }
-function libStampTo(text) {
-  const f = L.f;
-  if (!text.startsWith(f.shown)) { f.line.replaceChildren(); f.shown = ""; }
-  let w = f.line.lastElementChild;
-  for (const ch of text.slice(f.shown.length)) {
-    if (ch === " ") { f.line.append(" "); w = null; continue; }
-    if (!w || w.nextSibling || w.tagName !== "SPAN") { w = h("span", { class: "w" }); f.line.append(w); }
-    const s = h("s", { style: `--r:${(Math.random() * 5 - 2.5).toFixed(1)}deg;--b:${(Math.random() * 2 - 1).toFixed(1)}px` }, ch);
-    w.append(s);
-    f.head.classList.add("tap"); setTimeout(() => f.head.classList.remove("tap"), 80); f.pen.vy -= 2;
+// Where is the caret (character offset `at`) inside the word spans of `box`? Returns viewport coordinates.
+function libCaretAt(box, at) {
+  const walk = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  let n = walk.nextNode(), left = at, last = null;
+  while (n) {
+    last = n;
+    if (left <= n.nodeValue.length) break;
+    left -= n.nodeValue.length; n = walk.nextNode();
   }
+  if (last) {
+    const r = document.createRange(), off = Math.min(left, last.nodeValue.length);
+    r.setStart(last, off); r.collapse(true);
+    const b = r.getClientRects()[0] || r.getBoundingClientRect();
+    if (b && (b.height || b.width)) return { x: b.left, y: b.top + b.height / 2 };
+  }
+  const br = box.getBoundingClientRect(), cs = getComputedStyle(box);
+  return { x: br.left + parseFloat(cs.paddingLeft), y: br.top + parseFloat(cs.paddingTop) + 11 };
+}
+// Ask draws its own caret over the word spans, because the input itself is invisible.
+function libCaret() {
+  const f = L.f; if (!f || f.el.hidden || f.persona) return;
+  const ctl = f.input, fb = f.el.getBoundingClientRect();
+  const on = document.activeElement === ctl && !ctl.disabled && !f.el.classList.contains("dot") && !f.el.classList.contains("think");
+  if (!on) { f.caret.style.cssText = ""; return; }
+  const c = libCaretAt(f.line, ctl.selectionStart ?? ctl.value.length);
+  f.caret.style.cssText = `opacity:1;transform:translate(${c.x - fb.left}px,${c.y - fb.top - 10}px)`;
+}
+function libFitField() {
+  const f = L.f;
+  if (f.el.classList.contains("persona") && !f.el.classList.contains("dot")) {
+    // The field grows from a small blob. Measuring mid-grow wraps every letter and the box becomes a sheet.
+    if (f.el.getBoundingClientRect().width < 200) return;
+    f.area.style.height = "0px";
+    const raw = f.area.scrollHeight;
+    const textH = Math.min(132, Math.max(48, raw));
+    f.area.style.height = `${textH}px`;
+    f.area.style.overflow = raw > 132 ? "auto" : "hidden";
+    const clearH = f.clear.hidden ? 0 : f.clear.offsetHeight + 8;
+    f.el.style.height = `${f.cap.offsetHeight + textH + clearH + 22}px`;
+    // the mirror sits exactly over the textarea so words can settle in while the real text stays editable
+    Object.assign(f.mirror.style, { top: `${f.area.offsetTop}px`, width: `${f.area.offsetWidth}px`, height: `${textH}px` });
+    f.mirror.scrollTop = f.area.scrollTop;
+    return;
+  }
+  f.el.style.height = `${Math.max(52, f.line.offsetHeight)}px`;
+}
+// Typing shows whole words, drawn as plain text while you type them. When a word is finished (a space follows it)
+// it fades up once as one piece and the bubble gives a small squash. Nothing animates per letter.
+// Ask draws the words itself (the input is invisible); Persona draws them over the real textarea.
+// `quiet` is for a value that was already there: no fade, no squash.
+function libTypeTo(text, quiet = false) {
+  const f = L.f, box = f.persona ? f.mirror : f.line, toks = text.split(/(\s+)/).filter(Boolean), go = !quiet && !libRM();
+  let finished = 0;
+  toks.forEach((tok, i) => {
+    const old = box.childNodes[i], space = /^\s/.test(tok);
+    let node = old;
+    if (old && (old.nodeType === 3) === space && (space || old.classList.contains("w"))) {
+      if (old.textContent !== tok) old.textContent = tok;
+    } else {
+      node = space ? document.createTextNode(tok) : h("span", { class: "w" }, tok);
+      if (old) old.replaceWith(node); else box.append(node);
+    }
+    // a word is finished once something follows it
+    if (!space && i < toks.length - 1 && !node.classList.contains("done")) {
+      node.classList.add("done");
+      if (go) { node.style.setProperty("--d", `${Math.min(finished, 6) * 35}ms`); node.classList.add("in"); }
+      finished++;
+    }
+  });
+  while (box.childNodes.length > toks.length) box.lastChild.remove();
   f.shown = text; f.el.classList.toggle("has-text", !!text);
-  libFitField(); libAimPen();
+  libFitField(); libCaret();
+  if (finished && go) libSquash();
+}
+// The bubble itself squashes a little and springs back. Only the blob behind the text moves, never the letters.
+function libSquash() {
+  const f = L.f, w = f.el.offsetWidth || 1, hh = f.el.offsetHeight || 1;
+  f.body.animate([{ scale: "1 1" }, { scale: `${1 + 7 / w} ${1 - 5 / hh}`, offset: 0.4 }, { scale: "1 1" }],
+    { duration: 240, easing: "cubic-bezier(.22,1,.36,1)" });
+  L.dotEl.animate([{ scale: "1 1" }, { scale: "1.035 .965", offset: 0.4 }, { scale: "1 1" }], { duration: 240, easing: "cubic-bezier(.22,1,.36,1)" }); // Dot answers with the bubble
 }
 // Dot's reply floats up in a wave, word by word, on Dot's yellow.
 function libReplyTo(text, buttons = []) {
   const f = L.f;
   f.el.classList.add("dot");
+  const acts = buttons.map(([label, fn]) => h("button", { type: "button", onclick: (e) => { e.stopPropagation(); fn(); } }, label));
+  if (f.persona) {
+    // one sentence, settling in together, rather than a character typing each letter
+    f.line.replaceChildren(h("span", { class: "whole" }, text), ...acts);
+    f.shown = "\u0000";
+    libFitField();
+    return libWait(libRM() ? 0 : 460);
+  }
   let i = 0;
   f.line.replaceChildren(...text.split(/(\s+)/).map((w) => (/^\s+$/.test(w) ? w
-    : h("span", { class: "w" }, [...w].map((ch) => h("s", { style: `--i:${i++}` }, ch))))),
-  ...buttons.map(([label, fn]) => h("button", { type: "button", onclick: (e) => { e.stopPropagation(); fn(); } }, label)));
+    : h("span", { class: libRM() ? "w" : "w in", style: `--d:${Math.min(i++ * 28, 700)}ms` }, w))), ...acts);
   f.shown = "\u0000";
-  libFitField(); libAimPen(); libLater(450, libAimPen); // again once the field has grown
-  return libWait(Math.min(1400, i * 9 + 400));
+  libFitField();
+  return libWait(libRM() ? 0 : Math.min(1000, i * 28 + 300));
 }
 function libDing() {
-  const p = L.f.pen, d = h("span", { class: "ding" }, "ding");
-  d.style.left = `${p.x + 14}px`; d.style.top = `${p.y - 46}px`; L.f.el.append(d);
+  const f = L.f, d = h("span", { class: "ding" }, "ding");
+  d.style.left = `${f.el.offsetWidth - 56}px`; d.style.top = "-26px"; f.el.append(d);
   d.animate([{ opacity: 0, transform: "translateY(4px) scale(.7)" }, { opacity: 1, transform: "translateY(-4px) scale(1)", offset: 0.3 },
     { opacity: 0, transform: "translateY(-14px)" }], { duration: 900, easing: "cubic-bezier(.22,1,.36,1)" }).onfinish = () => d.remove();
 }
-// The typist's eyes go wide, your letters fly into it, it eats them, gulps, and looks around while it thinks.
+// Sending: the question slides away as one piece and the bubble squashes, then Dot's yellow bubble thinks.
 async function libSwallow() {
-  const f = L.f, ss = [...f.line.querySelectorAll("s")], fb = f.el.getBoundingClientRect();
+  const f = L.f;
+  f.caret.style.cssText = "";
   if (libRM()) { f.line.replaceChildren(); f.shown = ""; return; }
-  f.head.classList.add("wide"); await libWait(220);
-  f.head.classList.replace("wide", "eat");
-  ss.forEach((el, i) => {
-    const r = el.getBoundingClientRect();
-    const dx = f.pen.x - (r.left - fb.left + r.width / 2), dy = f.pen.y - 6 - (r.top - fb.top + r.height / 2);
-    el.animate([{ transform: "none", opacity: 1 }, { transform: `translate(${dx}px, ${dy}px) scale(.15)`, opacity: 0.2 }],
-      { duration: 360, delay: (ss.length - 1 - i) * 16, easing: "cubic-bezier(.55,0,.8,.4)", fill: "forwards" });
-  });
-  await libWait(380 + ss.length * 16);
-  f.head.classList.remove("eat"); f.pen.vy += 4; f.line.replaceChildren(); f.shown = "";
+  libSquash();
+  const gone = f.line.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-6px)" }],
+    { duration: 220, easing: "cubic-bezier(.55,0,.8,.4)", fill: "forwards" });
+  await libWait(240);
+  gone.cancel(); f.line.replaceChildren(); f.shown = "";
 }
 
 // Dot stays where it is; the field opens right under it, fetched papers rise into the ring around it.
@@ -583,53 +719,61 @@ function libAskLayout() {
   L.histEl.style.transform = `translate3d(${W / 2 - fw / 2 - 16}px, ${top - 12}px, 0) translate(-100%, 0)`;
   libLayoutFetched();
 }
+function libShowPersona(now) {
+  const f = L.f;
+  f.area.value = now;
+  f.area.disabled = false;
+  f.cap.textContent = now ? "Right now I am" : "No persona yet";
+  f.clear.hidden = !now;
+  libTypeTo(now, true);
+}
 function libOpenField(persona = false) {
   const f = L.f, src = L.blobs.find((b) => b.dataset.k === (persona ? "persona" : "find"));
-  f.persona = persona;
-  f.input.placeholder = persona ? "Who should I be? Like: a calm tutor who loves puns" : "Ask me anything about your papers";
+  f.persona = persona; f.gen++; f.ctl?.abort(); f.ctl = null; f.retry = "";
+  f.input.placeholder = "Ask me anything about your papers";
   L.job = "ask"; L.lineGap = 62;
   libBlobsOut(false); libCardsReset();
   L.st.classList.add("chatting"); L.line.classList.add("off"); L.count.style.opacity = 0;
-  f.el.hidden = false; f.el.className = "lfield abs";
+  f.el.hidden = false; f.el.className = persona ? "lfield abs persona" : "lfield abs";
   f.el.style.transition = "none";
   f.el.style.transform = `translate3d(${src?.bx ?? L.dot.x}px, ${(src?.by ?? L.dot.y) - 18}px, 0) translate(-50%, 0)`;
-  f.input.value = ""; f.input.disabled = false; f.line.replaceChildren(); f.shown = ""; f.pen.snap = true; f.asking = false;
+  f.input.value = ""; f.input.disabled = false; f.line.replaceChildren(); f.mirror.replaceChildren(); f.caret.style.cssText = ""; f.shown = ""; f.asking = false;
+  const shown = persona ? (L.s.dot_persona?.trim() || "") : "";
+  if (persona) { f.area.value = shown; f.area.disabled = false; f.cap.textContent = shown ? "Right now I am" : "No persona yet"; f.clear.hidden = !shown; libTypeTo(shown, true); }
   void f.el.offsetWidth; f.el.style.transition = "";
   f.el.style.transition = "transform .55s cubic-bezier(.22,1,.36,1), width .6s cubic-bezier(.22,1,.36,1), height .4s cubic-bezier(.22,1,.36,1)";
-  requestAnimationFrame(() => { f.el.classList.add("open"); libAskLayout(); });
+  requestAnimationFrame(() => { f.el.classList.add("open"); libAskLayout(); if (persona) libLater(640, () => { if (L && L.f.persona) libFitField(); }); });
   L.fetched = [];
-  L.histEl.classList.toggle("off", !L.hist.length);
-  libLater(380, () => f.input.focus()); libLater(620, libAimPen);
-  if (persona) {
-    L.histEl.classList.add("off");
-    const now = L.s.dot_persona?.trim();
-    libLater(700, () => {
-      if (!now) return;
-      f.input.disabled = true;
-      libReplyTo(`Right now I am: ${now}. Click to change me.`, [["Back to my usual self", () => libSetPersona("")]]);
-    });
-  }
+  L.histEl.classList.toggle("off", persona || !L.hist.length);
+  if (persona && !libRM()) { L.dotEl.classList.add("blink"); libLater(160, () => L.dotEl?.classList.remove("blink")); }
+  libLater(380, () => (persona ? f.area : f.input).focus());
+  if (persona) api("/settings").then((fresh) => {
+    if (!L || !f.persona || f.asking || f.area.value !== shown) return;
+    L.s = fresh; libShowPersona(fresh.dot_persona?.trim() || "");
+  }).catch(() => {});
 }
 
 // Persona: you tell Dot who to be. Saved in Settings; Dot talks that way when you Ask.
 async function libSetPersona(text) {
   const f = L.f;
-  libDing(); f.input.value = ""; f.input.disabled = true; f.asking = true;
-  if (text) await libSwallow();
+  f.asking = true; f.area.disabled = true; f.el.classList.add("think");
   try {
     L.s = await api("/settings", { method: "PATCH", body: JSON.stringify({ dot_persona: text.slice(0, 300) }) });
-    await libReplyTo(text ? `Got it. From now on I am ${text.replace(/[.!]+$/, "")}. Ask me something and hear it.` : "Back to my usual self.");
-    L.dotEl.animate([{ scale: 1 }, { scale: "1.15 .88" }, { scale: ".94 1.06" }, { scale: 1 }], { duration: 500 });
+    f.el.classList.remove("think", "dot");
+    libShowPersona((L.s.dot_persona || "").trim());
+    if (!libRM()) L.dotEl.animate([{ scale: 1 }, { scale: "1.06 .96" }, { scale: 1 }], { duration: 420 });
   } catch (e) {
-    await libReplyTo(e.body?.detail?.errors?.dot_persona ? "That is too long. Keep it under 300 letters." : "I could not save that. Try again.");
+    f.el.classList.remove("think"); f.area.disabled = false;
+    f.cap.textContent = e.body?.detail?.errors?.dot_persona ? "That is too long. Keep it under 300 letters." : "I could not save that. Try again.";
   }
   f.asking = false;
 }
 function libCloseField(quiet = false) {
   const f = L.f; if (!f || f.el.hidden) return;
+  f.gen++; f.ctl?.abort(); f.ctl = null; f.retry = ""; f.asking = false;
   libTuckTurn();
-  f.el.classList.remove("open", "dot", "think", "has-text"); f.head.className = "head";
-  f.el.style.height = ""; f.line.replaceChildren(); f.shown = "";
+  f.el.classList.remove("open", "dot", "think", "has-text", "persona"); f.persona = false;
+  f.el.style.height = ""; f.line.replaceChildren(); f.mirror.replaceChildren(); f.caret.style.cssText = ""; f.shown = "";
   L.histEl.classList.add("off");
   const W = libW(), H = libH();
   f.el.style.transform = `translate3d(${W / 2}px, ${H / 2 - 120}px, 0) translate(-50%, 0)`;
@@ -637,11 +781,30 @@ function libCloseField(quiet = false) {
   L.job = null;
   if (!quiet) libHome();
 }
-function libNewTurn() {
+// After a reply the typing line comes back: the reply stays until the first key, so it can be read.
+function libReady() {
+  const f = L && L.f; if (!f || f.el.hidden || L.job !== "ask") return;
+  f.asking = false; f.ctl = null; f.input.disabled = false; f.input.value = "";
+  if (!f.persona) { f.input.focus(); libCaret(); }
+}
+// Clear the reply and show an empty typing line, or the words of a question that failed.
+function libNewTurn(restore = true) {
   const f = L.f;
   libTuckTurn();
-  f.el.classList.remove("dot"); f.input.disabled = false; f.input.value = ""; f.line.replaceChildren(); f.shown = "";
-  libFitField(); libAimPen(); f.input.focus();
+  f.el.classList.remove("dot", "think"); f.line.replaceChildren(); f.shown = "";
+  if (f.persona) { f.input.disabled = false; libShowPersona(L.s.dot_persona?.trim() || ""); f.area.focus(); return; }
+  const back = restore ? f.retry || "" : ""; f.retry = "";
+  f.asking = false; f.input.disabled = false; f.input.value = back;
+  libTypeTo(back, true); f.input.focus(); libCaret();
+}
+// Escape: cancel a pending question, leave a reply for a fresh line, or close the field.
+function libEscape() {
+  const f = L.f;
+  if (f.persona || f.el.hidden) return libCloseField();
+  if (f.ctl) { const q = L.turn?.q || ""; f.gen++; f.ctl.abort(); f.ctl = null; L.turn = null; f.retry = q; return libNewTurn(); }
+  if (f.asking) return libCloseField();
+  if (f.el.classList.contains("dot")) return libNewTurn();
+  libCloseField();
 }
 function libTuckTurn() {
   const t = L.turn; if (!t || !t.a) return;
@@ -698,22 +861,35 @@ const LIB_JOB = {
 };
 
 async function libSend(q) {
-  const f = L.f;
-  libDing(); f.input.value = ""; f.input.disabled = true; f.asking = true;
+  const f = L.f, gen = f.gen;
+  libDing(); f.input.value = ""; f.input.disabled = true; f.asking = true; f.retry = "";
   L.turn = { q, a: "" };
   await libSwallow();
-  if (!L) return;
-  f.el.classList.add("think"); f.head.classList.add("thinking");
+  if (!L || f.gen !== gen) return;
+  // never an empty pill while we wait: Dot's yellow bubble says so
+  f.el.classList.add("think"); libReplyTo("One moment.");
+  const ctl = f.ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 200000);
   let res;
   try {
-    res = await api("/library/ask", { method: "POST", body: JSON.stringify({ question: q, history: L.hist.slice(-4) }) });
+    res = await api("/library/ask", { method: "POST", signal: ctl.signal, body: JSON.stringify({ question: q, history: L.hist.slice(-4) }) });
   } catch (e) {
-    const why = e.status === 404 ? "I need the app restarted before I can answer. Stop it and start it again."
+    clearTimeout(timer);
+    if (!L || f.gen !== gen) return; // closed or cancelled while waiting: ignore
+    f.ctl = null; f.el.classList.remove("think"); L.turn = null;
+    const why = e.name === "AbortError" ? "That took too long. Try again."
+      : e.status === 404 ? "I need the app restarted before I can answer. Stop it and start it again."
       : typeof e.body?.detail === "string" ? e.body.detail : "Something went wrong on my side. Try again.";
-    res = { reply: why, action: { kind: "none", paper_ids: [] }, papers: [] };
+    // say so, then bring the typing line back with their words in it
+    f.retry = q; f.asking = false;
+    await libReplyTo(why);
+    await libWait(libRM() ? 0 : 1600);
+    if (L && f.gen === gen && f.retry === q && f.el.classList.contains("dot")) libNewTurn();
+    return;
   }
-  if (!L || L.job !== "ask") return;
-  f.el.classList.remove("think"); f.head.classList.remove("thinking");
+  clearTimeout(timer);
+  if (!L || f.gen !== gen || L.job !== "ask") return;
+  f.ctl = null;
+  f.el.classList.remove("think");
   const a = res.action || { kind: "none", paper_ids: [] };
   let ids = (a.paper_ids || []).filter((id) => libP(id));
   let reply = res.reply || "Done.";
@@ -727,15 +903,17 @@ async function libSend(q) {
   if (a.kind === "export" && ids.length !== 1) { reply += ids.length ? " Click the one you want and use More, then Export." : ""; a.kind = "find"; }
   L.turn.a = reply.replace(/\s+/g, " "); L.turn.res = res;
   L.hist.push({ q, a: L.turn.a }); L.hist = L.hist.slice(-4);
-  libRaise(res);
+  if ((res.papers || []).length || (res.sources || []).length) libRaise(res); else { libCardsReset(); L.fetched = []; libPlaceRing(1, new Set()); }
   if (a.kind === "delete") {
-    await libReplyTo(reply, [["Yes, delete", () => libRunJob(a, ids, "Deleted.")], ["No", () => libReplyTo("Kept them. Nothing was deleted.").then(() => { f.asking = false; })]]);
+    await libReplyTo(reply, [["Yes, delete", () => libRunJob(a, ids, "Deleted.")], ["No", () => libReplyTo("Kept them. Nothing was deleted.").then(() => libReady())]]);
     return;
   }
+  if (a.kind !== "export" && !(LIB_JOB[a.kind] && ids.length)) { libReplyTo(reply); libReady(); return; } // the typing line is usable while the reply settles in
   await libReplyTo(reply);
-  if (a.kind === "export") { exportDialog(libP(ids[0]), "markdown"); f.asking = false; return; }
+  if (f.gen !== gen) return;
+  if (a.kind === "export") { exportDialog(libP(ids[0]), "markdown"); libReady(); return; }
   if (LIB_JOB[a.kind] && ids.length) return libRunJob(a, ids);
-  f.asking = false;
+  libReady();
 }
 
 // Helpers fly to each paper in turn and do the job through the existing endpoints.
@@ -744,7 +922,7 @@ async function libRunJob(a, ids, doneText) {
   if (a.kind === "add_theme") {
     let t = themeList.find((x) => x.name.toLowerCase() === a.theme.toLowerCase());
     try { t ||= await api("/themes", { method: "POST", body: JSON.stringify({ name: a.theme }) }); }
-    catch { await libReplyTo(`I could not make the theme "${a.theme}".`); f.asking = false; return; }
+    catch { await libReplyTo(`I could not make the theme "${a.theme}".`); libReady(); return; }
     a.themeId = t.id;
   }
   const job = LIB_JOB[a.kind];
@@ -776,7 +954,7 @@ async function libRunJob(a, ids, doneText) {
     : bad.length ? `Done with ${ok}. These did not work: ${bad.map((t) => `"${t}"`).join(", ")}.` : `All done, ${plural(ok, "paper")}.`;
   await libReplyTo(msg);
   if (L.turn) L.turn.a += ` ${msg}`;
-  f.asking = false;
+  libReady();
 }
 
 // ---------- shelf mode ----------
@@ -804,7 +982,7 @@ function libToShelf() {
       libShelfSay("New theme made. Add papers to it from a paper's + Theme."); libRenderShelf(); return;
     }
     const q = inp.value.trim(); inp.value = ""; L.q = ""; L.qIds = null;
-    libHome(); await libJob("find"); libLater(500, () => { L.f.input.value = q; libStampTo(q); libLater(300, () => libSend(q)); });
+    libHome(); await libJob("find"); libLater(500, () => { L.f.input.value = q; libTypeTo(q); libLater(300, () => libSend(q)); });
   };
   L.sblobs.hidden = false; libShelfTags();
   L.shelf.hidden = false;

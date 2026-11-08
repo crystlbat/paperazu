@@ -1,5 +1,5 @@
 /* The Library around Dot. A graphite desk in both themes: Dot's device colour, so the yellow reads as Dot.
-   Motion: transforms only. Positions of cards, blobs and the typist are set each frame in library.js. */
+   Motion: transforms only. Positions of cards and blobs are set each frame in library.js. */
 body.lib-on .buddy { display: none !important; }
 #view.page-library { position: relative; overflow: hidden; padding: 0; }
 .lst {
@@ -11,7 +11,7 @@ body.lib-on .buddy { display: none !important; }
   background: radial-gradient(ellipse 34% 40% at 50% 52%, rgb(255 227 71 / .09), transparent 70%); }
 .lst :focus-visible { outline: 2px solid var(--dotc); outline-offset: 3px; }
 /* text boxes on the stage are part of Dot: no box outline, the body itself shows focus */
-.lst input, .lst input:focus, .lst input:focus-visible { outline: 0 !important; box-shadow: none !important; border: 0 !important; background: transparent; -webkit-appearance: none; appearance: none; }
+.lst input, .lst textarea, .lst input:focus, .lst textarea:focus, .lst input:focus-visible, .lst textarea:focus-visible { outline: 0 !important; box-shadow: none !important; border: 0 !important; background: transparent; -webkit-appearance: none; appearance: none; }
 .lfield:focus-within .goo .body { box-shadow: 0 0 0 3px rgb(255 255 255 / .25); }
 .lst .abs { position: absolute; left: 0; top: 0; will-change: transform; }
 
@@ -149,6 +149,30 @@ body.lib-on .buddy { display: none !important; }
 .k-persona .pr::after { content: ""; position: absolute; left: 5px; top: 7px; width: 12px; height: 2px; background: #ff5c7a; }
 .k-persona .bod { background: radial-gradient(circle at 30% 64%, #ff6f6f 0 3px, transparent 4px), radial-gradient(circle at 70% 64%, #ff6f6f 0 3px, transparent 4px), var(--bc); }
 @keyframes ltip { 0%, 65%, 100% { rotate: 0deg; translate: -50% 0; } 75% { rotate: -16deg; translate: -50% -4px; } 85% { rotate: 0deg; translate: -50% 0; } }
+/* Web: a lens, bigger than the other marks, that scans. No mouth. */
+.k-web .e { top: 32%; }
+.k-web .pr { left: 9px; top: 20px; width: 34px; height: 30px; animation: lscan 1.8s ease-in-out infinite; }
+.k-web .pr::before { content: ""; position: absolute; left: 0; top: 0; width: 20px; height: 20px; box-sizing: border-box;
+  border: 2.5px solid #1f2023; border-radius: 50%; background:
+    linear-gradient(#1f2023, #1f2023) 50% 42% / 12px 2px no-repeat,
+    rgb(255 255 255 / .55); }
+.k-web .pr::after { content: ""; position: absolute; left: 16px; top: 16px; width: 12px; height: 3.5px; border-radius: 2px;
+  background: #1f2023; rotate: 42deg; }
+@keyframes lscan { 0%, 100% { translate: 0 0; } 50% { translate: 8px -5px; } }
+.lweb { z-index: 13; width: min(480px, 88vw); display: flex; flex-direction: column; gap: 10px; }
+.lweb[hidden] { display: none; }
+.lweb form { display: flex; align-items: center; height: 48px; border-radius: 24px; background: var(--g1);
+  box-shadow: inset 0 0 0 1px var(--gl); }
+.lweb form:focus-within { box-shadow: inset 0 0 0 2px var(--dotc); }
+.lweb input { flex: 1; width: 100%; height: 48px; padding: 0 18px; color: var(--tx); font: 500 16px/1.4 var(--sans); }
+.lweb input::placeholder { color: var(--tx2); }
+.lweb .hits { display: flex; flex-direction: column; gap: 8px; max-height: min(420px, calc(100vh - 300px)); overflow: auto; }
+.lweb .hit { display: block; padding: 10px 12px 11px; border-radius: 12px; background: var(--g1); color: var(--tx);
+  text-decoration: none; box-shadow: inset 3px 0 0 var(--dotc); user-select: text; }
+.lweb .hit:hover { background: var(--g2); }
+.lweb .hit strong { display: block; color: var(--dotc); font: 600 15px/1.3 var(--sans); }
+.lweb .hit .snip { display: block; margin-top: 4px; color: var(--tx); font: 450 14px/1.45 var(--sans); }
+.lweb .hit .host { display: block; margin-top: 4px; color: var(--tx2); font: 500 12px/1.3 var(--sans); }
 /* shelf-only blobs: simple marks under the eyes */
 .k-group .pr, .k-sort .pr, .k-show .pr, .k-theme .pr, .k-bubble .pr { left: 50%; bottom: 9px; translate: -50% 0; width: 14px; height: 7px; }
 .k-group .pr { background: radial-gradient(circle, #1f2023 2px, transparent 2.5px) 0 0 / 7px 7px; }
@@ -159,35 +183,26 @@ body.lib-on .buddy { display: none !important; }
 .k-group .e, .k-sort .e, .k-show .e, .k-theme .e, .k-bubble .e { top: 40%; }
 .lblob.calm .bod { animation: none; }
 
-/* ---------- Ask: the blob stretched into a field, a typist under the letters ---------- */
+/* ---------- Ask and Persona: the blob stretched into a field; the bubble squashes as words finish ---------- */
 .lfield { z-index: 13; width: 38px; height: 36px; margin: 0; box-sizing: border-box; color: #1f2023; filter: drop-shadow(0 14px 18px rgb(0 0 0 / .45));
   transition: width .6s cubic-bezier(.22,1,.36,1), height .4s cubic-bezier(.22,1,.36,1), opacity .2s; }
 .lfield[hidden] { display: none; }
 .lfield.open { width: min(460px, 84vw); height: 52px; }
 .lfield .goo { position: absolute; inset: -30px; filter: url(#lgoo); pointer-events: none; }
 .lfield .goo .body { position: absolute; inset: 30px; border-radius: 26px; background: #9fd1ff; transition: background .5s cubic-bezier(.22,1,.36,1); }
-.lfield .goo .bump { position: absolute; left: 0; top: 0; width: 50px; height: 44px; border-radius: 50%; background: #9fd1ff; opacity: 0; transition: opacity .3s .3s, background .5s; will-change: transform; }
-.lfield.open .goo .bump { opacity: 1; }
-.lfield.dot .goo .body, .lfield.dot .goo .bump { background: var(--dotc); }
-.lfield .head { position: absolute; left: 0; top: 0; z-index: 3; width: 34px; height: 32px; display: flex; align-items: center; justify-content: center; opacity: 0;
-  pointer-events: none; transition: opacity .25s .25s; will-change: transform; }
-.lfield.open .head { opacity: 1; }
-.lfield .head .ey { display: flex; gap: 5px; translate: 0 -3px; }
-.lfield .head .ey i { width: 4.5px; height: 8px; border-radius: 2px; background: #1f2023; transition: height .15s, width .15s, rotate .15s, border-radius .15s; }
-.lfield .head::after { content: ""; position: absolute; left: 7px; right: 7px; top: -5px; height: 8px; border-radius: 2px; transform-origin: 50% 100%; transition: transform .08s;
-  background: linear-gradient(#1f2023, #1f2023) 0 100% / 4px 8px no-repeat, linear-gradient(#1f2023, #1f2023) 100% 100% / 4px 8px no-repeat; }
-.lfield .head.tap::after { transform: translateY(-5px) scaleY(1.3); }
-.lfield .head.wide .ey i { width: 6px; height: 11px; border-radius: 3px; }
-.lfield .head.eat .ey i { height: 3px; width: 7px; border-radius: 3px; }
-.lfield .head.eat .ey i:first-child { rotate: -20deg; } .lfield .head.eat .ey i:last-child { rotate: 20deg; }
-.lfield .head.thinking .ey { animation: llook 1.1s ease-in-out infinite; }
-@keyframes llook { 0%, 100% { translate: -3px -5px; } 50% { translate: 3px -6px; } }
-.lfield .line { position: absolute; z-index: 2; left: 22px; right: 20px; top: 0; padding: 15px 0; font: 500 16px/22px var(--sans); white-space: pre-wrap; pointer-events: none; }
-.lfield .line .w { white-space: nowrap; }
-.lfield .line s { text-decoration: none; display: inline-block; transform: translateY(var(--b)) rotate(var(--r)); animation: lstamp .2s cubic-bezier(.2,1.5,.4,1) both; }
-@keyframes lstamp { from { transform: translateY(-9px) scale(1.35) rotate(var(--r)); opacity: 0; filter: blur(1px); }
-  55% { transform: translateY(1.5px) scale(.96) rotate(var(--r)); opacity: 1; } }
-.lfield.dot .line s { animation: lrise .5s cubic-bezier(.22,1,.36,1) both; animation-delay: calc(var(--i, 0) * 9ms); transform: none; }
+.lfield.dot .goo .body { background: var(--dotc); }
+/* a short neck up to Dot, so the bubble reads as Dot's own and never as a loose bar (it melts into the bubble through the goo filter) */
+.lfield .goo .body::before { content: ""; position: absolute; left: 50%; top: -22px; width: 30px; height: 26px; margin-left: -15px; background: inherit; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.lfield .line { position: absolute; z-index: 2; left: 22px; right: 20px; top: 0; padding: 15px 0; font: 500 16px/22px var(--sans); white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; }
+.lfield .line s { text-decoration: none; }
+/* words fade up as one piece: Dot's reply from nothing, a word you just finished from a little dimmer */
+.lfield .line .w.in, .lfield .pmirror .w.in { position: relative; animation: wsettle .24s cubic-bezier(.22,1,.36,1) var(--d, 0ms) both; }
+.lfield .w.done.in { animation-name: wdone; }
+@keyframes wsettle { from { opacity: 0; top: 6px; } to { opacity: 1; top: 0; } }
+@keyframes wdone { from { opacity: .4; top: 4px; } to { opacity: 1; top: 0; } }
+.lfield .lcaret { position: absolute; z-index: 4; left: 0; top: 0; width: 2px; height: 20px; border-radius: 1px; background: #1f2023; opacity: 0; pointer-events: none;
+  animation: lblink 1.1s steps(1) infinite; }
+@keyframes lblink { 50% { background: transparent; } }
 .lfield .line button { pointer-events: auto; font: inherit; color: #1f2023; background: none; border: 0; padding: 0 3px; margin-left: 4px; cursor: pointer; text-decoration: underline 2px; text-underline-offset: 3px; }
 .lfield input { position: absolute; z-index: 3; left: 22px; right: 20px; top: 0; height: 52px; padding: 0; border: 0; outline: 0; background: transparent;
   font: 500 16px var(--sans); color: transparent; caret-color: transparent; opacity: 0; transition: opacity .2s .25s; }
@@ -195,6 +210,39 @@ body.lib-on .buddy { display: none !important; }
 .lfield input::placeholder { color: #4d6b85; }
 .lfield.has-text input::placeholder, .lfield.dot input::placeholder { color: transparent; }
 .lfield .ding { position: absolute; z-index: 4; font: 600 12px var(--mono); color: var(--dotc); pointer-events: none; }
+/* Persona: the current line sits in a real textarea. Its words are drawn by a mirror over it so they can settle in. */
+.lfield .pcap, .lfield .parea, .lfield .pclear, .lfield .pmirror { display: none; }
+.lfield.persona > input { display: none; }
+.lfield.persona .pmirror { display: block; position: absolute; z-index: 4; left: 0; top: 0; box-sizing: border-box; overflow: hidden; pointer-events: none;
+  padding: 8px 22px 2px; font: 500 16px/22px var(--sans); color: #1f2023; white-space: pre-wrap; overflow-wrap: break-word; }
+.lfield.persona.dot .pmirror { display: none; }
+.lfield.persona.open { width: min(460px, 84vw); height: auto; min-height: 0; }
+.lfield.persona .pcap, .lfield.persona .parea, .lfield.persona .pclear { display: block; position: relative; z-index: 3; }
+.lfield.persona .pcap { margin: 0; padding: 14px 22px 0; font: 600 12px/1.2 var(--sans); color: #3d5a73; }
+.lfield.persona .parea {
+  width: 100%; height: 66px; box-sizing: border-box; margin: 0; padding: 8px 22px 2px; border: 0; outline: 0; resize: none;
+  background: transparent; font: 500 16px/22px var(--sans); color: transparent; caret-color: #1f2023; overflow: hidden; scrollbar-width: none;
+}
+.lfield.persona .parea::-webkit-scrollbar { display: none; }
+.lfield.persona .parea::placeholder { color: #4d6b85; font-style: italic; }
+/* empty: a dashed line makes it plain that nothing is saved and the grey text is only a hint */
+.lfield.persona .parea:placeholder-shown { background: repeating-linear-gradient(90deg, rgb(61 90 115 / .55) 0 6px, transparent 6px 11px) 22px calc(100% - 3px) / calc(100% - 44px) 1.5px no-repeat; }
+.lfield.persona .parea:focus-visible { outline: none; border: 0; box-shadow: none; }
+.lfield.persona .pclear {
+  margin: 2px 22px 14px; padding: 0; border: 0; background: none; cursor: pointer; font: inherit; color: #1f2023;
+  text-decoration: underline 2px; text-underline-offset: 3px; text-align: left;
+}
+.lfield.persona .pclear[hidden] { display: none; }
+.lfield.persona .line { display: none; }
+.lfield.persona.dot .line { display: block; }
+.lfield.persona.dot .pcap, .lfield.persona.dot .parea, .lfield.persona.dot .pclear { display: none; }
+.lfield.persona .line .whole { display: inline; animation: psettle .45s cubic-bezier(.22,1,.36,1) both; }
+.lfield.think .goo .body, .lfield.persona.think .goo .body { animation: pbreathe 1.15s ease-in-out infinite; }
+@keyframes psettle { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes pbreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } }
+@media (prefers-reduced-motion: reduce) {
+  .lfield.persona .line .whole, .lfield.think .goo .body, .lfield .w.in, .lfield .w.done.in, .lfield .lcaret { animation: none; }
+}
 .lst.chatting .lcard:not(.fetched):not(.lift):not(.gone) { opacity: .38; filter: saturate(.6); }
 .lst.chatting .lcount { opacity: 0 !important; }
 .lcard.fetched { z-index: 12; border-color: var(--tc); box-shadow: 0 18px 36px -14px #000, 0 0 0 2px color-mix(in srgb, var(--tc) 60%, transparent); }

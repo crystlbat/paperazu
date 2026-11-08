@@ -16,7 +16,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from . import canvas, checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, settings, shelf, themes
+from . import canvas, checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, settings, shelf, themes, websearch
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -81,6 +81,12 @@ def _errors(e: ValidationError) -> dict[str, str]:
 @app.post("/settings/test-connection")
 def test_connection() -> dict[str, Any]:
     return llm.test_connection(settings.get_all())
+
+
+@app.post("/settings/check-context")
+def check_context() -> dict[str, Any]:
+    """Reads the context window the local server reports. Does not send the paper."""
+    return llm.context_window(settings.get_all())
 
 
 @app.post("/papers", status_code=201)
@@ -498,6 +504,15 @@ def canvas_say(paper_id: str, cid: int, body: dict[str, Any] = Body(...)) -> dic
     return out
 
 
+@app.post("/papers/{paper_id}/canvas/cards/{cid}/pickup")
+def canvas_pickup(paper_id: str, cid: int) -> dict[str, Any]:
+    """Dot picks up an @ai task left on this card."""
+    out = canvas.pickup(settings.get_all(), paper_id, cid)
+    if out is None:
+        raise HTTPException(404, detail="This card is not there.")
+    return out
+
+
 @app.post("/papers/{paper_id}/canvas/links")
 def add_link(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     try:
@@ -707,6 +722,32 @@ def library_ask(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     except ValidationError as e:
         raise HTTPException(422, detail={"errors": _errors(e)})
     return shelf.ask(settings.get_all(), req.question.strip(), [t.model_dump() for t in req.history])
+
+
+class WebSearchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    q: str = Field(min_length=1, max_length=200)
+
+    @field_validator("q")
+    @classmethod
+    def _words(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if not v:
+            raise ValueError("Tell me what to look up.")
+        return v
+
+
+@app.post("/library/web")
+def library_web(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Search the web through Unsloth. The body is only the query."""
+    try:
+        req = WebSearchIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    try:
+        return websearch.search(settings.get_all(), req.q)
+    except RuntimeError as e:
+        raise HTTPException(502, detail=str(e))
 
 
 @app.get("/model/status")

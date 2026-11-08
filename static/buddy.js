@@ -277,6 +277,7 @@ const buddy = (() => {
     st.off = { x: 0, y: 0 }; st.away = false;
     root.style.setProperty("--trip", "700ms");
     root.style.transform = "";
+    showHome();
   }
   async function goHome() {
     if (!st.away) return;
@@ -485,25 +486,25 @@ const buddy = (() => {
   toolsEl.className = "buddy-tools"; toolsEl.hidden = true; toolsEl.setAttribute("role", "menu");
   root.insertBefore(toolsEl, face);
   /** setTools([{ group, name, hint, pick() }]) or null to go back to tips */
-  function setTools(list) { tools = list; closeTools(); }
-  function closeTools() { toolsEl.hidden = true; root.classList.remove("tools-open"); }
+  function setTools(list) { tools = list; closeTools(); if (atHome()) showHome(); }
+  let homeStay = false;
+  function closeTools() { homeStay = false; toolsEl.hidden = true; root.classList.remove("tools-open"); }
   const atHome = () => !st.follow && !st.away && !root.classList.contains("moving");
   function toggleTools() {
     if (!atHome()) return closeTools(); // wandering: the paragraph buddies do the work, not this row
     if (!toolsEl.hidden) return closeTools();
     hide();
     const list = tools.slice();
-    const span = Math.PI * 0.5, gap = list.some((t, i) => i && t.group !== list[i - 1].group) ? 0.22 : 0;
-    const step = (span - gap) / Math.max(1, list.length - 1);
-    let a = Math.PI * 1.02;
+    const span = Math.PI * 0.5, radius = 128; // left to straight up, just off the face, circles do not touch
+    const step = span / Math.max(1, list.length - 1);
+    let a = Math.PI;
     const buttons = list.map((t, i) => {
-      if (i && t.group !== list[i - 1].group) a += gap;
       const b = document.createElement("button");
       b.type = "button"; b.className = `buddy-tool tool-${t.key || "item"}${t.on ? " on" : ""}`;
       b.setAttribute("role", "menuitem"); b.setAttribute("aria-label", t.hint ? `${t.name}. ${t.hint}` : t.name);
       b.style.setProperty("--k", i); b.style.setProperty("--bc", t.color || "#ffe347");
-      b.style.left = `calc(50% + ${Math.cos(a) * 62}px)`;
-      b.style.top = `calc(50% + ${Math.sin(a) * 62}px)`;
+      b.style.setProperty("--ox", `${Math.cos(a) * radius}px`);
+      b.style.setProperty("--oy", `${Math.sin(a) * radius}px`);
       a += step;
       b.innerHTML = t.icon || "";
       const tip = document.createElement("span"); tip.className = "tip";
@@ -516,9 +517,22 @@ const buddy = (() => {
     toolsEl.replaceChildren(...buttons);
     toolsEl.hidden = false; root.classList.add("tools-open");
     draw();
-    toolsEl.querySelector("button")?.focus();
+    if (!homeStay) toolsEl.querySelector("button")?.focus();
   }
-  document.addEventListener("pointerdown", (e) => { if (!toolsEl.hidden && !root.contains(e.target)) closeTools(); });
+  const paperSelection = () => {
+    const s = getSelection();
+    if (!s || s.isCollapsed || !s.anchorNode) return false;
+    const layer = document.querySelector(".page-read .textLayer");
+    return !!(layer && layer.contains(s.anchorNode));
+  };
+  function showHome() {
+    if (!tools || !atHome() || paperSelection()) return closeTools();
+    homeStay = true;
+    if (!toolsEl.hidden) return;
+    toggleTools();
+  }
+  document.addEventListener("selectionchange", () => { if (tools && atHome()) showHome(); });
+  document.addEventListener("pointerdown", (e) => { if (!homeStay && !toolsEl.hidden && !root.contains(e.target)) closeTools(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !toolsEl.hidden) { closeTools(); face.focus(); } });
 
   // ---------- reading mode: follow the pointer, offer options, change shape, become the input ----------
@@ -562,7 +576,7 @@ const buddy = (() => {
   document.documentElement.addEventListener("mouseenter", () => { mouse.in = true; });
 
   /** toolsOn("click" | "context"): the gesture that opens the tools menu */
-  function toolsOn(how) { toolsHow = how === "context" ? "context" : "click"; closeTools(); }
+  function toolsOn(how) { toolsHow = how === "context" ? "context" : "click"; if (tools && atHome()) showHome(); else closeTools(); }
 
   const shapeClass = { lens: "sh-lens", squash: "sh-squash", pill: "sh-pill", blob: "sh-blob" };
   /** shape("face" | "marker" | "lens" | "squash" | "pill"): resolves when the change has settled (about 380 ms) */
@@ -577,38 +591,145 @@ const buddy = (() => {
     return reduced() ? Promise.resolve() : waitSkippable(380);
   }
 
-  /** options({ x, y, items:[{ key, label, icon, color, disabled }], angle, caption }) -> the key picked, or null.
-      Dot is a smiling blob at (x, y) and each tool is a small buddy of its own (body, eyes, icon, label), like the Library's
-      buddies: they ease out of Dot and settle on an arc around it. `angle` (radians) is where the middle of the arc points;
-      the caller picks it so the buddies sit in clear space. Pick one and Dot gulps it; Escape, Back or a click outside folds them in.
-      `caption` is a short line under Dot (what just happened). */
+  function nudgeMoonNames(orbs, angles) {
+    const words = [...document.querySelectorAll(".page-read .textLayer span")]
+      .filter((sp) => sp.textContent.trim()).map((sp) => sp.getBoundingClientRect()).filter((r) => r.width > 1);
+    const passages = [...document.querySelectorAll(".sel-box:not([hidden])")].map((el) => el.getBoundingClientRect());
+    const over = (r, list) => list.some((s) => r.left < s.right && r.right > s.left && r.top < s.bottom && r.bottom > s.top);
+    orbs.forEach((b, i) => {
+      const ux = Math.cos(angles[i]), uy = Math.sin(angles[i]);
+      let dist = 46;
+      const tag = b.querySelector(".tag");
+      const stage = document.querySelector(".pdf-stage")?.getBoundingClientRect();
+      for (let k = 0; k < 14; k++) {
+        b.style.setProperty("--lx", `${Math.round(ux * dist)}px`);
+        b.style.setProperty("--ly", `${Math.round(uy * dist)}px`);
+        const box = tag.getBoundingClientRect();
+        const r = { left: box.left - 4, right: box.right + 4, top: box.top - 3, bottom: box.bottom + 3 };
+        const moon = orbs.some((o) => {
+          if (o === b) return false;
+          const m = (o.querySelector(".bod") || o).getBoundingClientRect();
+          return r.left < m.right && r.right > m.left && r.top < m.bottom && r.bottom > m.top;
+        });
+        const offStage = stage && (box.left < stage.left + 4 || box.right > stage.right - 4 || box.top < stage.top + 4 || box.bottom > stage.bottom - 4);
+        if (offStage || (!over(r, words) && !over(r, passages) && !moon)) break;
+        dist += 28;
+      }
+    });
+  }
+
+  // Moons: one even ring around Dot. The old column of places is not used.
+  // Face is 92px while the ring is open, so the centre stays 46px clear of the paper edge.
+  function moonSpot(hintX, hintY, n) {
+    const FACE = 46, MOON = 32;
+    const stage = document.querySelector(".pdf-stage")?.getBoundingClientRect();
+    const bar = Math.max(
+      document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0,
+      document.querySelector(".pdf-tools")?.getBoundingClientRect().bottom || 0,
+    );
+    const tab = document.querySelector(".cv-tab")?.getBoundingClientRect();
+    const L = (stage?.left ?? 8) + 8;
+    const Rgt = Math.min(stage?.right ?? innerWidth, tab && tab.width > 8 ? tab.left - 6 : innerWidth) - 8;
+    const T = Math.max(stage?.top ?? 0, bar) + 8;
+    const B = (stage?.bottom ?? innerHeight) - 8;
+    const passages = [];
+    const sel = getSelection();
+    if (sel && !sel.isCollapsed && sel.rangeCount) { for (const r of sel.getRangeAt(0).getClientRects()) passages.push(r); }
+    document.querySelectorAll(".sel-box:not([hidden])").forEach((el) => passages.push(el.getBoundingClientRect()));
+    const words = [...document.querySelectorAll(".page-read .textLayer span")]
+      .filter((sp) => sp.textContent.trim())
+      .map((sp) => sp.getBoundingClientRect())
+      .filter((r) => r.width > 1 && r.height > 1);
+    const hit = (box, rects) => rects.some((r) => box.l < r.right - 1 && box.r > r.left + 1 && box.t < r.bottom - 1 && box.b > r.top + 1);
+    const disk = (cx, cy, rad) => ({ l: cx - rad, t: cy - rad, r: cx + rad, b: cy + rad });
+    const blocked = (cx, cy, R, wordsToo) => {
+      const name = 46; // room for the short name just outside the moon
+      if (cx - R - MOON - name < L || cx + R + MOON + name > Rgt || cy - R - MOON - 18 < T || cy + R + MOON + 18 > B) return true;
+      if (hit(disk(cx, cy, FACE - 2), passages)) return true;
+      if (wordsToo && hit(disk(cx, cy, FACE - 6), words)) return true;
+      for (let i = 0; i < n; i++) {
+        const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+        const mx = cx + Math.cos(a) * R, my = cy + Math.sin(a) * R;
+        if (hit(disk(mx, my, MOON), passages)) return true;
+        if (wordsToo && hit(disk(mx, my, MOON - 2), words)) return true;
+      }
+      return false;
+    };
+    const clear = (cx, cy, R) => !blocked(cx, cy, R, true);
+    const pack = (cx, cy, R) => ({
+      x: cx, y: cy, r: R,
+      moons: Array.from({ length: n }, (_, i) => {
+        const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+        return [cx + Math.cos(a) * R, cy + Math.sin(a) * R];
+      }),
+      angles: Array.from({ length: n }, (_, i) => -Math.PI / 2 + (i * 2 * Math.PI) / n),
+    });
+    const radii = [124, 116, 108, 100, 92];
+    const seeds = [[hintX, hintY]];
+    if (passages.length) {
+      const top = Math.min(...passages.map((r) => r.top));
+      const bot = Math.max(...passages.map((r) => r.bottom));
+      const mid = passages.reduce((s, r) => s + (r.left + r.right) / 2, 0) / passages.length;
+      const side = passages.reduce((s, r) => s + r.left, 0) / passages.length;
+      for (const R of radii) {
+        seeds.push([mid, top - R - MOON - 16], [mid, bot + R + MOON + 16]);
+        seeds.push([side - R - MOON - 16, (top + bot) / 2], [passages.reduce((s, r) => Math.max(s, r.right), 0) + R + MOON + 16, (top + bot) / 2]);
+      }
+    }
+    const scan = (wordsToo) => {
+      const near = [...seeds].sort((a, b) => Math.hypot(a[0] - hintX, a[1] - hintY) - Math.hypot(b[0] - hintX, b[1] - hintY));
+      for (const [sx, sy] of near) {
+        for (const R of radii) if (!blocked(sx, sy, R, wordsToo)) return pack(sx, sy, R);
+      }
+      for (let ring = 1; ring <= 12; ring++) {
+        for (let k = 0; k < 16; k++) {
+          const a = (k / 16) * Math.PI * 2;
+          const cx = hintX + Math.cos(a) * ring * 32, cy = hintY + Math.sin(a) * ring * 32;
+          for (const R of radii) if (!blocked(cx, cy, R, wordsToo)) return pack(cx, cy, R);
+        }
+      }
+      return null;
+    };
+    const found = scan(true) || scan(false);
+    if (found) return found;
+    const top = passages.length ? Math.min(...passages.map((r) => r.top)) : hintY;
+    const cx = Math.max(L + FACE + 40, Math.min(Rgt - FACE - 40, hintX));
+    const cy = Math.max(T + FACE + 40, Math.min(top - 120, B - FACE - 40));
+    const room = Math.min(cx - L, Rgt - cx, cy - T, B - cy) - MOON - 46;
+    return pack(cx, cy, Math.max(72, Math.min(84, room)));
+  }
+
+  /** options({ x, y, items:[{ key, label, icon, color, disabled }], caption }) -> the key picked, or null.
+      Dot grows to the large face and the tools sit as equal moons around it. They ease out of the face.
+      Escape, Back or a click outside folds them in. `caption` is a short line under Dot. */
   function options({ x, y, items, angle = -Math.PI / 2, places = null, labelsRight = true, caption = "" }) {
     closeTools();
     if (x == null) [x, y] = centre();
+    void angle; void places; void labelsRight;
+    const spot = moonSpot(x, y, items.length);
+    const faceEl = root.querySelector(".buddy-face");
+    root.classList.add("attached");
+    root.style.transition = "none";
+    faceEl.style.transition = "none"; // grow to 92px before centring, or the ring slips off the eyes
+    void faceEl.offsetWidth;
+    place(spot.x, spot.y);
+    void faceEl.offsetWidth;
+    root.style.transition = "";
+    faceEl.style.transition = "";
+    x = spot.x; y = spot.y;
     st.ui += 1;
     const wrap = document.createElement("div");
-    wrap.className = "buddy-opts";
+    wrap.className = "buddy-opts ring";
+    wrap.dataset.radius = String(Math.round(spot.r));
     wrap.setAttribute("role", "menu"); wrap.setAttribute("aria-label", "Dot's tools");
     const cap = document.createElement("p");
     cap.className = "ob-cap"; cap.textContent = caption; cap.hidden = !caption; cap.setAttribute("aria-live", "polite");
-    cap.style.cssText = `left:${x}px;top:${y + 34}px`;
+    cap.style.cssText = `left:${x}px;top:${y + 70}px`;
     wrap.style.cssText = "left:0;top:0";
-    const n = items.length, TH = (34 * Math.PI) / 180, R = n < 4 ? 104 : 118;
-    const at = (i) => places ? places[i] : [x + Math.cos(angle + (i - (n - 1) / 2) * TH) * R, y + Math.sin(angle + (i - (n - 1) / 2) * TH) * R];
+    const n = items.length;
+    const at = (i) => spot.moons[i];
     let over = false, resolve;
     const result = new Promise((r) => { resolve = r; });
-    const NS = "http://www.w3.org/2000/svg";
-    const ties = document.createElementNS(NS, "svg");
-    ties.setAttribute("class", "ob-ties"); ties.setAttribute("aria-hidden", "true");
-    items.forEach((it, i) => {
-      const [px, py] = at(i);
-      const path = document.createElementNS(NS, "path");
-      const mx = (x + px) / 2, my = (y + py) / 2 - 18;
-      path.setAttribute("d", `M ${x} ${y} Q ${mx} ${my} ${px} ${py}`);
-      path.setAttribute("stroke", it.color || "#ffe347");
-      ties.append(path);
-    });
-    wrap.append(ties);
     wrap.addEventListener("wheel", (e) => {
       const stage = document.querySelector(".pdf-stage");
       if (!stage) return;
@@ -618,23 +739,38 @@ const buddy = (() => {
       const b = document.createElement("button");
       b.type = "button"; b.setAttribute("role", "menuitem"); b.setAttribute("aria-label", it.label); b.disabled = !!it.disabled;
       b.className = `obuddy ob-${it.key}`; b.style.setProperty("--bc", it.color || "#ffe347"); b.style.setProperty("--i", i);
-      b.innerHTML = `<span class="bod"><span class="pr">${it.icon || ""}</span></span><span class="tag"><b></b><small></small></span>`;
+      b.innerHTML = `<span class="bod"><span class="who" aria-hidden="true"><i></i><i></i></span><span class="scene" aria-hidden="true"><span class="prop"></span><span class="mx"></span></span></span><span class="tag"><b></b><small></small></span>`;
       b.querySelector(".tag b").textContent = it.label;
       b.querySelector(".tag small").textContent = it.hint || "";
-      b.style.transform = `translate3d(${x}px, ${y}px, 0) scale(.2)`; // starts inside Dot
+      const [sx, sy] = at(i);
+      b.style.transform = reduced() ? `translate3d(${sx}px, ${sy}px, 0)` : `translate3d(${x}px, ${y}px, 0) scale(.2)`;
       b.addEventListener("mousedown", (e) => e.preventDefault()); // keep the chosen words selected
       b.addEventListener("click", (e) => { e.stopPropagation(); finish(it.key); });
       wrap.append(b); return b;
     });
     wrap.append(cap);
     document.body.append(wrap);
-    root.classList.add("attached");
     void wrap.offsetWidth;
+    const pose = (i, px, py) => `translate3d(${px}px, ${py}px, 0)`;
     orbs.forEach((b, i) => {
       const [px, py] = at(i);
-      if (reduced()) b.style.transition = "none";
+      const ux = Math.cos(spot.angles[i]), uy = Math.sin(spot.angles[i]);
+      b.style.setProperty("--lx", `${Math.round(ux * 48)}px`);
+      b.style.setProperty("--ly", `${Math.round(uy * 48)}px`);
+      b.style.transition = "none";
+      b.style.transform = pose(i, px, py);
+    });
+    void wrap.offsetWidth;
+    nudgeMoonNames(orbs, spot.angles);
+    if (!reduced()) {
+      orbs.forEach((b, i) => { b.style.transform = `translate3d(${x}px, ${y}px, 0) scale(.2)`; });
+      void wrap.offsetWidth;
+    }
+    orbs.forEach((b, i) => {
+      const [px, py] = at(i);
+      b.style.transition = reduced() ? "none" : "transform .55s cubic-bezier(.22,1,.36,1), opacity .25s";
       b.style.transitionDelay = reduced() ? "0s" : `${i * 45}ms`;
-      b.style.transform = `translate3d(${px}px, ${py}px, 0)`;
+      b.style.transform = pose(i, px, py);
       b.classList.add("on");
     });
     (orbs.find((b) => !b.disabled) ?? orbs[0])?.focus({ preventScroll: true });

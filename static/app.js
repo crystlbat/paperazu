@@ -15,7 +15,7 @@ function h(tag, attrs = {}, ...kids) {
 }
 
 // calls that wait on the local model: Dot shows it is working while they run
-const MODEL_CALL = /\/(explain|ask|test-connection)$|\/check\/\w+$|\/export\/reflection$|^\/graph\/(index|search|suggest)$/;
+const MODEL_CALL = /\/(explain|ask|test-connection|check-context)$|\/check\/\w+$|\/export\/reflection$|^\/graph\/(index|search|suggest)$/;
 
 async function api(path, opts = {}) {
   const working = MODEL_CALL.test(path);
@@ -531,6 +531,46 @@ function drawConnection(body, s) {
     test.disabled = false;
   } }, "Test connection");
 
+  const ctxResult = h("div", { class: "test-result", "aria-live": "polite" },
+    `Your setting is ${Number(s.max_context_tokens).toLocaleString()} tokens.`);
+  const ctxUse = h("button", { type: "button", class: "btn ghost", hidden: true }, "Use this");
+  const ctxBtn = h("button", { type: "button", class: "btn", onclick: async () => {
+    ctxBtn.disabled = true; ctxUse.hidden = true;
+    ctxResult.className = "test-result"; ctxResult.textContent = "Asking the server how much it can hold";
+    buddy.say("Checking the context window", { mood: "think", sticky: true });
+    try {
+      const r = await api("/settings/check-context", { method: "POST" });
+      ctxResult.classList.add(r.ok ? "ok" : "err");
+      if (!r.ok) { ctxResult.textContent = r.error; buddy.say(r.error, { mood: "worried" }); }
+      else {
+        const held = r.tokens.toLocaleString(), saved = r.saved.toLocaleString();
+        const fits = r.tokens >= 2048 && r.tokens <= 262144;
+        const trained = r.kind === "trained";
+        ctxResult.textContent = trained
+          ? `This model was trained for ${held} tokens. The server did not say how many it is using now. Your setting is ${saved}.`
+          : r.tokens === r.saved
+            ? `This model is running with ${held} tokens. Your setting matches.`
+            : r.saved > r.tokens
+              ? `This model is running with ${held} tokens. Your setting is ${saved}, so the model may cut the paper.`
+              : `This model is running with ${held} tokens. Your setting is ${saved}.`;
+        ctxUse.hidden = trained || r.tokens === r.saved || !fits;
+        ctxUse.textContent = `Use ${held}`;
+        ctxUse.onclick = async () => {
+          ctxUse.disabled = true;
+          if (await saveSetting("max_context_tokens", r.tokens, ctxResult)) {
+            s.max_context_tokens = r.tokens; r.saved = r.tokens; ctxUse.hidden = true;
+            ctxResult.className = "test-result ok";
+            ctxResult.textContent = `Your setting is now ${held} tokens.`;
+          }
+          ctxUse.disabled = false;
+        };
+        if (!fits) ctxResult.textContent += " That is outside 2,048 to 262,144, so I left the setting as it is.";
+        buddy.say(ctxResult.textContent, { mood: "happy" });
+      }
+    } catch { ctxResult.className = "test-result err"; ctxResult.textContent = "The app could not run the check."; }
+    ctxBtn.disabled = false;
+  } }, "Check context window");
+
   body.append(
     h("h2", {}, "Model connection"),
     h("p", { class: "lede" }, "Unsloth shows the URL and API key when it starts. Paste them here. The key stays in the database on this Mac."),
@@ -538,7 +578,8 @@ function drawConnection(body, s) {
     row("Base URL", url, urlStatus),
     row("API key", key, keyStatus, showKey),
     row("Model", model, modelStatus, refresh),
-    h("div", { class: "test-row" }, test, result));
+    h("div", { class: "test-row" }, test, result),
+    h("div", { class: "test-row" }, ctxBtn, ctxUse, ctxResult));
   paintConn();
   fillModels();
 }

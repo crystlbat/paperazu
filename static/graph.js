@@ -57,7 +57,8 @@ async function renderGraph() {
   const linkToggle = h("button", { type: "button", class: "btn ghost g-ai", "aria-pressed": "true", hidden: true,
     onclick: () => { st.interlink = !st.interlink; localStorage.setItem("graph-interlink", st.interlink ? "1" : "0"); build(); heat(0.5); paintSide(); } });
   zoomBtns.prepend(linkToggle, aiToggle);
-  const stage = h("section", { class: "g-stage", "aria-label": "Graph" }, svg, form, note, legend, zoomBtns);
+  const dock = h("div", { class: "g-dock" }, legend, zoomBtns);
+  const stage = h("section", { class: "g-stage", "aria-label": "Graph" }, svg, form, note, dock);
   const side = h("aside", { class: "g-side", "aria-label": "Details" });
   view.append(stage, side);
 
@@ -199,7 +200,7 @@ async function renderGraph() {
   // ---------- drawing ----------
   function draw() {
     edgeLayer.replaceChildren(...st.edges.map((e) => {
-      e.el = sv("line", { class: `g-edge ${e.kind}`, "stroke-width": e.kind.startsWith("sim") ? 1 + Math.max(0, e.score - 0.5) * 6 : e.kind === "theme" ? 2 : 1.75,
+      e.el = sv("path", { class: `g-edge ${e.kind}`, fill: "none", "stroke-width": 1.35,
         style: e.kind === "theme" ? `--tc:var(--theme-${e.color})` : null });
       return e.el;
     }));
@@ -212,7 +213,7 @@ async function renderGraph() {
       if (n.kind === "theme") {
         // a soft territory with the theme's name; its papers are tied to it
         g.append(sv("circle", { class: "terr", r: 74 }), sv("circle", { class: "halo", r: 18 }), sv("circle", { class: "body", r: 10 }),
-          sv("text", { class: "tlabel", "text-anchor": "middle", y: -20 }, label.length > 28 ? `${label.slice(0, 27)}…` : label));
+          sv("text", { class: "tlabel", "text-anchor": "middle", y: -22 }, label.length > 28 ? `${label.slice(0, 27)}…` : label));
       } else if (n.kind === "paper") {
         // page 1 of the paper, in a circle, with a ring that fills as you finish steps
         const r = n.r, c = 2 * Math.PI * (r + 5);
@@ -223,18 +224,19 @@ async function renderGraph() {
           sv("circle", { class: `track${n.color != null ? " themed" : ""}`, r: r + 5 }),
           sv("circle", { class: "prog", r: r + 5, "stroke-dasharray": `${(c * n.done) / Math.max(1, n.total)} ${c}`, transform: "rotate(-90)" }),
           sv("text", { class: "label", "text-anchor": "middle", y: r + 26 }, label),
-          sv("text", { class: "sub", "text-anchor": "middle", y: r + 44 }, n.done ? `${n.done} of ${n.total} steps` : "Not started"));
+          sv("text", { class: "sub", "text-anchor": "middle", y: r + 42 }, n.done ? `${n.done} of ${n.total} steps` : "Not started"));
       } else if (n.kind === "sugg") {
         // a small dashed dot; its name shows on hover, when selected, or when you zoom in
         n.r = 16;
         g.append(sv("circle", { class: "halo", r: 15 }), sv("circle", { class: "body", r: 7 }),
           sv("text", { class: "label", "text-anchor": "middle", y: 24 }, label.length > 34 ? `${label.slice(0, 33)}…` : label));
       } else {
-        const w = Math.min(220, 26 + label.length * 7.4);
+        const shown = label.length > 22 ? `${label.slice(0, 21)}…` : label;
+        const w = Math.min(168, 36 + shown.length * 8);
         n.r = w / 2;
-        g.append(sv("rect", { class: "halo", x: -w / 2 - 7, y: -22, width: w + 14, height: 44, rx: 22 }),
-          sv("rect", { class: "body", x: -w / 2, y: -15, width: w, height: 30, rx: 15 }),
-          sv("text", { class: "label", "text-anchor": "middle", dy: "0.35em" }, label.length > 30 ? `${label.slice(0, 29)}…` : label));
+        g.append(sv("rect", { class: "halo", x: -w / 2 - 6, y: -24, width: w + 12, height: 48, rx: 24 }),
+          sv("rect", { class: "body", x: -w / 2, y: -18, width: w, height: 36, rx: 18 }),
+          sv("text", { class: "label", "text-anchor": "middle", dy: "0.35em" }, shown));
       }
       g.addEventListener("pointerdown", (e) => grab(e, n));
       g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(n.id); } });
@@ -246,10 +248,137 @@ async function renderGraph() {
     }));
     paintFocus(); place();
   }
+  // How much room a node needs so its title is not sitting on another title.
+  function footprint(n) {
+    if (n.kind === "paper") {
+      const lw = Math.min(200, Math.max(72, n.label.length * 8));
+      return { hw: Math.max(n.r + 10, lw / 2 + 8), hhTop: n.r + 10, hhBot: n.r + 56 };
+    }
+    if (n.kind === "theme") {
+      const lw = Math.min(260, Math.max(48, n.label.length * 10));
+      return { hw: lw / 2 + 10, hhTop: 48, hhBot: 18 };
+    }
+    if (n.kind === "sugg") return { hw: 18, hhTop: 12, hhBot: 14 };
+    const w = Math.min(220, 26 + n.label.length * 7.4);
+    return { hw: w / 2 + 10, hhTop: 22, hhBot: 22 };
+  }
+  function separate(p, q, a) {
+    const A = footprint(p), B = footprint(q), gap = 28;
+    const dx = q.x - p.x, dy = q.y - p.y;
+    const ox = A.hw + B.hw + gap - Math.abs(dx);
+    const oy = (dy >= 0 ? A.hhBot + B.hhTop : A.hhTop + B.hhBot) + gap - Math.abs(dy);
+    if (ox <= 0 || oy <= 0) return;
+    const push = Math.min(ox, oy) * 0.45 * a;
+    if (ox < oy) {
+      const s = Math.sign(dx) || 1;
+      p.vx -= s * push; q.vx += s * push;
+    } else {
+      const s = Math.sign(dy) || 1;
+      p.vy -= s * push; q.vy += s * push;
+    }
+  }
+  // Boxes a line must not cross: the round node, and the title plate under or over it.
+  function obstacles() {
+    const out = [];
+    for (const n of st.nodes.values()) {
+      if (!n.el) continue;
+      const add = (el, pad) => {
+        if (!el) return;
+        const b = el.getBBox();
+        if (b.width < 2 || b.height < 2) return;
+        out.push({ id: n.id, kind: "title", x: n.x + b.x - pad, y: n.y + b.y - pad, w: b.width + pad * 2, h: b.height + pad * 2 });
+      };
+      if (n.kind === "paper") {
+        add(n.el.querySelector(".label"), 4);
+        add(n.el.querySelector(".sub"), 3);
+        const rad = n.r + 5;
+        out.push({ id: n.id, kind: "body", x: n.x - rad, y: n.y - rad, w: rad * 2, h: rad * 2 });
+      } else if (n.kind === "theme") {
+        add(n.el.querySelector(".tlabel"), 4);
+        out.push({ id: n.id, kind: "body", x: n.x - 14, y: n.y - 14, w: 28, h: 28 });
+      } else if (n.kind === "sugg") {
+        const show = svg.classList.contains("zoomed") || n.el.classList.contains("near") || n.el.matches(":hover");
+        if (show) add(n.el.querySelector(".label"), 3);
+        out.push({ id: n.id, kind: "body", x: n.x - 10, y: n.y - 10, w: 20, h: 20 });
+      } else out.push({ id: n.id, kind: "body", x: n.x - n.r - 4, y: n.y - 18, w: n.r * 2 + 8, h: 36 });
+    }
+    return out;
+  }
+  function segsCross(ax, ay, bx, by, cx, cy, dx, dy) {
+    const side = (px, py, qx, qy, rx, ry) => (qy - py) * (rx - qx) - (qx - px) * (ry - qy);
+    const d1 = side(cx, cy, dx, dy, ax, ay), d2 = side(cx, cy, dx, dy, bx, by);
+    const d3 = side(ax, ay, bx, by, cx, cy), d4 = side(ax, ay, bx, by, dx, dy);
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+  }
+  function hitsBox(x1, y1, x2, y2, b) {
+    const xR = b.x + b.w, yB = b.y + b.h;
+    const inn = (x, y) => x >= b.x && x <= xR && y >= b.y && y <= yB;
+    if (inn(x1, y1) || inn(x2, y2)) return true;
+    return segsCross(x1, y1, x2, y2, b.x, b.y, xR, b.y) || segsCross(x1, y1, x2, y2, xR, b.y, xR, yB)
+      || segsCross(x1, y1, x2, y2, xR, yB, b.x, yB) || segsCross(x1, y1, x2, y2, b.x, yB, b.x, b.y);
+  }
+  // The part of the segment that sits inside the box, as 0 to 1 along the line. Null when it misses.
+  function insideBox(x1, y1, x2, y2, box) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const p = [-dx, dx, -dy, dy];
+    const q = [x1 - box.x, box.x + box.w - x1, y1 - box.y, box.y + box.h - y1];
+    let t0 = 0, t1 = 1;
+    for (let i = 0; i < 4; i++) {
+      if (p[i] === 0) { if (q[i] < 0) return null; continue; }
+      const t = q[i] / p[i];
+      if (p[i] < 0) { if (t > t1) return null; if (t > t0) t0 = t; }
+      else { if (t < t0) return null; if (t < t1) t1 = t; }
+    }
+    return t0 < t1 ? [t0, t1] : null;
+  }
+  // Leave the node on the rim of its circle or past its title. A straight stub, never a sweep.
+  function anchor(n, tx, ty, boxes) {
+    const dx = tx - n.x, dy = ty - n.y, len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    let dist = (n.kind === "paper" ? n.r : n.kind === "theme" ? 14 : n.kind === "sugg" ? 10 : n.r) + 8;
+    const mine = boxes.filter((b) => b.id === n.id);
+    for (let k = 0; k < 6; k++) {
+      const x = n.x + ux * dist, y = n.y + uy * dist;
+      const hit = mine.find((b) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+      if (!hit) break;
+      let far = dist;
+      if (ux > 0.02) far = Math.max(far, (hit.x + hit.w - n.x) / ux);
+      else if (ux < -0.02) far = Math.max(far, (hit.x - n.x) / ux);
+      if (uy > 0.02) far = Math.max(far, (hit.y + hit.h - n.y) / uy);
+      else if (uy < -0.02) far = Math.max(far, (hit.y - n.y) / uy);
+      dist = far + 8;
+    }
+    return [n.x + ux * dist, n.y + uy * dist];
+  }
+  function route(a, b, boxes) {
+    const [x1, y1] = anchor(a, b.x, b.y, boxes);
+    const [x2, y2] = anchor(b, a.x, a.y, boxes);
+    const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+    let spans = [[0, 1]];
+    for (const box of boxes) {
+      if ((box.id === a.id || box.id === b.id) && box.kind !== "title") continue;
+      const hit = insideBox(x1, y1, x2, y2, box);
+      if (!hit) continue;
+      const [h0, h1] = hit;
+      const next = [];
+      for (const [s, e] of spans) {
+        const lo = Math.max(s, h0), hi = Math.min(e, h1);
+        if (hi <= lo + 0.012) { next.push([s, e]); continue; }
+        if (lo > s + 0.02) next.push([s, lo]);
+        if (e > hi + 0.02) next.push([hi, e]);
+      }
+      spans = next;
+    }
+    return spans.filter(([s, e]) => (e - s) * len > 16).map(([s, e]) => {
+      const sx = x1 + dx * s, sy = y1 + dy * s, ex = x1 + dx * e, ey = y1 + dy * e;
+      return `M ${sx.toFixed(1)} ${sy.toFixed(1)} L ${ex.toFixed(1)} ${ey.toFixed(1)}`;
+    }).join(" ");
+  }
   function place() {
+    const boxes = obstacles();
     for (const e of st.edges) {
       const a = st.nodes.get(e.a), b = st.nodes.get(e.b);
-      e.el.setAttribute("x1", a.x); e.el.setAttribute("y1", a.y); e.el.setAttribute("x2", b.x); e.el.setAttribute("y2", b.y);
+      if (a && b) e.el.setAttribute("d", route(a, b, boxes));
     }
     for (const n of st.nodes.values()) n.el.setAttribute("transform", `translate(${n.x.toFixed(1)} ${n.y.toFixed(1)})`);
     world.setAttribute("transform", `translate(${st.t.x} ${st.t.y}) scale(${st.t.k})`);
@@ -273,6 +402,7 @@ async function renderGraph() {
     for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) {
       const p = ns[i], q = ns[j];
       let dx = q.x - p.x, dy = q.y - p.y, d2 = dx * dx + dy * dy || 1;
+      separate(p, q, a); // titles get their own patch of desk
       const min = (p.r ?? 20) + (q.r ?? 20) + (p.kind === "paper" && q.kind === "paper" ? 200 : 30); // room for the titles
       const big = (k) => k === "paper" || k === "theme";
       const both = big(p.kind) && big(q.kind);
@@ -287,7 +417,7 @@ async function renderGraph() {
       const p = st.nodes.get(e.a), q = st.nodes.get(e.b);
       const dx = q.x - p.x, dy = q.y - p.y, d = Math.hypot(dx, dy) || 1;
       const pp = st.nodes.get(e.a).kind === "paper" && st.nodes.get(e.b).kind === "paper";
-      const len = e.kind === "theme" ? 120 : e.kind.includes("cross") ? 460 : pp ? 380 - e.score * 120 : e.kind.startsWith("suggest") ? 170 : 150;
+      const len = e.kind === "theme" ? 150 : e.kind.includes("cross") ? 220 : pp ? 200 : e.kind.startsWith("suggest") ? 140 : e.kind === "ghost" ? 160 : 140;
       const f = ((d - len) / d) * (e.kind === "theme" ? 0.09 : e.kind.includes("cross") ? 0.02 : 0.05) * a;
       p.vx += dx * f; p.vy += dy * f; q.vx -= dx * f; q.vy -= dy * f;
     }
@@ -361,12 +491,19 @@ async function renderGraph() {
   function fit() {
     const ns = [...st.nodes.values()], r = svg.getBoundingClientRect();
     if (!ns.length || !r.width) return;
-    const xs = ns.map((n) => n.x), ys = ns.map((n) => n.y), pad = 130;
-    const w = Math.max(...xs) - Math.min(...xs) + pad * 2, hgt = Math.max(...ys) - Math.min(...ys) + pad * 2;
-    const top = 76, bottom = 96; // keep clear of the search bar, and of the legend and buttons
-    st.t.k = Math.min(1.3, r.width / w, (r.height - top - bottom) / hgt);
-    st.t.x = r.width / 2 - ((Math.min(...xs) + Math.max(...xs)) / 2) * st.t.k;
-    st.t.y = top + (r.height - top - bottom) / 2 - ((Math.min(...ys) + Math.max(...ys)) / 2) * st.t.k;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const n of ns) {
+      const f = footprint(n);
+      minX = Math.min(minX, n.x - f.hw); maxX = Math.max(maxX, n.x + f.hw);
+      minY = Math.min(minY, n.y - f.hhTop); maxY = Math.max(maxY, n.y + f.hhBot);
+    }
+    // Match the margins in graph.css: search and Dot's corner on top, the dock along the bottom.
+    const top = 120, bottom = 100, side = 36;
+    const w = Math.max(40, maxX - minX), hgt = Math.max(40, maxY - minY);
+    const roomW = Math.max(80, r.width - side * 2), roomH = Math.max(80, r.height - top - bottom);
+    st.t.k = Math.min(1.15, Math.max(0.7, Math.min(roomW / w, roomH / hgt)));
+    st.t.x = side + roomW / 2 - ((minX + maxX) / 2) * st.t.k;
+    st.t.y = top + roomH / 2 - ((minY + maxY) / 2) * st.t.k;
     place();
   }
   const ro = new ResizeObserver(() => fit());
@@ -437,7 +574,7 @@ async function renderGraph() {
       section("Ideas linked here", ideas.map((l) => h("button", { type: "button", class: "g-row", onclick: () => select(l.concept_id) },
         h("span", { class: "g-row-title" }, st.nodes.get(l.concept_id)?.label ?? "",
           st.nodes.get(l.concept_id)?.kind === "sugg" ? h("span", { class: "g-tag" }, "AI suggests") : null),
-        h("span", { class: "g-row-sub" }, `Page ${l.page}. ${l.snippet.slice(0, 110)}…`))), "No ideas linked yet. Search one above."),
+        h("span", { class: "g-row-sub" }, `Page ${l.page}. ${l.snippet}`))), "No ideas linked yet. Search one above."),
       section("Close in meaning (AI)", similar.map((s) => h("button", { type: "button", class: "g-row", onclick: () => select(s.id) },
         h("span", { class: "g-row-title" }, paperById(s.id)?.title ?? ""),
         h("span", { class: "g-row-sub" }, `${pct(s.score)} alike`))), st.papers.length < 2 ? "Add more papers to see which ones are alike." : "No close papers yet."));
@@ -456,7 +593,7 @@ async function renderGraph() {
       h("h3", { class: "g-title serif" }, n.label),
       section(`In ${plural(links.length, "paper")}`, links.map((l) => h("a", { class: "g-row", href: `#read/${l.paper_id}` },
         h("span", { class: "g-row-title" }, paperById(l.paper_id)?.title ?? ""),
-        h("span", { class: "g-row-sub" }, `Page ${l.page}. ${l.snippet.slice(0, 160)}…`),
+        h("span", { class: "g-row-sub" }, `Page ${l.page}. ${l.snippet}`),
         meter(l.score)))),
       del);
   }
@@ -474,7 +611,7 @@ async function renderGraph() {
       h("p", { class: "help" }, "Your model picked this as a key idea, then found where your papers talk about it. Keep it if it is right."),
       section(`In ${plural(links.length, "paper")}`, links.map((l) => h("a", { class: "g-row", href: `#read/${l.paper_id}` },
         h("span", { class: "g-row-title" }, paperById(l.paper_id)?.title ?? ""),
-        h("span", { class: "g-row-sub" }, `Page ${l.page}. ${l.snippet.slice(0, 160)}…`),
+        h("span", { class: "g-row-sub" }, `Page ${l.page}. ${l.snippet}`),
         meter(l.score)))),
       h("div", { class: "g-actions" },
         h("button", { type: "button", class: "btn", onclick: act(`/graph/concepts/${n.id}/keep`, "POST") }, "Keep this idea"),
@@ -559,7 +696,7 @@ async function renderGraph() {
         h("input", { type: "checkbox", checked: r.on, onchange: (e) => { r.on = e.target.checked; build(); heat(0.3); paintSide(); } }),
         h("span", { class: "g-pick-body" },
           h("span", { class: "g-row-title" }, r.title),
-          h("span", { class: "g-row-sub" }, `Page ${r.page}. ${r.snippet.slice(0, 180)}…`)),
+          h("span", { class: "g-row-sub" }, `Page ${r.page}. ${r.snippet}`)),
         meter(r.score)))),
       h("div", { class: "g-actions" }, keep,
         h("button", { type: "button", class: "btn ghost", onclick: () => { st.ghost = null; st.sel = null; build(); heat(0.3); paintSide(); } }, "Cancel")));
@@ -721,8 +858,9 @@ async function renderGraph() {
   }
   function closeTree() { tree?.remove(); tree = null; stage.classList.remove("tree-open"); side.hidden = false; }
 
-  buddy.roam(() => (st.alive && !tree ? stage.getBoundingClientRect() : null)); // Dot wanders the graph now and then
-  openGraph = { leave() { st.alive = false; cancelAnimationFrame(st.raf); ro.disconnect(); savePos(); buddy.roam(null); } };
+  buddy.look(true); // the yellow face with two eyes, no mouth, parked in the canvas corner
+  buddy.roam(null);
+  openGraph = { leave() { st.alive = false; cancelAnimationFrame(st.raf); ro.disconnect(); savePos(); buddy.look(false); buddy.roam(null); } };
   await boot();
   requestAnimationFrame(() => fit());
 }

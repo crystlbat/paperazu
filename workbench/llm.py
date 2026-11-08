@@ -2,6 +2,8 @@
 import json
 import re
 import time
+import urllib.error
+import urllib.request
 from typing import Any
 
 from openai import APIConnectionError, APIError, APIStatusError, AuthenticationError, OpenAI
@@ -50,6 +52,77 @@ def test_connection(s: Settings) -> dict[str, Any]:
         return {"ok": False, "error": e.message}
     return {"ok": True, "model": r.model, "reply": (r.choices[0].message.content or "").strip(),
             "seconds": round(time.perf_counter() - start, 2)}
+
+
+# The loaded window first. n_ctx_train is how big the model can be, not how it was started.
+_CTX_KEYS = ("n_ctx", "max_model_len", "context_length", "max_context_length", "n_ctx_train")
+
+
+def _fetch(url: str, key: str, timeout: float) -> tuple[str, Any]:
+    """("ok", json) from a local server URL, ("miss", None) if that URL has nothing,
+    ("key", None) if the key is refused, ("down", None) if the server cannot be reached."""
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"} if key else {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 — the URL is the user's own server
+            raw = r.read().decode()
+    except urllib.error.HTTPError as e:
+        return ("key", None) if e.code in (401, 403) else ("miss", None)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return "down", None
+    try:
+        return "ok", json.loads(raw or "null")
+    except json.JSONDecodeError:
+        return "miss", None
+
+
+def _note_ctx(node: Any, found: dict[str, int]) -> None:
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in _CTX_KEYS and isinstance(v, (int, float)) and not isinstance(v, bool) and int(v) >= 256:
+                found.setdefault(k, int(v))
+            else:
+                _note_ctx(v, found)
+    elif isinstance(node, list):
+        for item in node:
+            _note_ctx(item, found)
+
+
+def context_window(s: Settings) -> dict[str, Any]:
+    """How many tokens the local server can hold, from its own report. No chat call.
+
+    A running window (n_ctx, or the same idea under another name) wins over n_ctx_train,
+    which is only how large the model can be, not how it was started.
+    """
+    root = s.base_url.removesuffix("/v1").rstrip("/")
+    found: dict[str, int] = {}
+    saw = False
+    refused = False
+    reached = False
+    for url in (f"{s.base_url.rstrip('/')}/models", f"{root}/props", f"{root}/slots"):
+        status, data = _fetch(url, s.api_key, 5)
+        if status == "key":
+            refused = True
+            reached = True
+            continue
+        if status == "down":
+            continue
+        reached = True
+        if status != "ok":
+            continue
+        saw = True
+        _note_ctx(data, found)
+        if any(k in found for k in _CTX_KEYS[:4]):
+            break
+    if not saw and refused:
+        return {"ok": False, "error": "Wrong API key."}
+    if not reached:
+        return {"ok": False, "error": "Could not reach the model server. Is Unsloth running?"}
+    running = next((found[k] for k in _CTX_KEYS[:4] if k in found), None)
+    if running is not None:
+        return {"ok": True, "tokens": running, "kind": "running", "saved": s.max_context_tokens}
+    if "n_ctx_train" in found:
+        return {"ok": True, "tokens": found["n_ctx_train"], "kind": "trained", "saved": s.max_context_tokens}
+    return {"ok": False, "error": "The server did not say how big its context window is."}
 
 
 EXPLAIN_SYSTEM = (

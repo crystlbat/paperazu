@@ -156,6 +156,35 @@ def _h(text: str) -> int:
     return 40 + 18 * math.ceil(len(text) / 34)
 
 
+def _cited(s: Any, paper_id: str, question: str, page: int, title: str, texts: list[str], ctx: str = "") -> dict[str, Any]:
+    """The local model answers and names the paragraphs it used. `page` is 1-based."""
+    near = graph.pages_for(s, paper_id, question)
+    if not near:  # no embeddings: the pages around this one that fit the model's budget
+        keep = llm.paper_text(s, texts, page - 1, question + ctx)[1]
+        near = [p for p in (page - 1, page, page + 1) if p - 1 in keep]
+    chosen = sorted({page, *near})
+    paras = [(f"p{pg}-b{i}", pg, r, t) for pg in chosen for i, (r, t) in enumerate(marks.paragraphs(paper_id, pg) or []) if t]
+    if paras:
+        return llm.ask_with_sources(s, question, title, paras, ctx)
+    got = llm.ask(s, ctx + question, title, texts, page - 1)
+    return {**got, "sources": []} if got.get("ok") else got
+
+
+def _task(entries: list[dict[str, Any]]) -> str | None:
+    """The open @ai line on a card, or None once Dot has answered it."""
+    for e in reversed(entries):
+        if e["who"] == "dot":
+            return None
+        if e["who"] != "me":
+            continue
+        for line in e["text"].splitlines():
+            s = line.strip()
+            if s.lower().startswith("@ai"):
+                return s[3:].strip(" :,-") or "Summarise this paper."
+        return None
+    return None
+
+
 def ask(s: Any, paper_id: str, question: str, page: int, from_card: int | None, at: tuple[float, float]) -> dict[str, Any] | None:
     """Answer with Dot, saving the answer card and a card for each paragraph it points at."""
     texts = library.page_texts(paper_id)
@@ -169,17 +198,7 @@ def ask(s: Any, paper_id: str, question: str, page: int, from_card: int | None, 
         return {"ok": False, "error": "That card is not there."}
     ctx = "".join(f"Earlier question: {c['question']}\nEarlier answer: {c['text']}\n\n" if c["kind"] == "answer" else ""
                   for c in reversed(prior))
-    near = graph.pages_for(s, paper_id, question)
-    if not near:  # no embeddings: the pages around this one that fit the model's budget
-        keep = llm.paper_text(s, texts, page - 1, question + ctx)[1]
-        near = [p for p in (page - 1, page, page + 1) if p - 1 in keep]
-    chosen = sorted({page, *near})
-    paras = [(f"p{pg}-b{i}", pg, r, t) for pg in chosen for i, (r, t) in enumerate(marks.paragraphs(paper_id, pg) or []) if t]
-    if paras:
-        got = llm.ask_with_sources(s, question, row["title"], paras, ctx)
-    else:  # nothing to point at: a plain answer
-        got = llm.ask(s, ctx + question, row["title"], texts, page - 1)
-        got = {**got, "sources": []}
+    got = _cited(s, paper_id, question, page, row["title"], texts, ctx)
     if not got["ok"]:
         return {"ok": False, "error": got["error"]}
     text = got["text"] + ("" if got["sources"] else "\n\nNo exact lines found.")
@@ -233,3 +252,33 @@ def say(s: Any, paper_id: str, cid: int, text: str) -> dict[str, Any] | None:
         return {"ok": False, "error": "This note is full.", "card": card}
     card = edit_card(paper_id, cid, CardEdit(entries=[*entries, {"who": "dot", "text": got["text"][:4000]}])) or card
     return {"ok": True, "card": card}
+
+
+def pickup(s: Any, paper_id: str, cid: int) -> dict[str, Any] | None:
+    """An @ai line left on a card is a task. Dot searches the paper and notes the sections it used.
+    None if this is not a note on this paper. The card is unchanged when the model cannot answer."""
+    texts = library.page_texts(paper_id)
+    con = db.connect()
+    try:
+        card = _get(con, paper_id, cid)
+        row = con.execute("SELECT title FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    finally:
+        con.close()
+    if card is None or card["kind"] != "note" or row is None or texts is None:
+        return None
+    question = _task(card["entries"])
+    if not question:
+        return {"ok": False, "error": "Nothing for Dot to pick up.", "card": card, "sources": []}
+    page = card["page"] or 1
+    got = _cited(s, paper_id, question, page, row["title"], texts)
+    if not got["ok"]:
+        return {"ok": False, "error": got["error"], "card": card, "sources": []}
+    card = edit_card(paper_id, cid, CardEdit(entries=[*card["entries"], {"who": "dot", "text": got["text"][:4000]}])) or card
+    x, y = card["x"], card["y"] + 150
+    sources = []
+    for src in got["sources"]:
+        made = add_card(paper_id, CardIn(kind="source", text=src["gist"], x=x, y=y, w=card["w"], page=src["page"], rect=src["rect"], parent=card["id"]))
+        if made:
+            sources.append(made)
+            y += _h(src["gist"]) + 14
+    return {"ok": True, "card": card, "sources": sources}
