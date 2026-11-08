@@ -40,11 +40,16 @@ const buddy = (() => {
   const GLYPHS = {
     yes: [[3, 4], [4, 5], [5, 6], [6, 5], [7, 4], [8, 3], [9, 2], [3, 5], [4, 6], [5, 7], [6, 6], [7, 5], [8, 4], [9, 3]],
     no: [[4, 2], [5, 3], [6, 4], [7, 5], [8, 6], [8, 2], [7, 3], [5, 5], [4, 6], [3, 1], [9, 1], [3, 7], [9, 7]],
+    // a magnifying glass, for the shape "lens"
+    lens: [[5, 1], [6, 1], [7, 1], [4, 2], [8, 2], [4, 3], [8, 3], [4, 4], [8, 4], [5, 5], [6, 5], [7, 5], [9, 6], [10, 7], [11, 8]],
   };
 
   const st = { mood: "idle", dx: 0, dy: 0, blink: false, talkFrame: 0, talking: false, busy: 0, spin: 0,
     muted: localStorage.getItem("buddy-muted") === "1", last: null,
-    glyph: null, lookUntil: 0, off: { x: 0, y: 0 }, away: false, trip: 0 };
+    glyph: null, shapeGlyph: null, lookUntil: 0, off: { x: 0, y: 0 }, away: false, trip: 0,
+    shape: "face", ui: 0, hold: 0, follow: false };
+  let toolsHow = "click"; // which gesture opens the tools menu: "click" or "context" (right-click or a long press)
+  const mouse = { x: -1, y: -1, in: false };
 
   const root = document.createElement("aside");
   root.className = "buddy";
@@ -72,7 +77,8 @@ const buddy = (() => {
     const dx = st.busy ? [-1, 0, 1, 0][Math.floor(st.spin / 6) % 4] : m.dx ?? st.dx, dy = m.dy ?? st.dy;
     const eyes = st.blink && m.eyes !== "closed" ? "closed" : m.eyes;
     const mouth = st.talking ? (st.talkFrame ? "o" : "talk") : m.mouth;
-    const on = new Set((st.glyph ? GLYPHS[st.glyph] : [...EYES[eyes](dx, dy), ...MOUTHS[mouth]]).map(([x, y]) => y * W + x));
+    const shown = st.glyph ? GLYPHS[st.glyph] : st.shapeGlyph ? GLYPHS[st.shapeGlyph] : [...EYES[eyes](dx, dy), ...MOUTHS[mouth]];
+    const on = new Set(shown.map(([x, y]) => y * W + x));
     const tail = new Map(st.busy ? [0, 1, 2, 3, 4].map((k) => [RIM[(st.spin - k + RIM.length) % RIM.length], k]) : []);
     dots.forEach((d, i) => {
       d.classList.toggle("on", on.has(i) || tail.get(i) === 0);
@@ -123,7 +129,7 @@ const buddy = (() => {
   }
   let raf = 0;
   document.addEventListener("mousemove", (e) => {
-    lastMouse = Date.now();
+    lastMouse = Date.now(); mouse.x = e.clientX; mouse.y = e.clientY; mouse.in = true;
     if (raf || reduced() || Date.now() < st.lookUntil) return;
     raf = requestAnimationFrame(() => {
       raf = 0;
@@ -194,9 +200,11 @@ const buddy = (() => {
     "Read the figures before the text. They often tell the whole story.",
     "A short break between steps helps you remember more.",
   ];
-  face.addEventListener("click", () => {
+  face.addEventListener("click", (e) => {
     if (dragged) { dragged = false; return; } // the end of a drag is not a click
-    if (tools) return toggleTools();
+    if (pressed) { pressed = false; return; } // the end of a long press is not a click
+    // with "context" a mouse click shows the tip; a keyboard Enter (detail 0) still opens the menu
+    if (tools && (toolsHow === "click" || e.detail === 0)) return toggleTools();
     if (!bubble.hidden) return hide();
     if (st.muted) setMuted(false);
     if (!reduced()) { st.mood = "surprised"; draw(); }
@@ -238,6 +246,7 @@ const buddy = (() => {
     const dist = Math.hypot(x - cx, y - cy);
     if (dist < 4) return;
     hide();
+    st.hold += 1; // following the pointer waits while a trip runs
     ms = ms ?? Math.round(Math.min(1100, Math.max(380, dist * 1.1)));
     st.off = { x: x - hx, y: y - hy };
     st.away = Math.hypot(st.off.x, st.off.y) > 4;
@@ -247,6 +256,7 @@ const buddy = (() => {
     root.classList.add("moving");
     root.style.transform = `translate(${st.off.x}px, ${st.off.y}px)`;
     await wait(ms);
+    st.hold -= 1;
     root.classList.remove("moving");
   }
   function home() {
@@ -289,18 +299,27 @@ const buddy = (() => {
 
   // ---------- drag Dot onto the page: it turns into a highlighter ----------
   // The page says where Dot may land with droppable({ over(x, y), drop(x, y) }).
-  let target = null, drag = null, dragged = false;
+  let target = null, drag = null, dragged = false, pressed = false, pressTimer = 0;
   const place = (x, y) => { const [hx, hy] = homeCentre(); st.off = { x: x - hx, y: y - hy }; st.away = true; root.style.transform = `translate(${st.off.x}px, ${st.off.y}px)`; };
   function droppable(t) { target = t; if (!t) pen(false); }
   face.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || root.classList.contains("as-window")) return;
     drag = { x: e.clientX, y: e.clientY, on: false };
     face.setPointerCapture(e.pointerId);
+    clearTimeout(pressTimer);
+    if (tools && toolsHow === "context") pressTimer = setTimeout(() => { // a long press is a right-click for touch
+      if (drag && !drag.on) { pressed = true; drag = null; toggleTools(); }
+    }, 500);
+  });
+  face.addEventListener("contextmenu", (e) => {
+    if (!tools || toolsHow !== "context") return;
+    e.preventDefault(); clearTimeout(pressTimer); toggleTools();
   });
   face.addEventListener("pointermove", (e) => {
     if (!drag) return;
     if (!drag.on) {
       if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+      clearTimeout(pressTimer);
       drag.on = true; st.trip += 1; hide(); root.classList.add("dragging"); st.mood = "surprised"; draw();
     }
     place(e.clientX, e.clientY);
@@ -308,6 +327,8 @@ const buddy = (() => {
     target?.hover?.(e.clientX, e.clientY);
   });
   face.addEventListener("pointerup", (e) => {
+    clearTimeout(pressTimer);
+    if (pressed) setTimeout(() => { pressed = false; }, 0);
     if (!drag) return;
     const was = drag.on; drag = null;
     if (!was) return;
@@ -434,6 +455,153 @@ const buddy = (() => {
   document.addEventListener("pointerdown", (e) => { if (!toolsEl.hidden && !root.contains(e.target)) closeTools(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !toolsEl.hidden) { closeTools(); face.focus(); } });
 
+  // ---------- reading mode: follow the pointer, offer options, change shape, become the input ----------
+  const FOLLOW = { dx: 16, dy: 14, k: 0.16 }; // the small Dot's corner trails the pointer, as in the mockup
+  const pending = new Set(); // waits that a click may cut short
+  const waitSkippable = (ms) => new Promise((res) => { const t = setTimeout(done, ms); pending.add(done); function done() { clearTimeout(t); pending.delete(done); res(); } });
+  /** Cut every running shape change and spring short: they jump to their end state. */
+  function skip() { [...pending].forEach((f) => f()); }
+  const paused = () => !st.follow || reduced() || st.hold > 0 || st.ui > 0 || !mouse.in || drag?.on || face.matches(":hover")
+    || !bubble.hidden || !toolsEl.hidden || ["pen", "reading", "penning", "as-window"].some((c) => root.classList.contains(c));
+  let fraf = 0, fx = 0, fy = 0, flast = false;
+  function followFrame() {
+    fraf = requestAnimationFrame(followFrame);
+    if (paused() || mouse.x < 0) { if (flast) { root.style.transition = ""; flast = false; } return; }
+    if (!flast) { [fx, fy] = centre(); flast = true; root.style.transition = "none"; }
+    // the face is centred so its top-left corner trails the pointer by (dx, dy)
+    const r = face.getBoundingClientRect();
+    const tx = mouse.x + FOLLOW.dx + r.width / 2, ty = mouse.y + FOLLOW.dy + r.height / 2;
+    fx += (tx - fx) * FOLLOW.k; fy += (ty - fy) * FOLLOW.k;
+    place(Math.min(innerWidth - 8 - r.width / 2, fx), Math.min(innerHeight - 8 - r.height / 2, fy));
+  }
+  /** follow(on): the small Dot trails the pointer. Off with reduced motion. */
+  function followMode(on) {
+    st.follow = on; root.classList.toggle("follows", on);
+    cancelAnimationFrame(fraf); fraf = 0;
+    if (on) { flast = false; fraf = requestAnimationFrame(followFrame); }
+    else { root.style.transition = ""; flast = false; goHome(); }
+  }
+  document.documentElement.addEventListener("mouseleave", () => { mouse.in = false; });
+  document.documentElement.addEventListener("mouseenter", () => { mouse.in = true; });
+
+  /** toolsOn("click" | "context"): the gesture that opens the tools menu */
+  function toolsOn(how) { toolsHow = how === "context" ? "context" : "click"; closeTools(); }
+
+  const shapeClass = { lens: "sh-lens", squash: "sh-squash", pill: "sh-pill" };
+  /** shape("face" | "marker" | "lens" | "squash" | "pill"): resolves when the change has settled (about 380 ms) */
+  function shape(name) {
+    const was = st.shape;
+    st.shape = name;
+    if (was === "marker" && name !== "marker") root.classList.remove("pen");
+    Object.values(shapeClass).forEach((c) => root.classList.remove(c));
+    if (shapeClass[name]) root.classList.add(shapeClass[name]);
+    if (name === "marker") root.classList.add("pen");
+    st.shapeGlyph = name === "lens" ? "lens" : null; draw();
+    return reduced() ? Promise.resolve() : waitSkippable(380);
+  }
+
+  /** options({ x, y, items:[{ key, label, icon, disabled }] }) → the key picked, or null. (x, y) is Dot's centre. */
+  function options({ x, y, items }) {
+    closeTools();
+    if (x == null) [x, y] = centre();
+    st.ui += 1;
+    const wrap = document.createElement("div");
+    wrap.className = "buddy-opts"; wrap.setAttribute("role", "menu");
+    const R = 58, n = items.length;
+    let over = false, resolve;
+    const result = new Promise((r) => { resolve = r; });
+    const finish = (key) => {
+      if (over) return; over = true;
+      document.removeEventListener("keydown", onKey, true); document.removeEventListener("pointerdown", onOut, true);
+      st.ui = Math.max(0, st.ui - 1);
+      wrap.classList.remove("on");
+      btns.forEach((b) => { b.style.left = "0px"; b.style.top = "0px"; });
+      setTimeout(() => wrap.remove(), reduced() ? 0 : 220);
+      resolve(key ?? null);
+    };
+    const btns = items.map((it, i) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.setAttribute("role", "menuitem"); b.setAttribute("aria-label", it.label); b.disabled = !!it.disabled;
+      b.innerHTML = `${it.icon || ""}<span></span>`; b.lastChild.textContent = it.label;
+      const a = ((n === 1 ? -60 : -150 + (i * 180) / (n - 1)) * Math.PI) / 180;
+      b.dataset.dx = Math.round(Math.cos(a) * R); b.dataset.dy = Math.round(Math.sin(a) * R);
+      b.addEventListener("click", (e) => { e.stopPropagation(); finish(it.key); });
+      wrap.append(b); return b;
+    });
+    // keep the arc on screen: shift the whole wrap, not the buttons
+    const reach = R + 26;
+    const sx = Math.min(0, innerWidth - 8 - (x + reach)) + Math.max(0, 8 - (x - reach)), sy = Math.max(0, 8 - (y - reach));
+    wrap.style.cssText = `left:${x + sx}px;top:${y + sy}px`;
+    document.body.append(wrap);
+    void wrap.offsetWidth;
+    wrap.classList.add("on");
+    btns.forEach((b) => { b.style.left = `${b.dataset.dx}px`; b.style.top = `${b.dataset.dy}px`; });
+    (btns.find((b) => !b.disabled) ?? btns[0])?.focus({ preventScroll: true });
+    const onKey = (e) => {
+      const live = btns.filter((b) => !b.disabled), i = live.indexOf(document.activeElement);
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(null); }
+      else if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); live[(i + 1) % live.length]?.focus(); }
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); live[(i - 1 + live.length) % live.length]?.focus(); }
+    };
+    const onOut = (e) => { if (!wrap.contains(e.target)) finish(null); };
+    document.addEventListener("keydown", onKey, true);
+    setTimeout(() => document.addEventListener("pointerdown", onOut, true), 0);
+    return result;
+  }
+
+  const BACK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
+  /** prompt({ x, y, placeholder, hint(text) }) → the trimmed text, or null (Back, Escape, a click outside). */
+  function prompt({ x, y, placeholder = "", hint } = {}) {
+    closeTools();
+    st.ui += 1;
+    const [fx0, fy0] = centre(), PW = Math.min(300, innerWidth - 16), PH = 36;
+    const left = Math.max(8, Math.min(x - PH / 2, innerWidth - PW - 8)), top = Math.max(8, Math.min(y - PH / 2, innerHeight - PH - 28));
+    const el = document.createElement("form");
+    el.className = "buddy-pill"; el.setAttribute("aria-label", placeholder || "Ask Dot");
+    el.innerHTML = `<span class="bp-eyes" aria-hidden="true"><i></i><i></i></span>
+      <input type="text" autocomplete="off" maxlength="1000"><button type="button" class="bp-back" aria-label="Back" title="Back (Esc)">${BACK}</button>
+      <small class="bp-hint" aria-live="polite" hidden></small>`;
+    const input = el.querySelector("input"), tip = el.querySelector(".bp-hint");
+    input.placeholder = placeholder; input.setAttribute("aria-label", placeholder || "Your words");
+    // it grows out of Dot's face
+    el.style.cssText = reduced() ? `left:${left}px;top:${top}px;width:${PW}px` : `left:${fx0 - PH / 2}px;top:${fy0 - PH / 2}px;width:${PH}px`;
+    document.body.append(el); root.classList.add("as-pill");
+    if (!reduced()) { void el.offsetWidth; el.style.cssText = `left:${left}px;top:${top}px;width:${PW}px`; }
+    el.classList.add("on");
+    setTimeout(() => input.focus({ preventScroll: true }), reduced() ? 0 : 120);
+    return new Promise((resolve) => {
+      let over = false;
+      function finish(text) {
+        if (over) return; over = true;
+        document.removeEventListener("pointerdown", onOut, true);
+        st.ui = Math.max(0, st.ui - 1);
+        const [cx, cy] = centre();
+        if (!reduced()) el.style.cssText = `left:${cx - PH / 2}px;top:${cy - PH / 2}px;width:${PH}px`;
+        el.classList.remove("on");
+        setTimeout(() => { el.remove(); root.classList.remove("as-pill"); }, reduced() ? 0 : 300);
+        resolve(text);
+      }
+      const onOut = (e) => { if (!el.contains(e.target)) finish(null); };
+      el.addEventListener("submit", (e) => { e.preventDefault(); const t = input.value.trim(); if (t) finish(t); });
+      el.querySelector(".bp-back").addEventListener("click", () => finish(null));
+      el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(null); } });
+      input.addEventListener("input", () => {
+        const s = hint?.(input.value.trim()) ?? null;
+        tip.hidden = !s; tip.textContent = s ?? "";
+      });
+      setTimeout(() => document.addEventListener("pointerdown", onOut, true), 0);
+    });
+  }
+
+  /** gulp(): Dot opens wide to swallow. burp(): the bounce after it spits. */
+  async function gulp() { root.classList.add("gulp"); st.mood = "surprised"; draw(); if (reduced()) return; await waitSkippable(250); }
+  async function burp() {
+    root.classList.remove("gulp", "full"); void root.offsetWidth; root.classList.add("full");
+    st.mood = "happy"; draw();
+    setTimeout(() => { root.classList.remove("full"); if (bubble.hidden) { st.mood = "idle"; draw(); } }, 520);
+    if (!reduced()) await waitSkippable(300);
+  }
+
   // Drag a floating card by its handle (buttons inside the handle still click). Kept on screen.
   function draggable(el, handle) {
     handle.style.cursor = "grab"; handle.style.touchAction = "none";
@@ -475,5 +643,6 @@ const buddy = (() => {
   setMuted(st.muted);
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
-  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, reading, open, format, draggable, tools: setTools };
+  return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, reading, open, format, draggable, tools: setTools,
+    follow: followMode, options, shape, prompt, gulp, burp, toolsOn, skip, centre, wait: waitSkippable };
 })();
