@@ -123,6 +123,8 @@ def _one_step() -> tuple[str, str]:
             return "skipped", "stopped while waiting its turn"
         c = harness.cycle(force=True, wait=5)
         did = [x for x in c.get("executed", []) if x.get("outcome") == "ok"]
+        if not did and c.get("self", {}).get("need_you"):  # it saw for itself there is nothing left to try alone
+            return "stuck", c["self"]["said"]
         return ("ok" if did else "skipped"), " · ".join(x["cmd"] for x in did) or "cycle did nothing"
     r = char.rest(True, None, force=True)
     return ("skipped", r.get("why") or "nothing to do") if r.get("done") else ("ok", f"{r['kind']}: {r['topic']}")
@@ -160,6 +162,9 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
         if steps and peaked and cfg["lo"] <= d["curiosity"] <= cfg["hi"]:
             why = f"reached the target: curiosity {d['curiosity']} settled between {cfg['lo']:g} and {cfg['hi']:g}"
             break
+        if log[-1]["kind"] == "stuck":
+            why = log[-1]["outcome"]
+            break
         if idle >= IDLE_STOP:
             why = f"{IDLE_STOP} steps in a row did nothing: nothing left to learn right now"
             break
@@ -174,7 +179,7 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
             outcome, detail = "failed", str(e)[:200]
             fails += 1
         steps += 1
-        idle = idle + 1 if outcome == "skipped" else 0
+        idle = idle + 1 if outcome in ("skipped", "stuck") else 0
         d = char.disposition()
         peaked = peaked or d["curiosity"] > cfg["hi"]
         snap = ""
@@ -185,7 +190,7 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
         if snap:
             snapshot(run_id, steps, snap)
             mark = {"curiosity": d["curiosity"], "maturity": d["maturity"]}
-        log.append({"step": steps, "t": round(spent), "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": outcome, "outcome": detail[:120], "snap": bool(snap)})
+        log.append({"step": steps, "t": round(spent), "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": outcome, "outcome": detail[:300], "snap": bool(snap)})
         _set(run_id, log=json.dumps(log))
     from . import harness
     harness.CANCEL.clear()  # idle learning after the run is not cancelled

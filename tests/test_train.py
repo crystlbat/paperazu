@@ -106,3 +106,21 @@ def test_stopping_a_run_makes_the_cycle_in_hand_skip_what_it_has_not_started(mon
     finally:
         harness.CANCEL.clear()
     assert ran == [] and out[0]["outcome"] == "skipped" and out[0]["detail"] == "stopped before it ran"
+
+
+def test_a_run_ends_in_its_own_words_when_it_sees_it_needs_you(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    char.add_memory("Resting: char Sagira", "0", source="sheet")
+    said = "I keep hitting the same wall (x). I have nothing left to try on my own. I need something new from you: a question, a source, or a chat."
+    steps = iter([("ok", "reflect: a"), ("stuck", said), ("ok", "never runs")])
+    run_id = _run(monkeypatch, [5.0], {"max_steps": 50, "hi": 1.0})
+    assert train.status()["runs"][0]["why"] == "used all 50 steps"  # the plain run, for contrast
+    monkeypatch.setattr(train, "_one_step", lambda: next(steps))
+    con = train._con()
+    with con:
+        run_id = con.execute("INSERT INTO train_runs (persona, config, status) VALUES ('Sagira', '{}', 'running')").lastrowid
+    con.close()
+    train.RUN.clear(); train.RUN.update(id=run_id, pause=threading.Event(), stop=threading.Event())
+    train._loop(run_id, {**train.DEFAULTS, "max_steps": 50})
+    r = train.status()["runs"][0]
+    assert r["status"] == "done" and r["why"] == said and [x["kind"] for x in r["log"]] == ["start", "ok", "stuck"]

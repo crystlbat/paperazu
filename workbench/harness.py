@@ -52,9 +52,40 @@ def stale() -> set[str]:
     """Commands whose last run was skipped with nothing new since: run again, they skip again. Any row but the harness's own bookkeeping counts as new."""
     con = db.connect()
     rows = con.execute("SELECT title, content, MAX(id) AS id FROM char_memories WHERE source = 'sheet' AND title LIKE 'Run: %' AND id > ? GROUP BY title", (char._start(),)).fetchall()
-    new = con.execute("SELECT COALESCE(MAX(id), 0) AS m FROM char_memories WHERE NOT (source = 'sheet' AND (title LIKE 'Run: %' OR title = 'Tick' OR title LIKE 'Cycle: %' OR title LIKE 'Feedback: %'))").fetchone()["m"]
+    new = con.execute("SELECT COALESCE(MAX(id), 0) AS m FROM char_memories WHERE NOT (source = 'sheet' AND (title LIKE 'Run: %' OR title = 'Tick' OR title LIKE 'Cycle: %' OR title LIKE 'Feedback: %' OR title LIKE 'Stuck: %' OR title LIKE 'Fail: %' OR title LIKE 'Correction: %'))").fetchone()["m"]
     con.close()
     return {r["title"].removeprefix("Run: ") for r in rows if r["id"] > new and '"outcome": "skipped"' in r["content"]}
+
+
+STUCK_AFTER = 3  # cycles in a row that kept nothing: it is going round in circles
+UNSTICK = ("goal", "plan", "ask", "wonder", "extract", "want")  # the steps that make new work, in the order it tries them; want asks you
+
+
+def notice(n: int, plan: list[dict[str, Any]], rejected: list[dict[str, str]], force: bool = False) -> dict[str, Any]:
+    """Its picture of itself, no model: is it stuck, on what, and what it will try instead. Stuck: nothing in this plan can run,
+    or the last STUCK_AFTER cycles kept nothing. A way out it tried in the last two times it was stuck is not tried again."""
+    fb = [json.loads(r["content"]) for r in _rows("Feedback: %", STUCK_AFTER)]
+    dry = len(fb) == STUCK_AFTER and not any(v["keep"] for vs in fb for v in vs)
+    if plan and not dry:
+        return {"stuck": False}
+    walls: dict[str, int] = {}
+    for r in _rows("Run: %", 12):
+        c = json.loads(r["content"])
+        if c.get("outcome") == "skipped":
+            w = f"{r['title'].removeprefix('Run: ')}: {c.get('detail', '').removesuffix(' (arg ignored)')[:90]}"
+            walls[w] = walls.get(w, 0) + 1
+    for x in rejected:
+        walls[x["why"]] = walls.get(x["why"], 0) + 1
+    on = max(walls, key=walls.get) if walls else "nothing in its plan could run"
+    tried = {json.loads(r["content"]).get("try") for r in _rows("Stuck: %", 2)}
+    _, blocked = char._blocks(True, force)
+    idle, have = stale(), {p["name"] for p in plan}
+    nxt = next((k for k in UNSTICK if k not in idle and not blocked.get(k) and k not in have and k not in tried), "")
+    said = (f"I keep hitting the same wall ({on}). " +
+            (f"So I will {DOES[nxt]} instead." if nxt else "I have nothing left to try on my own. I need something new from you: a question, a source, or a chat."))
+    me = {"stuck": True, "on": on, "try": nxt, "said": said, "need_you": not nxt}
+    char.add_memory(f"Stuck: {n}", json.dumps(me), source="sheet")
+    return me
 
 
 def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
@@ -79,6 +110,8 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
     useful = [f'reflect "{qs[0]}"' for qs in [char._open_questions(char._start())] if qs] + \
              [f"check {u[0]['id']}" for u in [_unchecked()] if u]
     state.append("most useful now: " + ("; ".join(useful) or "plan, then goal, to make new questions"))
+    if (last := cycles(1)) and last[0].get("self", {}).get("stuck"):
+        state.append("what it noticed about itself last cycle: " + last[0]["self"]["said"])
     return [{"role": "system", "content": f"You plan the next steps of {who}'s learning. Pick at most {budget} commands from the catalogue. "
                                           "Reply with commands only, one per line, like: reflect \"a topic\" or check 12. No other text." + char._fix("planner")},
             {"role": "user", "content": "Goal:\n" + ("\n".join(f"- {p}" for p in plans) or f"- learn about {who}'s world") +
@@ -277,11 +310,14 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
             proposed = [{"name": k, "arg": ""}, *proposed]  # one per cycle, up front, so the budget does not cut it
         plan, rejected = validate(proposed, budget, force)
         rejected += [{"cmd": b, "why": "could not read it as a command"} for b in bad]
+        me = notice(n, plan, rejected, force)
+        if me.get("try"):  # its own way out goes in, in place of the last pick if the plan is full
+            plan = plan[:budget - 1] + [{"name": me["try"], "arg": "", "role": COMMANDS[me["try"]]["role"]}]
         executed = execute(plan, s, swaps)
         verdicts = [] if CANCEL.is_set() else verify(executed, s, swaps)
         out = {"cycle": n, "plan_text": text, "proposed": [_text(c) for c in proposed], "rejected": rejected,
                "executed": [{k: x[k] for k in ("cmd", "outcome", "detail")} for x in executed], "verdicts": verdicts,
-               "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps]}
+               "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps], "self": me}
         char.add_memory(f"Feedback: {n}", json.dumps(verdicts), source="sheet")
         char.add_memory(f"Cycle: {n}", json.dumps(out), source="sheet")
         kept = sum(v["keep"] for v in verdicts)

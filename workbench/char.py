@@ -625,7 +625,7 @@ def speak(text: str) -> bytes:
 def mind() -> dict[str, Any]:
     """Everything the character holds, newest first, and the prompts it last sent the model."""
     con = db.connect()
-    rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? AND NOT (source = 'sheet' AND (title LIKE 'Resting: %' OR title LIKE 'Entities: %' OR title LIKE 'Kept: %' OR title LIKE 'System: _' OR title = 'Mode' OR title LIKE 'Guess: %' OR title LIKE 'Checked: %' OR title LIKE 'Ground: %' OR title LIKE 'Sources: %' OR title LIKE 'Gate: %' OR title LIKE 'Dial: %' OR title IN ('Tick', 'Reply', 'Baked') OR title LIKE 'Fail: %' OR title LIKE 'Correction: %' OR title LIKE 'Reviewed: %' OR title LIKE 'Asking: %' OR title LIKE 'Answered: %' OR title LIKE 'Run: %')) ORDER BY id DESC", (_start(),)).fetchall()
+    rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? AND NOT (source = 'sheet' AND (title LIKE 'Resting: %' OR title LIKE 'Entities: %' OR title LIKE 'Kept: %' OR title LIKE 'System: _' OR title = 'Mode' OR title LIKE 'Guess: %' OR title LIKE 'Checked: %' OR title LIKE 'Ground: %' OR title LIKE 'Sources: %' OR title LIKE 'Gate: %' OR title LIKE 'Dial: %' OR title IN ('Tick', 'Reply', 'Baked') OR title LIKE 'Fail: %' OR title LIKE 'Correction: %' OR title LIKE 'Reviewed: %' OR title LIKE 'Asking: %' OR title LIKE 'Answered: %' OR title LIKE 'Run: %' OR title LIKE 'Stuck: %')) ORDER BY id DESC", (_start(),)).fetchall()
     con.close()
     p = get_profile()
     return {"who": p["name"], "persona": p["persona"], "memories": [dict(r) for r in rows], "open": _open_questions(_start()), "prompts": list(PROMPTS)[::-1]}

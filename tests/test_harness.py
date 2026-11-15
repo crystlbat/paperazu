@@ -64,6 +64,25 @@ def test_a_skipped_command_stays_off_the_plan_until_something_new_comes_in():
     assert "tune" not in harness.stale()
 
 
+def test_stuck_it_names_the_wall_tries_a_way_out_and_then_asks_for_you(monkeypatch):
+    calls = _models(monkeypatch, "{{ not a command")  # a planner that gives it nothing to run
+    r = harness.cycle()
+    me = r["self"]
+    assert me["stuck"] and me["try"] == harness.UNSTICK[0] and me["said"].startswith("I keep hitting the same wall")
+    assert [x["cmd"] for x in r["executed"]] == [me["try"]]  # its own way out ran
+    assert "what it noticed about itself last cycle: I keep hitting" in harness.prompt()[1]["content"]
+    for _ in range(len(harness.UNSTICK) + 2):  # each way out is tried, goes stale or is skipped as tried, until none is left
+        r = harness.cycle()
+    assert r["self"]["need_you"] and r["self"]["try"] == "" and "I need something new from you" in r["self"]["said"]
+    assert _sheet("Stuck: %")
+
+
+def test_not_stuck_when_the_plan_has_work():
+    char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")
+    assert harness.notice(1, [{"name": "check", "arg": "", "role": "chat"}], []) == {"stuck": False}
+    assert _sheet("Stuck: %") == []
+
+
 def _models(monkeypatch, planner: str, judge: str = "1 KEEP useful\n2 DROP repeats itself") -> list[list[dict[str, Any]]]:
     calls: list[list[dict[str, Any]]] = []
 
@@ -101,12 +120,13 @@ def test_full_cycle_runs_records_and_feeds_back(monkeypatch):
     calls2 = _models(monkeypatch, "{{ not a command")
     r2 = harness.cycle()
     assert "worked last cycle: check, reflect" in calls2[0][1]["content"] and ": keep (" not in calls2[0][1]["content"]  # plain words, nothing to copy back as a command
-    assert r2["executed"] == [] and r2["rejected"] == [{"cmd": "{{ not a command", "why": "could not read it as a command"}]
+    assert [x["cmd"] for x in r2["executed"]] == [r2["self"]["try"]] and r2["self"]["stuck"]  # nothing to run: it picks its own way out
+    assert r2["rejected"] == [{"cmd": "{{ not a command", "why": "could not read it as a command"}]
     assert len(_sheet("Fail: planner")) == 1  # a parse failure is a self-correction
     got = client.get("/char/cycles").json()["cycles"]
     assert [c["cycle"] for c in got] == [2, 1]
     loop = harness.totals()
-    assert loop == {"cycles_run": 2, "proposed": 3, "rejected": 2, "executed": 2, "kept": 2, "dropped": 0, "swaps": 0, "swap_seconds": 0}
+    assert loop == {"cycles_run": 2, "proposed": 3, "rejected": 2, "executed": 3, "kept": 2, "dropped": 1, "swaps": 0, "swap_seconds": 0}  # its own way out ran and found nothing
 
 
 def test_arg_ignored_and_planner_mode_rest(monkeypatch):

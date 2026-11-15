@@ -483,7 +483,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       name.textContent = d.who || "";
       const fill = (n, title, sub, ...live) => { S[n].want = title; if (!S[n].busy && S[n].t.textContent !== title) S[n].t.textContent = title; S[n].sub.replaceChildren(...sub); S[n].live.replaceChildren(...live); };
       // every slide shows what is true right now (real items from the report), not a description of the machine
-      const rows = (items, empty) => items.length ? h("ol", { class: "st-rows" }, ...items.map(([k, v, c]) => h("li", c ? { style: `--c:${c}` } : {}, h("span", {}, k), h("b", {}, esc(String(v)).slice(0, 120))))) : h("p", { class: "st-empty" }, empty);
+      const rows = (items, empty) => items.length ? h("ol", { class: "st-rows" }, ...items.map(([k, v, c]) => h("li", c ? { style: `--c:${c}` } : {}, h("span", {}, k), h("b", {}, esc(String(v)).slice(0, 240))))) : h("p", { class: "st-empty" }, empty);
       const T = d.totals || {}, HL = d.harness_loop || {}, cyc = d.cycles?.[0], skips = {};
       for (const t of d.trace || []) if (t.outcome === "skipped" && t.kind !== "cycle") skips[t.detail] = (skips[t.detail] || 0) + 1;
       const stuck = Object.entries(skips).sort((a, b) => b[1] - a[1])[0], notes = d.notes || [], kept = notes.filter((x) => x.verdict === "keep"), dropped = notes.filter((x) => x.verdict === "drop");
@@ -497,7 +497,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
           : h("strong", { title: "The only model this server lists. Load another in your model server to pick it here." }, esc((d.model_name || "no model set").split("/").pop())))),
         h("div", { class: "st-modes" }, h("div", { role: "radiogroup", "aria-label": "Learning mode" }, ...Object.keys(MODE_DOES).map((m) => h("button", { type: "button", role: "radio", "aria-checked": String(d.mode === m), title: MODE_DOES[m], disabled: !!ctl.busy,
           onclick: () => act(`mode ${m}`, () => api("/char/wiring", { method: "POST", body: JSON.stringify({ mode: m }) }).then(() => `now ${m}`)) }, m))), h("small", {}, MODE_DOES[d.mode] || "")),
-        newRun, rows([["curiosity", r2(d.disposition?.curiosity)], ["cycles", `${n0(HL.cycles_run)} · ${n0(HL.executed)} of ${n0(HL.proposed)} proposed steps ran`], stuck ? ["mostly stuck on", `${stuck[0]} (${stuck[1]}×)`, "#ffe600"] : null].filter(Boolean)));
+        newRun, rows([["curiosity", r2(d.disposition?.curiosity)], ["cycles", `${n0(HL.cycles_run)} · ${n0(HL.executed)} of ${n0(HL.proposed)} proposed steps ran`], cyc?.self?.stuck ? ["it notices", cyc.self.said, "#ffe600"] : stuck ? ["mostly stuck on", `${stuck[0]} (${stuck[1]}×)`, "#ffe600"] : null].filter(Boolean)));
       fill(1, "The dot is just a body.", ["Four systems inside it. What each is doing now:"],
         rows([[2, "S2 plans"], [1, "S1 asks"], [0, "S0 reads"], [3, "V checks"]].map(([n, t]) => { const s = loop.find((x) => x.system === n), stt = s ? stageOf(s).state : ["idle", ""]; return [t, D.now?.sys === n ? `working: ${DOING[D.now.kind] || D.now.kind}` : stt[1] || stt[0], SC[n]]; })));
       fill(2, "A planner.", ["Its last plan, cycle ", b(cyc?.cycle), ": ", b(cyc?.proposed?.length), " proposed, ", b(cyc?.rejected?.length), " rejected."],
