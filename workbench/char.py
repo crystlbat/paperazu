@@ -9,6 +9,7 @@ In this hidden mode:
 """
 import json
 import math
+import random
 import re
 import time
 from collections import deque
@@ -412,6 +413,9 @@ def _start() -> int:
     return row["id"] if row else 0
 
 
+ACT_DECAY = 0.5  # ACT-R's d: a mention's weight falls as its age (in rows, not seconds, so idle time does not erase it) to the -0.5
+
+
 def graph(since: int | None = None) -> dict[str, Any]:
     """The character's knowledge graph: the names its notes mention and the ideas about them (nodes), and what is mentioned together (edges).
     Two kinds of node: "concrete" names (few, stable, never merged) and "abstract" ideas (many, near-synonymous, folded together)."""
@@ -434,6 +438,14 @@ def graph(since: int | None = None) -> dict[str, Any]:
         for x in notes:
             seen.setdefault(x, []).append(name)
     edges = sorted({(a, b) for names in seen.values() for i, a in enumerate(names) for b in names[i + 1:]})
+    deg: dict[str, int] = {}
+    for a, b in edges:
+        deg[a], deg[b] = deg.get(a, 0) + 1, deg.get(b, 0) + 1
+    last = max((int(x) for x in seen if x.isdigit()), default=0)
+    for n, r in zip(nodes, [r for r in rows if r["title"].removeprefix("Entity: ").removeprefix("Idea: ") not in off]):
+        ids = [int(x) for x in r["content"].split(",") if x.isdigit()]
+        act = sum((last - i + 1) ** -ACT_DECAY for i in ids)  # ACT-R base level, exp(B) = sum of age^-d: often and lately mentioned
+        n |= {"deg": deg.get(n["name"], 0), "lev": round((1 + deg.get(n["name"], 0)) * act, 4)}  # Reddin's leverage, deg(v) * sum W, with ACT-R's decay as W
     have = {n["name"] for n in nodes}
     links = [list(m.groups()) for t in sorted(titles) if (m := re.match(r"Reflection: How are (.+) and (.+) connected\?$", t)) and set(m.groups()) <= have]
     # the inner layer, what it worked out for itself: names it has folded into a summary, and pairs it looked up a connection for
@@ -571,7 +583,7 @@ def asker(names: list[str] | None = None, limit: int = 3) -> list[str]:
     done = {r["title"] for r in con.execute("SELECT title FROM char_memories WHERE id > ?", (since,))}
     con.close()
     g = graph(since)
-    pool = names if names is not None else [n["name"] for n in sorted(g["nodes"], key=lambda n: (-n["n"], n["kind"] == "abstract"))]  # most-mentioned first; a name before an idea
+    pool = names if names is not None else [n["name"] for n in sorted(g["nodes"], key=lambda n: (-n.get("lev", n["n"]), n["kind"] == "abstract"))]  # most leverage first (linked, often and lately mentioned); a name before an idea
     known = {n["name"] for n in g["nodes"] if n["known"]}
     ideas = {n["name"] for n in g["nodes"] if n["kind"] == "abstract"}
     room = max(0, limit - len(_open_questions(since)))  # a factory limit: only so many open questions at once
@@ -1090,6 +1102,20 @@ def _ease_momentum() -> None:
         con.close()
 
 
+def compression(g: dict[str, Any] | None = None) -> dict[str, float]:
+    """Reddin's S_comp over its ideas: mentions per folded idea, less the spread (entropy) between them. High is a settled routine;
+    a drop means new ideas arrive faster than they fold together, a new chapter (Schmidhuber: what counts is the change, not the level)."""
+    ns = [n["n"] for n in (g or graph())["nodes"] if n["kind"] == "abstract" and n["n"]]
+    if not ns:
+        return {"S": 0.0, "K": 0, "H": 0.0}
+    tot = sum(ns)
+    H = -sum(x / tot * math.log2(x / tot) for x in ns)
+    return {"S": round(tot / (len(ns) + H), 4), "K": len(ns), "H": round(H, 4)}
+
+
+PHASE_W = 1.0  # weight of the new-chapter term in curiosity
+
+
 def disposition() -> dict[str, Any]:
     """The two variables every character starts with, read from its graph and never set by hand (the Riddiary formula, as kept in ghost's memory harness):
         tau       = unmet / x     per name: the share of its questions (its lenses, the quota x) still unanswered; here the mean over names
@@ -1103,7 +1129,8 @@ def disposition() -> dict[str, Any]:
     bake = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Baked' AND id > ? ORDER BY id DESC LIMIT 1", (start,)).fetchone()
     sur = [float(r["content"].split("|")[0]) for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Guess: %' AND id > ? ORDER BY id DESC LIMIT 5", (start,)) if r["content"].split("|")[0]]
     con.close()
-    who, names = get_profile()["name"], [n for n in graph()["nodes"] if n["kind"] == "concrete"]
+    g = graph()
+    who, names = get_profile()["name"], [n for n in g["nodes"] if n["kind"] == "concrete"]
     met = [sum((i == 0 and n["known"]) or f"Reflection: {lens.format(name=n['name'], who=who)}"[:80] in done for i, lens in enumerate(LENSES)) for n in names]
     nE, nAE, x = len(names), sum(met), len(LENSES)
     baked = json.loads(bake["content"]) if bake else {"nE": 0, "nAE": 0}
@@ -1113,10 +1140,11 @@ def disposition() -> dict[str, Any]:
     fr = frontier()
     k = dial()
     mo = _var("momentum", 0)
-    sp = speculations()
+    sp, comp = speculations(), compression(g)
+    phase = round(max(0.0, baked["S"] - comp["S"]) / baked["S"], 4) if baked.get("S") else 0.0  # how far compression fell since the last consolidation
     know, miss = 1 - math.exp(-nAE / nE) if nE else 0.0, sum(sur) / len(sur) if sur else 0.5  # no guess checked yet: as likely right as wrong
-    return {"curiosity": round(k * (tau * dnE * damper + fr["term"]) + mo, 2), "dial": k, "momentum": mo, "frontier": fr, "maturity": round(1 - damper, 2), "tau": round(tau, 2), "dnE": dnE, "nE": nE, "nAE": nAE, "baked": baked,
-            "terms": {"names": round(tau * dnE * damper, 3), "damper": round(damper, 3), "frontier": fr["term"]},  # the formula's parts, so the page can show which one holds curiosity up
+    return {"curiosity": round(k * (tau * dnE * damper + fr["term"] + PHASE_W * phase) + mo, 2), "compression": {**comp, "baked": baked.get("S"), "phase": phase}, "dial": k, "momentum": mo, "frontier": fr, "maturity": round(1 - damper, 2), "tau": round(tau, 2), "dnE": dnE, "nE": nE, "nAE": nAE, "baked": baked,
+            "terms": {"names": round(tau * dnE * damper, 3), "damper": round(damper, 3), "frontier": fr["term"], "phase": round(PHASE_W * phase, 4)},  # the formula's parts, so the page can show which one holds curiosity up
             "optim": {"ease": MOMENTUM_EASE, "bake_every": BAKE_EVERY, "since_bake": max(0, nAE - baked["nAE"]), "keep": SPECULATION_KEEP, "target": SURPRISE_TARGET,
                       "speculated": len(sp), "held": sum(bool(x.get("held")) for x in sp), "last_surprise": sp[0]["surprise"] if sp else None},
             "score": {"J": round(know * (1 - miss), 3), "know": round(know, 3), "surprise": round(miss, 3)}}  # the one number to push up: how much it has answered, times how often its guesses come out right
@@ -1129,8 +1157,8 @@ def _tick(what: str) -> None:
                                    **{f"var:{v['name']}": v["value"] for v in mine()}}), source="sheet")
 
 
-def gains(last: int = 200) -> dict[str, dict[str, float]]:
-    """What each kind of step did to the score J, from the ticks: the mean change it made and how often it ran. The planner reads this to pick what pays."""
+def _deltas(last: int = 200) -> dict[str, list[float]]:
+    """Each kind of step's changes to J, oldest first, from consecutive ticks."""
     con = db.connect()
     ticks = [json.loads(r["content"]) for r in con.execute("SELECT content FROM (SELECT id, content FROM char_memories WHERE source = 'sheet' AND title = 'Tick' AND id > ? ORDER BY id DESC LIMIT ?) ORDER BY id", (_start(), last))]
     con.close()
@@ -1138,7 +1166,65 @@ def gains(last: int = 200) -> dict[str, dict[str, float]]:
     for a, b in zip(ticks, ticks[1:]):
         if "score" in a and "score" in b:  # ticks written before the score existed carry none
             by.setdefault(b["what"], []).append(b["score"] - a["score"])
+    return by
+
+
+def gains(last: int = 200) -> dict[str, dict[str, float]]:
+    """What each kind of step did to the score J, from the ticks: the mean change it made and how often it ran. The planner reads this to pick what pays."""
+    by = _deltas(last)
     return {k: {"gain": round(sum(v) / len(v), 4), "runs": len(v)} for k, v in sorted(by.items(), key=lambda kv: -sum(kv[1]) / len(kv[1]))}
+
+
+DISCOUNT = 0.9  # discounted Thompson sampling: each later run of the same step weighs old evidence down by this much, so a step that stopped paying is tried less
+STILL = 0.25  # a step that left J where it was counts as a quarter of a miss: it cost a turn
+
+
+def arms(last: int = 200) -> dict[str, tuple[float, float]]:
+    """A Beta(a, b) per kind of step over 'it raised J', newest evidence weighted most. Untried steps sit at Beta(1, 1), so they still get picked."""
+    out = {}
+    for k, ds in _deltas(last).items():
+        a = b = 1.0
+        for i, x in enumerate(reversed(ds)):
+            w = DISCOUNT ** i
+            a, b = (a + w, b) if x > 1e-4 else (a, b + w) if x < -1e-4 else (a, b + STILL * w)
+        out[k] = (round(a, 3), round(b, 3))
+    return out
+
+
+def judge_trust() -> dict[str, float]:
+    """How often the judge model agreed with an exact check it was shown blind (Noisy but Valid: estimate the judge from items whose answer is known).
+    A Beta mean, newest first and discounted; starts at a half."""
+    con = db.connect()
+    rows = [r["content"] for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Judge' AND id > ? ORDER BY id DESC LIMIT 50", (_start(),))]
+    con.close()
+    a = 1 + sum(DISCOUNT ** i for i, r in enumerate(rows) if r == "1")
+    b = 1 + sum(DISCOUNT ** i for i, r in enumerate(rows) if r != "1")
+    return {"value": round(a / (a + b), 3), "probes": len(rows)}
+
+
+EXPLORE = ("speculate", "wonder", "goal", "ask", "extract", "ideas", "plan", "want")  # System 1: reach for the new
+CHECK = ("reflect", "check", "fold")  # System 2: answer, verify, compress what it has
+TAU0 = 0.5  # softmax temperature at maturity 0; it cools as maturity rises, so it explores early and checks later
+REST_AT = 0.05  # driving force under this: nothing pulls it, it rests (Reddin's deterministic silence)
+
+
+def drive(d: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The two drives and who wins (the virtual-clone softmax): explore E from curiosity, check C from open questions times
+    how wrong its guesses run or how little the judge can be trusted, whichever is worse."""
+    d = d or disposition()
+    u, jt = len(_open_questions(_start())), judge_trust()
+    E = d["curiosity"] / (1 + d["curiosity"])
+    C = u / (u + 1) * max(d["score"]["surprise"], 1 - jt["value"])
+    tau = round(max(0.05, TAU0 * (1 - d["maturity"])), 3)
+    p = 1 / (1 + math.exp(-(E - C) / tau))
+    df = p * E + (1 - p) * C
+    return {"E": round(E, 3), "C": round(C, 3), "tau": tau, "p_explore": round(p, 3), "DF": round(df, 3), "rest": df < REST_AT, "open": u, "judge": jt}
+
+
+def thompson(kinds: list[str]) -> str:
+    """The step to take from these, by one draw from each one's Beta: mostly the one that has paid, now and then a long shot."""
+    A = arms()
+    return max(kinds, key=lambda k: random.betavariate(*A.get(k, (1.0, 1.0)))) if kinds else ""
 
 
 def monitor() -> dict[str, Any]:
@@ -1807,7 +1893,7 @@ def report(up: bool, label: str) -> dict[str, Any]:
     return {"notes": notes, "who": get_profile()["name"], "you": you(), "life": life(), "since": mark["created_at"] if mark else "", "model": {"up": up, "label": label},
             "totals": {"steps": len(runs), "ok": outcomes.count("ok"), "skipped": outcomes.count("skipped"), "failed": outcomes.count("failed"), "cycles": cycles,
                        "replies": sum(t["role"] == "dot" and not t["text"].startswith(NOT_A_REPLY) for t in _chat_since())},
-            "corrections": corr, "learned": learned, "disposition": disposition(), "series": monitor()["series"], "gains": gains(), "harness": harness, "trace": runs[:300]}
+            "corrections": corr, "learned": learned, "disposition": (dsp := disposition()), "drive": drive(dsp), "series": monitor()["series"], "gains": gains(), "arms": arms(), "harness": harness, "trace": runs[:300]}
 
 
 def _notes(start: int) -> list[dict[str, Any]]:
@@ -2157,7 +2243,7 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
                 return no("bakes only on the character page")
             if (k := d["nAE"] - d["baked"]["nAE"]) < BAKE_EVERY:
                 return no(f"{k} new answers, needs {BAKE_EVERY}")
-            add_memory("Baked", json.dumps({"nE": d["nE"], "nAE": d["nAE"]}), source="sheet")
+            add_memory("Baked", json.dumps({"nE": d["nE"], "nAE": d["nAE"], "S": d["compression"]["S"]}), source="sheet")
             return "what it has answered", f"maturity {d['maturity']:.2f} → {disposition()['maturity']:.2f} · {d['nAE']} answers about {d['nE']} names"
         if kind == "fold":  # compression: a name with three or more notes about it gets one summary, so a reply reads one note instead of many
             # shortcut: a name is folded once and the summary does not grow with later notes; refold when its notes double if that bites

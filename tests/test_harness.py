@@ -20,6 +20,10 @@ def setup(monkeypatch):
 
     monkeypatch.setattr(llm, "_api", no_http)
     monkeypatch.setattr(websearch, "search", lambda s, q: {"results": [{"title": "Fog", "snippet": "London fog over Baker Street"}]})
+    monkeypatch.setattr(harness, "steer", lambda plan, rejected, budget=harness.BUDGET, force=False: (plan, rejected, {}))  # the drive has its own tests; the rest pin the planner's plan
+
+
+_steer = harness.steer.__wrapped__ if hasattr(harness.steer, "__wrapped__") else harness.steer
 
 
 def _sheet(title_like: str) -> list[Any]:
@@ -106,8 +110,9 @@ def _models(monkeypatch, planner: str, judge: str = "1 KEEP useful\n2 DROP repea
 
 def test_full_cycle_runs_records_and_feeds_back(monkeypatch):
     note = char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")["id"]
-    calls = _models(monkeypatch, f'check {note}\nreflect "Baker Street"\nteleport now')
+    calls = _models(monkeypatch, f'why: 1 unchecked note, so check first\ncheck {note}\nreflect "Baker Street"\nteleport now')
     r = client.post("/char/cycle", json={}).json()
+    assert r["why"] == "1 unchecked note, so check first"  # its reason, kept with the cycle and never run as a command
     assert r["cycle"] == 1 and r["proposed"] == [f'check "{note}"', 'reflect "Baker Street"', 'teleport "now"']
     assert r["rejected"] == [{"cmd": 'teleport "now"', "why": "unknown command"}]
     assert [(x["cmd"], x["outcome"]) for x in r["executed"]] == [(f'check "{note}"', "ok"), ('reflect "Baker Street"', "ok")]
@@ -314,3 +319,26 @@ def test_with_steps_still_to_run_it_is_never_spent_and_bookkeeping_is_no_wall(mo
     char._engine("cycle", "skipped", "cycle 9: 1 proposed, 1 rejected, 0 run, 0 kept")
     me = harness.notice(10, [{"name": "reflect", "arg": "", "role": "chat"}], [])
     assert me["stuck"] and not me["spent"] and "cycle 9" not in me["on"]
+
+
+def test_checking_holds_back_reaching_while_questions_are_open_and_thompson_fills_an_empty_side(monkeypatch):
+    monkeypatch.setattr(char, "drive", lambda d=None: {"E": 0.2, "C": 0.6, "p_explore": 0.1, "open": 2, "tau": 0.5, "DF": 0.5, "rest": False, "judge": {"value": 0.5, "probes": 0}})
+    monkeypatch.setattr(harness.random, "random", lambda: 0.5)  # 0.5 >= p_explore: check
+    plan = [{"name": "speculate", "arg": "", "role": "planner"}, {"name": "wonder", "arg": "", "role": "planner"}]
+    got, rejected, dv = _steer(plan, [], 3, True)
+    assert dv["mode"] == "check" and all(p["name"] in char.CHECK for p in got) and len(got) == 1  # both explore steps held back, one check step put in
+    assert [r["why"].startswith("checking first") for r in rejected] == [True, True]
+    monkeypatch.setattr(harness.random, "random", lambda: 0.05)  # explore wins: the plan is left alone when it already reaches out
+    got, rejected, dv = _steer(plan, [], 3, True)
+    assert dv["mode"] == "explore" and got == plan and rejected == []
+
+
+def test_the_judge_is_shown_one_settled_step_blind_and_its_agreement_is_its_trust(monkeypatch):
+    monkeypatch.setattr(llm, "ensure", lambda s, m: None)
+    monkeypatch.setattr(jobs, "complete", lambda s, msgs, max_tokens=0: "1 KEEP fine\n2 DROP looks off")
+    executed = [{"cmd": "wonder", "name": "wonder", "outcome": "ok", "detail": "a question", "made": []},
+                {"cmd": "journal", "name": "journal", "outcome": "ok", "detail": "wrote", "made": []}]
+    monkeypatch.setattr(char, "NO_MODEL", {"journal"})
+    v = harness.verify(executed, settings.get_all(), [])
+    assert [x["keep"] for x in v] == [True, True]  # the probe never changes the settled verdict
+    assert char.judge_trust() == {"value": round(1 / 3, 3), "probes": 1}  # it said DROP to a step the exact check kept: one miss

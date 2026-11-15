@@ -327,7 +327,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const state = s.on === false ? ["off", "switched off"] : blocked ? ["blocked", blocked] : failed && last?.outcome === "failed" ? ["failed", last.detail] : ok && last?.outcome === "ok" ? ["working", last.detail] : last ? ["waiting", last.detail] : ["idle", "has not run yet"];
     return { ok, runs, state }; };
   let fPrev = {}; // the values the last poll showed, so each term says which way it moved
-  const formulaBox = (D, G = {}) => { const T = D.terms || {}, F = D.frontier || {}, O = D.optim || {}, S = D.score || {};
+  const formulaBox = (D, G = {}, V = {}) => { const T = D.terms || {}, F = D.frontier || {}, O = D.optim || {}, S = D.score || {}, P = D.compression || {};
     const v = (k, x, tip) => { const p = fPrev[k], dir = typeof p?.x === "number" && typeof x === "number" && r2(p.x) !== r2(x) ? (x > p.x ? "↑" : "↓") : p?.dir || ""; fPrev[k] = { x, dir }; // the arrow stays until it moves again
       return h("span", { class: "sw-fv", title: tip, "data-dir": dir === "↑" ? "up" : dir === "↓" ? "down" : "" }, h("b", {}, x == null ? "–" : r2(x)), h("small", {}, `${k}${dir}`)); };
     const row = (k, x, tip, note) => h("li", {}, v(k, x, tip), h("p", {}, note));
@@ -336,7 +336,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       Object.keys(G).length ? h("p", { class: "sw-dmut" }, "what each step does to J: ", ...Object.entries(G).slice(0, 8).map(([k, g]) => h("span", { class: "sw-gain", "data-dir": g.gain > 0 ? "up" : g.gain < 0 ? "down" : "" }, `${k} ${g.gain > 0 ? "+" : ""}${g.gain.toFixed(3)} ×${g.runs}`))) : "",
       h("p", { class: "sw-fx" }, v("curiosity", D.curiosity, "the brake: at 0 it stops reaching out"), " = ", v("dial", D.dial, "your hand on it"), " × ( ",
         v("tau", D.tau, "share of each name's questions still unanswered"), " × ", v("dnE", D.dnE, "names met since the last consolidation"), " × ", v("damper", T.damper, "e^(−nAE/nE) from the last consolidation: 1 − maturity"),
-        " + ", v("D", F.D, "how many layers deep the mesh goes (max 4)"), " × ", v("F", F.F, "share of the mesh still open"), " ) + ", v("momentum", D.momentum, "the push your ups gave")),
+        " + ", v("D", F.D, "how many layers deep the mesh goes (max 4)"), " × ", v("F", F.F, "share of the mesh still open"), " + ", v("phase", T.phase, "how far compression fell since the last consolidation: a new chapter"), " ) + ", v("momentum", D.momentum, "the push your ups gave")),
+      h("p", { class: "sw-fx" }, v("P explore", V.p_explore, "softmax of the two drives"), " = σ((", v("E", V.E, "explore drive: curiosity / (1 + curiosity)"), " − ", v("C", V.C, "check drive: open share × max(surprise, 1 − judge trust)"), ") / ", v("τ", V.tau, "temperature, cools as maturity rises"), ")  ", v("DF", V.DF, `driving force; under 0.05 it rests`), v("judge", V.judge?.value, `how often the judge agreed with an exact check it was shown blind (${n0(V.judge?.probes)} probes)`), v("S", P.S, `compression of its ideas: ${n0(P.K)} folded, spread ${r2(P.H)}`)),
       h("p", { class: "sw-dmut" }, `names term ${r2(T.names)} · frontier term ${r2(T.frontier)} · maturity ${r2(D.maturity)}`),
       h("ul", { class: "sw-optim" },
         row("momentum", D.momentum, "eased each step that did something", `× ${O.ease ?? "–"} per step that did something, to 0 under 0.05`),
@@ -513,7 +514,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
           : h("strong", { title: "The only model this server lists. Load another in your model server to pick it here." }, esc((d.model_name || "no model set").split("/").pop())))),
         h("div", { class: "st-modes" }, h("div", { role: "radiogroup", "aria-label": "Learning mode" }, ...Object.keys(MODE_DOES).map((m) => h("button", { type: "button", role: "radio", "aria-checked": String(d.mode === m), title: MODE_DOES[m], disabled: !!ctl.busy,
           onclick: () => act(`mode ${m}`, () => api("/char/wiring", { method: "POST", body: JSON.stringify({ mode: m }) }).then(() => `now ${m}`)) }, m))), h("small", {}, MODE_DOES[d.mode] || "")),
-        newRun, rows([["curiosity", r2(d.disposition?.curiosity)], ["cycles", `${n0(HL.cycles_run)} · ${n0(HL.executed)} of ${n0(HL.proposed)} proposed steps ran`], cyc?.self?.stuck ? ["it notices", cyc.self.said, "#ffe600"] : stuck ? ["mostly stuck on", `${stuck[0]} (${stuck[1]}×)`, "#ffe600"] : null].filter(Boolean)));
+        newRun, rows([["curiosity", r2(d.disposition?.curiosity)], ["cycles", `${n0(HL.cycles_run)} · ${n0(HL.executed)} of ${n0(HL.proposed)} proposed steps ran`], cyc?.self?.stuck ? ["it notices", cyc.self.said, "#ffe600"] : stuck ? ["mostly stuck on", `${stuck[0]} (${stuck[1]}×)`, "#ffe600"] : null,
+          cyc?.drive?.mode ? ["it chose", `${cyc.drive.mode} (P explore ${r2(cyc.drive.p_explore)})${cyc.why ? `: ${cyc.why}` : ""}`] : null].filter(Boolean)));
       fill(1, "The dot is just a body.", ["Four systems inside it. What each is doing now:"],
         rows([[2, "S2 plans"], [1, "S1 asks"], [0, "S0 reads"], [3, "V checks"]].map(([n, t]) => { const s = loop.find((x) => x.system === n), stt = s ? stageOf(s).state : ["idle", ""]; return [t, D.now?.sys === n ? `working: ${DOING[D.now.kind] || D.now.kind}` : stt[1] || stt[0], SC[n]]; })));
       fill(2, "A planner.", ["Its last plan, cycle ", b(cyc?.cycle), ": ", b(cyc?.proposed?.length), " proposed, ", b(cyc?.rejected?.length), " rejected."],
@@ -584,9 +586,9 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const tc = live ? cfg : (ctl.tcfg ||= { minutes: 20, lo: 0, hi: 1, max_steps: 60 }); // idle: the band is the next run's target, and you drag it
     const pts = log.length > 1 || live ? [...log] : (() => { const S = Object.fromEntries((d.series || []).map((x) => [x.name, x.points || []])), n = Math.max(0, ...Object.values(S).map((p) => p.length)); return [...Array(n)].map((_, i) => Object.fromEntries([["t", i], ...Object.entries(S).map(([k, p]) => [k, p[i] ?? 0])])); })();
     if (live && log.length) { const D = d.disposition || {}, L = d.life || {}; // a live "now" point from the report itself, so a line moves inside a long cycle, not only when a step lands
-      pts.push({ t: run.clock ?? 0, step: last?.step, curiosity: D.curiosity, maturity: D.maturity, ...(typeof D.frontier?.term === "number" ? { frontier: D.frontier.term } : {}), ...(D.terms ? { names: D.terms.names, damper: D.terms.damper } : {}), ...(typeof D.frontier?.F === "number" ? { F: D.frontier.F, D: D.frontier.D } : {}), ...(typeof D.momentum === "number" ? { momentum: D.momentum } : {}), ...(typeof D.score?.J === "number" ? { score: D.score.J } : {}), ...(L.needs || {}), ...(typeof L.trust?.value === "number" ? { trust: L.trust.value } : {}), now: true }); }
+      pts.push({ t: run.clock ?? 0, step: last?.step, curiosity: D.curiosity, maturity: D.maturity, ...(typeof D.frontier?.term === "number" ? { frontier: D.frontier.term } : {}), ...(D.terms ? { names: D.terms.names, damper: D.terms.damper } : {}), ...(typeof D.frontier?.F === "number" ? { F: D.frontier.F, D: D.frontier.D } : {}), ...(typeof D.momentum === "number" ? { momentum: D.momentum } : {}), ...(typeof D.score?.J === "number" ? { score: D.score.J } : {}), ...(typeof d.drive?.p_explore === "number" ? { p_explore: d.drive.p_explore } : {}), ...(D.compression ? { S: D.compression.S, phase: D.compression.phase } : {}), ...(L.needs || {}), ...(typeof L.trust?.value === "number" ? { trust: L.trust.value } : {}), now: true }); }
     const clock = run?.clock ?? last?.t ?? 0, T = Math.max(10, clock, pts.at(-1)?.t || 0), byClock = !!log.length || live; // live: the clock and the lanes from the first second, before the first step lands
-    const C = { curiosity: tint, maturity: "#ffb347", frontier: "#c79bff", score: "#ffffff", names: "#ff7ab6", damper: "#9be564", F: "#5ec8ff", D: "#8a8aff", momentum: "#ffe600", ...NEED_C, trust: "#e4e4e7" };
+    const C = { curiosity: tint, maturity: "#ffb347", frontier: "#c79bff", score: "#ffffff", p_explore: "#ff9f43", phase: "#f368e0", S: "#48dbfb", names: "#ff7ab6", damper: "#9be564", F: "#5ec8ff", D: "#8a8aff", momentum: "#ffe600", ...NEED_C, trust: "#e4e4e7" };
     const has = pts.length ? Object.keys(C).filter((k) => pts.some((p) => typeof p[k] === "number")) : [], moved = (k) => new Set(pts.map((p) => r2(+p[k] || 0))).size > 1;
     const keys = has.filter((k) => moved(k) || k === "curiosity"), still = has.filter((k) => !keys.includes(k)); // a variable that never moved is a fact, not a line
     const X = (t) => Math.min(800, (t / T) * 800), TOP = 14, BASE = 190; // x 0–800 is the clock, names to the right
@@ -716,7 +718,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
             feels(d.life), wishes(d.life),
             youBox(d),
             h("section", {}, h("h4", {}, "Curiosity"), h("p", { class: "sw-big" }, h("strong", {}, r2(D.curiosity)), h("span", {}, `maturity ${r2(D.maturity)}`)),
-              formulaBox(D, d.gains), lineChart(d.series || [])))); },
+              formulaBox(D, d.gains, d.drive), lineChart(d.series || [])))); },
       notes: () => split([h("p", { class: "sw-dmut sw-lhead" }, `${notes.length} notes · ${n0(L.verified)} let in · ${n0(L.rejected)} turned away`), h("ol", { class: "sw-dl sw-dnotes" }, ...notes.map(noteRow))], inspect()),
       activity: () => { const steps = trace.filter((t) => (tFilter === "all" || t.outcome === tFilter) && (!tEngine || t.kind === tEngine) && (rSys == null || t.system === rSys)), eng = [...new Set(trace.map((t) => t.kind))].sort();
         const btn = (k, t) => h("button", { type: "button", "aria-pressed": String(tFilter === k), onclick: () => { tFilter = k; paintReport(); } }, t);

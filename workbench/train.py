@@ -114,7 +114,8 @@ def _vars(d: dict[str, Any]) -> dict[str, float]:
     """Every number that moves while it learns, for the Story charts: its needs, trust and frontier beside curiosity and maturity."""
     fr, t = d.get("frontier") if isinstance(d.get("frontier"), dict) else {}, d.get("terms") or {}
     return {**{k: round(v, 3) for k, v in char.needs().items()}, "trust": char.trust()["value"], **({"frontier": round(fr["term"], 3)} if "term" in fr else {}),
-            **({"names": t["names"], "damper": t["damper"]} if t else {}), **({"F": fr["F"], "D": fr["D"]} if "F" in fr else {}), **({"momentum": d["momentum"]} if "momentum" in d else {}), **({"score": d["score"]["J"]} if "score" in d else {})}
+            **({"names": t["names"], "damper": t["damper"]} if t else {}), **({"F": fr["F"], "D": fr["D"]} if "F" in fr else {}), **({"momentum": d["momentum"]} if "momentum" in d else {}), **({"score": d["score"]["J"]} if "score" in d else {}),
+            **({"S": d["compression"]["S"], "phase": d["compression"]["phase"]} if "compression" in d else {}), **({"p_explore": char.drive(d)["p_explore"]} if "score" in d else {})}
 
 
 WAIT_TURN = 300.0  # seconds a run step waits for a cycle already running

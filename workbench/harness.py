@@ -1,6 +1,7 @@
 """The harness cycle: a planner model picks commands, the controller (plain code) checks them, the executor runs them through
 char's own step code, and the Verifier judges this cycle's trace. Its feedback goes into the next planner prompt."""
 import json
+import random
 import re
 import threading
 from typing import Any
@@ -120,8 +121,10 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
         state.append(f"its speculations: {sum(x['held'] for x in sp)} of {len(sp)} held up when checked" + "".join(f"; held: {x['guess'][:90]}" for x in sp if x["held"])[:400])
     if (last := cycles(1)) and last[0].get("self", {}).get("stuck"):
         state.append("what it noticed about itself last cycle: " + last[0]["self"]["said"])
+    dv = char.drive(d)
+    state.append(f"drive: explore {dv['E']} vs check {dv['C']} ({dv['open']} open questions, judge trusted {dv['judge']['value']}); it {'explores' if dv['p_explore'] >= 0.5 else 'checks'} with chance {max(dv['p_explore'], 1 - dv['p_explore']):.2f}")
     return [{"role": "system", "content": f"You plan the next steps of {who}'s learning. Pick at most {budget} commands from the catalogue. "
-                                          "Reply with commands only, one per line, like: reflect \"a topic\" or check 12. No other text." + char._fix("planner")},
+                                          "First line: why: then one short reason that names the numbers you went by. Then commands only, one per line, like: reflect \"a topic\" or check 12. No other text." + char._fix("planner")},
             {"role": "user", "content": "Goal:\n" + ("\n".join(f"- {p}" for p in plans) or f"- learn about {who}'s world") +
                                         f"\n\nCommands:\n{cat}\n\nState:\n" + "\n".join(f"- {x}" for x in state)}]
 
@@ -272,10 +275,12 @@ def verify(executed: list[dict[str, Any]], s: settings.Settings, swaps: list[dic
     if open_:
         if sw := llm.ensure(s, s.judge_model):
             swaps.append(sw)
+        gold = next((i for i, v in enumerate(verdicts) if v is not None and executed[i]["outcome"] == "ok"), None)  # one step an exact check already settled, shown blind: how often the judge agrees is how far to trust it
+        ask = open_ + ([gold] if gold is not None else [])
         msgs = [{"role": "system", "content": "You judge the steps of a learning agent. For each numbered step reply on its own line: the number, KEEP or DROP, then a few words why."},
-                {"role": "user", "content": "\n".join(f"{n + 1}. {executed[i]['cmd']} -> {executed[i]['detail'][:200]}" for n, i in enumerate(open_))}]
+                {"role": "user", "content": "\n".join(f"{n + 1}. {executed[i]['cmd']} -> {executed[i]['detail'][:200]}" for n, i in enumerate(ask))}]
         try:
-            said = jobs.complete(_role_settings(s, "judge"), msgs, max_tokens=40 * len(open_)) or ""
+            said = jobs.complete(_role_settings(s, "judge"), msgs, max_tokens=40 * len(ask)) or ""
         except Exception as e:
             said = ""
             char._log("judge", msgs, f"(failed: {e})")
@@ -285,7 +290,28 @@ def verify(executed: list[dict[str, Any]], s: settings.Settings, swaps: list[dic
         for n, i in enumerate(open_):
             keep, why = got.get(n + 1, (True, "judge gave no verdict; it ran"))
             verdicts[i] = {"keep": keep, "why": why[:100]}
+        if gold is not None and len(ask) in got:
+            char.add_memory("Judge", "1" if got[len(ask)][0] == verdicts[gold]["keep"] else "0", source="sheet")
     return [{"cmd": x["cmd"], **v} for x, v in zip(executed, verdicts)]  # type: ignore[dict-item]
+
+
+def steer(plan: list[dict[str, Any]], rejected: list[dict[str, str]], budget: int = BUDGET, force: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, str]], dict[str, Any]]:
+    """The two drives decide this cycle: one draw against p_explore says explore or check. Checking holds back reaching for the new
+    while questions are open; either way, a plan with nothing of the winning kind gets the step Thompson sampling picks from it."""
+    dv = char.drive()
+    mode = "explore" if random.random() < dv["p_explore"] else "check"
+    group = char.EXPLORE if mode == "explore" else char.CHECK
+    if mode == "check" and dv["open"]:
+        held = [p for p in plan if p["name"] in char.EXPLORE]
+        plan = [p for p in plan if p["name"] not in char.EXPLORE]
+        rejected = rejected + [{"cmd": _text(p), "why": f"checking first: {dv['open']} open questions, explore {dv['E']} lost to check {dv['C']}"} for p in held]
+    if not any(p["name"] in group for p in plan):
+        _, blocked = char._blocks(True, force)
+        idle, have = stale(), {p["name"] for p in plan}
+        ok = [k for k in group if k in COMMANDS and not blocked.get(k) and k not in idle and k not in have]
+        if pick := char.thompson(ok):
+            plan = [{"name": pick, "arg": "", "role": COMMANDS[pick]["role"]}, *plan][:budget]
+    return plan, rejected, {**dv, "mode": mode}
 
 
 def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[str, Any]:
@@ -312,13 +338,15 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
             char._log("planner", msgs, text)
         finally:
             char.NOW.clear()
-        proposed, bad = parse(text)
+        why = (m[1].strip()[:200] if (m := re.search(r"(?im)^\W*why\W+(.+)$", text)) else "")
+        proposed, bad = parse(re.sub(r"(?im)^\W*why\W.*$", "", text))
         if bad or not proposed:  # a self-correction: two of these and the Verifier proposes the planner fix
             char._fail("planner")
         if (k := starved(proposed, force)):
             proposed = [{"name": k, "arg": ""}, *proposed]  # one per cycle, up front, so the budget does not cut it
         plan, rejected = validate(proposed, budget, force)
         rejected += [{"cmd": b, "why": "could not read it as a command"} for b in bad]
+        plan, rejected, dv = steer(plan, rejected, budget, force)
         me = notice(n, plan, rejected, force)
         if me.get("try"):  # its own way out goes in, in place of the last pick if the plan is full
             plan = plan[:budget - 1] + [{"name": me["try"], "arg": "", "role": COMMANDS[me["try"]]["role"]}]
@@ -326,7 +354,7 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         verdicts = [] if CANCEL.is_set() else verify(executed, s, swaps)
         out = {"cycle": n, "plan_text": text, "proposed": [_text(c) for c in proposed], "rejected": rejected,
                "executed": [{k: x[k] for k in ("cmd", "outcome", "detail")} for x in executed], "verdicts": verdicts,
-               "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps], "self": me, **({"planner_failed": failed} if failed else {})}
+               "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps], "self": me, "why": why, "drive": dv, **({"planner_failed": failed} if failed else {})}
         char.add_memory(f"Feedback: {n}", json.dumps(verdicts), source="sheet")
         char.add_memory(f"Cycle: {n}", json.dumps(out), source="sheet")
         kept = sum(v["keep"] for v in verdicts)

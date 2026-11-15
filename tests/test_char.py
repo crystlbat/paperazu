@@ -800,7 +800,7 @@ def test_names_from_separate_chats_get_a_link_question(monkeypatch):
     for name in ("Batman", "Alfred"):  # each met in its own note: no edge between them
         note = char.add_memory(f"Reflection: {name}", f"{name} lives in Gotham.", source="reflection")
         char.add_memory(f"Entity: {name}", str(note["id"]), source="entity")
-    assert "How are Batman and Alfred connected?" in char.asker(limit=9)
+    assert {"How are Batman and Alfred connected?", "How are Alfred and Batman connected?"} & set(char.asker(limit=9))  # the more recently mentioned name leads
 
 
 def test_modes_quiet_stops_and_proactive_speaks_first(monkeypatch):
@@ -1153,7 +1153,7 @@ def test_report_route_shape_counts_and_persona_scoping(monkeypatch):
     con.close()
     char.add_memory("Baked", '{"nE": 0, "nAE": 0}', source="sheet")
     r = client.get("/char/report").json()
-    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "series", "gains", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train", "letter", "now", "model_name", "models"}
+    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "drive", "series", "gains", "arms", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train", "letter", "now", "model_name", "models"}
     assert r["who"] == "Sherlock" and r["since"] and r["model"] == {"up": True, "label": "Model ready"}
     t = r["totals"]
     assert t["steps"] == t["ok"] + t["skipped"] + t["failed"] == len(r["trace"]) and t["ok"] == 3 and t["skipped"] >= 2  # reflect, the intake gate, and one more
@@ -1615,3 +1615,27 @@ def test_gains_credit_each_step_kind_with_the_change_it_made_to_the_score():
     assert list(g) == ["reflect", "wonder"] and g["reflect"] == {"gain": 0.15, "runs": 2} and g["wonder"]["gain"] == -0.05
     sc = char.disposition()["score"]
     assert sc == {"J": 0.0, "know": 0.0, "surprise": 0.5}  # knows no names yet, and no guess checked: as likely right as wrong
+
+
+def test_the_bandit_favours_the_step_that_raised_j_lately_and_the_drive_cools_with_maturity(monkeypatch):
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    for what, j in [("start", 0.1), ("reflect", 0.2), ("speculate", 0.2), ("reflect", 0.3), ("speculate", 0.3)]:
+        char.add_memory("Tick", json.dumps({"what": what, "score": j}), source="sheet")
+    A = char.arms()
+    assert A["reflect"][0] > A["speculate"][0] and A["speculate"] == (1.0, round(1 + char.STILL * (1 + char.DISCOUNT), 3))
+    monkeypatch.setattr(char.random, "betavariate", lambda a, b: a / (a + b))  # the mean in place of a draw
+    assert char.thompson(["speculate", "reflect", "check"]) == "reflect"  # check is untried at a half; reflect has paid more than that
+    d = {"curiosity": 1.0, "maturity": 0.0, "score": {"surprise": 0.8}}
+    hot, cold = char.drive(d), char.drive({**d, "maturity": 0.9})
+    assert hot["tau"] > cold["tau"] and (hot["E"], hot["C"]) == (0.5, 0.0)  # nothing open: nothing to check, so it explores
+
+
+def test_compression_falls_when_unfolded_ideas_pile_up_and_that_wakes_curiosity():
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    for i, idea in enumerate(["fog", "fog", "fog", "fog"]):
+        char.add_memory(f"Idea: {idea}", ",".join(str(x) for x in range(1, 5)), source="entity") if i == 0 else None
+    one = char.compression()
+    assert one == {"S": 4.0, "K": 1, "H": 0.0}  # one idea seen four times: fully folded
+    for idea in ("rain", "mist", "smog"):
+        char.add_memory(f"Idea: {idea}", "9", source="entity")
+    assert char.compression()["S"] < one["S"]  # three new ideas, each seen once: less compressed
