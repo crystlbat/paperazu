@@ -476,21 +476,24 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       const T = d.totals || {}, HL = d.harness_loop || {}, cyc = d.cycles?.[0], skips = {};
       for (const t of d.trace || []) if (t.outcome === "skipped" && t.kind !== "cycle") skips[t.detail] = (skips[t.detail] || 0) + 1;
       const stuck = Object.entries(skips).sort((a, b) => b[1] - a[1])[0], notes = d.notes || [], kept = notes.filter((x) => x.verdict === "keep"), dropped = notes.filter((x) => x.verdict === "drop");
+      const cells = (n) => { const st = (d.trace || []).filter((t) => t.system === n).slice(0, 48).reverse(), did = st.filter((t) => t.outcome === "ok").length; // its last steps, oldest first: filled did something, hollow found nothing
+        return st.length ? h("div", { class: "st-cells", style: `--c:${SC[n]}` }, h("div", {}, ...st.map((t) => h("i", { "data-o": t.outcome, title: `${t.kind} · ${local(t.at)}: ${t.detail}` }))), h("small", {}, `last ${st.length} steps: ${did} did something`)) : ""; };
+      const newRun = h("button", { type: "button", class: "st-new", onclick: () => to(7) }, live ? `a run is going · watch it →` : "▶ new run");
       fill(0, `${who}.`, [b(T.steps), " steps since ", local(d.since), ". ", b(T.ok), " did something, ", b(T.skipped), " found nothing to do."],
-        rows([["curiosity", r2(d.disposition?.curiosity)], ["cycles", `${n0(HL.cycles_run)} · ${n0(HL.executed)} of ${n0(HL.proposed)} proposed steps ran`], stuck ? ["mostly stuck on", `${stuck[0]} (${stuck[1]}×)`, "#ffe600"] : null].filter(Boolean)));
+        newRun, rows([["curiosity", r2(d.disposition?.curiosity)], ["cycles", `${n0(HL.cycles_run)} · ${n0(HL.executed)} of ${n0(HL.proposed)} proposed steps ran`], stuck ? ["mostly stuck on", `${stuck[0]} (${stuck[1]}×)`, "#ffe600"] : null].filter(Boolean)));
       fill(1, "The dot is just a body.", ["Four systems inside it. What each is doing now:"],
         rows([[2, "S2 plans"], [1, "S1 asks"], [0, "S0 reads"], [3, "V checks"]].map(([n, t]) => { const s = loop.find((x) => x.system === n), stt = s ? stageOf(s).state : ["idle", ""]; return [t, D.now?.sys === n ? `working: ${DOING[D.now.kind] || D.now.kind}` : stt[1] || stt[0], SC[n]]; })));
       fill(2, "A planner.", ["Its last plan, cycle ", b(cyc?.cycle), ": ", b(cyc?.proposed?.length), " proposed, ", b(cyc?.rejected?.length), " rejected."],
-        rows([...(cyc?.executed || []).map((x) => [x.outcome, `${x.cmd.split(" ")[0]}: ${x.detail}`]), ...(cyc?.rejected || []).map((x) => ["rejected", `${x.cmd}: ${x.why}`])], plan ? `“${esc(plan.detail).slice(0, 160)}”` : "No plan yet."), tag(2, loop));
+        rows([...(cyc?.executed || []).map((x) => [x.outcome, `${x.cmd.split(" ")[0]}: ${x.detail}`]), ...(cyc?.rejected || []).map((x) => ["rejected", `${x.cmd}: ${x.why}`])], plan ? `“${esc(plan.detail).slice(0, 160)}”` : "No plan yet."), cells(2), tag(2, loop));
       fill(3, "Questions.", [b(L.questions), " asked, ", b(L.answered), " answered, ", b(d.letter?.open), " still open:"],
-        rows((d.letter?.items || []).filter((x) => x.kind === "question").slice(0, 4).map((x) => ["open", x.ask]), "Nothing open."), tag(1, loop));
-      fill(4, "Hands.", [b(L.notes), " notes written. The newest:"], rows(notes.slice(0, 4).map((x) => [x.verdict, `${x.topic} — ${x.text}`]), "No notes yet."), tag(0, loop));
+        rows((d.letter?.items || []).filter((x) => x.kind === "question").slice(0, 4).map((x) => ["open", x.ask]), "Nothing open."), cells(1), tag(1, loop));
+      fill(4, "Hands.", [b(L.notes), " notes written. The newest:"], rows(notes.slice(0, 4).map((x) => [x.verdict, `${x.topic} — ${x.text}`]), "No notes yet."), cells(0), tag(0, loop));
       fill(5, "A gate.", [b(L.verified), " let in, ", b(L.rejected), " turned away. Last decisions:"],
-        rows([...dropped.slice(0, 2).map((x) => ["dropped", `${x.topic} — ${x.text}`, "#ff6b6b"]), ...kept.slice(0, 2).map((x) => ["kept", x.topic, "#7dffa8"])], "Nothing judged yet."), tag(3, loop));
+        rows([...dropped.slice(0, 2).map((x) => ["dropped", `${x.topic} — ${x.text}`, "#ff6b6b"]), ...kept.slice(0, 2).map((x) => ["kept", x.topic, "#7dffa8"])], "Nothing judged yet."), cells(3), tag(3, loop));
       fill(6, "A memory that sleeps.", ["At the end of every run it sleeps: it keeps the newest ", b(24), " open questions about its world and lets the rest go. ", b(d.letter?.let_go), " let go so far, ", b(d.letter?.open), " open now."],
         d.letter?.items?.length ? h("button", { type: "button", class: "pn-link", onclick: () => go("letter") }, `what is left becomes your letter (${d.letter.items.length}) →`) : "");
       S[7].want = "Set it running."; if (!S[7].busy) S[7].t.textContent = S[7].want; S[7].sub.replaceChildren("It learns on its own and stops when the minutes or the steps run out, or when curiosity settles in the target.");
-      for (const key of ["minutes", "max_steps", "lo", "hi"]) { const inp = inputs[key]; inp.disabled = live; if (live && document.activeElement !== inp) inp.value = run.config[key]; }
+      for (const key of ["minutes", "max_steps", "lo", "hi"]) { const inp = inputs[key]; inp.disabled = live; if (document.activeElement !== inp) inp.value = live ? run.config[key] : C[key]; }
       play.textContent = !live || run.status === "paused" ? "▶" : "❚❚"; play.setAttribute("aria-label", !live ? "Start" : run.status === "paused" ? "Resume" : "Pause"); play.disabled = !live && (!!ctl.busy || !d.model?.up); stop.disabled = !live;
       runSay.textContent = ctl.busy ? "…" : live ? `${run.status === "paused" ? "Paused" : "Running"} · step ${n0(run.log?.at(-1)?.step)} · ${mmss(run.clock)}` : run ? `Run ${run.id} ${run.status === "done" ? "finished" : run.status}${run.why ? `: ${run.why}` : ""}.` : "Ready.";
       watchBody.replaceChildren(nowCard(d, who), f1(d, loop));
@@ -503,15 +506,16 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   const tLabel = (t, T) => T < 120 ? `${Math.round(t)}s` : mmss(t);
   const f1 = (d, loop) => { // the run as it happens, on one clock: every variable on top, which system is working in lanes under it, the flow counts last
     const run = d.train?.runs?.[0], live = !!d.train?.active && run && ["running", "paused"].includes(run.status), cfg = run?.config, log = run?.log || [], last = log.at(-1), tint = d.tint || "#6ff7ff";
+    const tc = live ? cfg : (ctl.tcfg ||= { minutes: 20, lo: 0, hi: 1, max_steps: 60 }); // idle: the band is the next run's target, and you drag it
     const pts = log.length > 1 || live ? log : (() => { const S = Object.fromEntries((d.series || []).map((x) => [x.name, x.points || []])), n = Math.max(0, ...Object.values(S).map((p) => p.length)); return [...Array(n)].map((_, i) => Object.fromEntries([["t", i], ...Object.entries(S).map(([k, p]) => [k, p[i] ?? 0])])); })();
     const clock = run?.clock ?? last?.t ?? 0, T = Math.max(10, clock, pts.at(-1)?.t || 0), byClock = !!log.length;
     const C = { curiosity: tint, maturity: "#ffb347", frontier: "#c79bff", ...NEED_C, trust: "#e4e4e7" };
     const has = pts.length ? Object.keys(C).filter((k) => pts.some((p) => typeof p[k] === "number")) : [], moved = (k) => new Set(pts.map((p) => r2(+p[k] || 0))).size > 1;
-    const keys = has.filter((k) => moved(k) || (live && k === "curiosity")), still = has.filter((k) => !keys.includes(k)); // a variable that never moved is a fact, not a line
+    const keys = has.filter((k) => moved(k) || k === "curiosity"), still = has.filter((k) => !keys.includes(k)); // a variable that never moved is a fact, not a line
     const X = (t) => Math.min(800, (t / T) * 800), TOP = 14, BASE = 190; // x 0–800 is the clock, names to the right
-    const scale = (k) => { const vs = pts.map((p) => +p[k] || 0), band = k === "curiosity" && cfg ? [cfg.lo, cfg.hi] : null, lo0 = Math.min(...vs, band?.[0] ?? Infinity), hi0 = Math.max(...vs, band?.[1] ?? -Infinity);
+    const scale = (k) => { const vs = pts.map((p) => +p[k] || 0), band = k === "curiosity" && tc ? [tc.lo, tc.hi] : null, lo0 = Math.min(...vs, band?.[0] ?? Infinity), hi0 = Math.max(...vs, band?.[1] ?? -Infinity);
       const span = Math.max(hi0 - lo0, ["curiosity", "frontier"].includes(k) ? Math.max(1, Math.abs(hi0) * .2) : .25), lo = (hi0 + lo0) / 2 - span / 2; // a small wiggle stays small
-      return { vs, band, Y: (v) => BASE - (v - lo) / span * (BASE - TOP) }; };
+      return { vs, band, Y: (v) => BASE - (v - lo) / span * (BASE - TOP), V: (y) => lo + (BASE - y) / (BASE - TOP) * span }; };
     const sc = Object.fromEntries(keys.map((k) => [k, scale(k)]));
     const path = (k) => sc[k].vs.map((v, i) => `${i ? "L" : "M"}${X(pts[i].t || 0).toFixed(1)},${sc[k].Y(v).toFixed(1)}`).join("") + (live ? `L${X(clock).toFixed(1)},${sc[k].Y(sc[k].vs.at(-1)).toFixed(1)}` : ""); // live: each line runs on to now
     const step = niceStep(T), grid = [...Array(Math.floor(T / step) + 1)].map((_, i) => i * step);
@@ -520,8 +524,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const cb = sc.curiosity?.band, yHi = cb && sc.curiosity.Y(cb[1]), yLo = cb && sc.curiosity.Y(cb[0]);
     svg.innerHTML = `<defs><linearGradient id="f1fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${tint}" stop-opacity=".2"/><stop offset="1" stop-color="${tint}" stop-opacity="0"/></linearGradient></defs>`
       + (byClock ? pts.slice(1).map((p) => `<line x1="${X(p.t).toFixed(1)}" x2="${X(p.t).toFixed(1)}" y1="0" y2="200" stroke="#fff" opacity=".05" vector-effect="non-scaling-stroke"/>`).join("") : "") // a hairline where each step ended
-      + (cb ? `<rect x="0" width="800" y="${yHi.toFixed(1)}" height="${Math.max(1, yLo - yHi).toFixed(1)}" fill="#7dffa8" opacity=".06"/>`
-        + [yHi, yLo].map((y) => `<line x1="0" x2="800" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#7dffa8" opacity=".45" stroke-dasharray="5 5" vector-effect="non-scaling-stroke"/>`).join("") : "")
+      + (cb ? `<rect data-band x="0" width="800" y="${yHi.toFixed(1)}" height="${Math.max(1, yLo - yHi).toFixed(1)}" fill="#7dffa8" opacity=".06"/>`
+        + [yHi, yLo].map((y) => `<line data-edge x1="0" x2="800" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#7dffa8" opacity=".45" stroke-dasharray="5 5" vector-effect="non-scaling-stroke"/>`).join("") : "")
       + (sc.curiosity ? `<path d="${path("curiosity")}L${X(live ? clock : pts.at(-1).t || 0).toFixed(1)},200L0,200Z" fill="url(#f1fill)" data-k="curiosity"/>` : "")
       + keys.filter((k) => k !== "curiosity").map((k) => `<path d="${path(k)}" data-k="${k}" fill="none" stroke="${C[k]}" stroke-width="1.8" opacity=".85" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`).join("")
       + (sc.curiosity ? `<path d="${path("curiosity")}" data-k="curiosity" fill="none" stroke="${tint}" stroke-width="3.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>` : "");
@@ -535,8 +539,20 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const plot = h("div", { class: "f1-plot" }, svg,
       ...(sc.curiosity ? pts.map((p) => p.snap ? at(p.t || 0, sc.curiosity.Y(+p.curiosity || 0), "f1-bead") : null).filter(Boolean) : []),
       live && sc.curiosity ? at(clock, sc.curiosity.Y(sc.curiosity.vs.at(-1)), "f1-nowdot") : "",
-      cb ? h("span", { class: "f1-target", style: `top:${yHi / 2}%` }, `target ${r2(cb[0])} – ${r2(cb[1])}`) : "",
+      cb ? h("span", { class: "f1-target", style: `top:${yHi / 2}%` }, `target ${r2(cb[0])} – ${r2(cb[1])}${live ? "" : " · drag up or down on the graph to set it"}`) : "",
       ...(byClock ? pts.slice(1).map((p) => h("span", { class: "f1-stepno", style: `left:${X(p.t) / 10}%` }, String(p.step))) : []), ...labels);
+    if (!live && sc.curiosity) { // draw the target instead of typing it: press, drag over the curiosity range you want, let go
+      const yOf = (e) => { const r = plot.getBoundingClientRect(); return Math.max(0, Math.min(200, (e.clientY - r.top) / r.height * 200)); };
+      let y0 = null;
+      const show = (a, b) => { const v = [sc.curiosity.V(a), sc.curiosity.V(b)].map((x) => Math.max(0, r2(x))), lo = Math.min(...v), hi = Math.max(...v);
+        tc.lo = lo; tc.hi = hi; const top = Math.min(a, b), bot = Math.max(a, b), band = svg.querySelector("[data-band]"), [e1, e2] = svg.querySelectorAll("[data-edge]");
+        band.setAttribute("y", top); band.setAttribute("height", Math.max(1, bot - top)); for (const [ln, y] of [[e1, top], [e2, bot]]) { ln.setAttribute("y1", y); ln.setAttribute("y2", y); }
+        const lab = plot.querySelector(".f1-target"); lab.style.top = `${top / 2}%`; lab.textContent = `target ${lo} – ${hi}`; };
+      plot.classList.add("f1-drag");
+      plot.onpointerdown = (e) => { if (e.target.closest("button")) return; y0 = yOf(e); ctl.dragging = true; plot.setPointerCapture(e.pointerId); show(y0, y0 + 1); };
+      plot.onpointermove = (e) => { if (y0 != null) show(y0, yOf(e)); };
+      plot.onpointerup = plot.onpointercancel = () => { if (y0 == null) return; y0 = null; ctl.dragging = false; paintReport(); };
+    }
     const lanes = run?.lanes || [], showLanes = byClock && (live || lanes.length);
     const lanesEl = showLanes ? h("div", { class: "f1-lanes" }, ...LANE.map(([n, name]) => h("div", { class: "f1-lane", style: `--c:${SC[n]}` },
       h("div", { class: "f1-track" }, ...lanes.filter((l) => l[0] === n).map((l) => { const w = X(l[3]) - X(l[2]), on = live && l[3] >= clock - 1.6;
@@ -695,18 +711,20 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
               h("button", { type: "button", role: "switch", "aria-checked": String(s.on !== false), "aria-label": `${sysTag(s.system)} ${STAGE[s.system]?.[0] || ""}`, disabled: !!ctl.busy, onclick: () => act(`${sysTag(s.system)} ${s.on === false ? "on" : "off"}`, () => api("/char/systems", { method: "POST", body: JSON.stringify({ id: s.system, on: s.on === false }) }).then(() => `${sysTag(s.system)} ${s.on === false ? "on" : "off"}`)) }, h("i", {}))))))); },
     };
     const keep = [...panel.querySelectorAll(".sw-dlist, .sw-dsheet, .sw-dbody")].map((x) => x.scrollTop);
+    const stTop = sty?.el.scrollTop || 0; // re-attaching the story would reset it to the first slide
     panel.replaceChildren(h("div", { class: "sw-db" },
       h("header", { class: "sw-dtop" }, h("h2", {}, head), h("p", {}, h("i", { class: "sw-lamp", "data-up": String(!!d.model?.up) }), ` ${esc(d.model?.label)} · since ${local(d.since)} · ${esc(d.mode)} mode · ${n0(T.ok)} of ${n0(T.steps)} steps did something`),
         h("nav", { class: "sw-dtabs", role: "tablist", "aria-label": "Report sections" }, ...TABS.map(([k, t]) => h("button", { type: "button", role: "tab", "aria-selected": String(rTab === k), onclick: () => go(k) }, t, k === "letter" && d.letter?.items?.length ? h("sup", { class: "sw-lcount" }, String(d.letter.items.length)) : "")))),
       h("div", { class: "sw-dbody" }, body[rTab]())));
     panel.querySelectorAll(".sw-dlist, .sw-dsheet, .sw-dbody").forEach((x, i) => { x.scrollTop = keep[i] || 0; });
+    if (sty?.el.isConnected && stTop) sty.el.scrollTop = stTop;
   }
   const tkey = (t) => `${t.at}|${t.kind}|${t.outcome}|${t.detail}`;
   async function pullReport(force) {
     if (!reporting || !root.isConnected) { clearInterval(rTimer); rTimer = 0; return; }
     if (force !== true && !rData?.train?.active && Date.now() - rLast < 4800) return; // a live run is pulled every 2 s, the rest every 5
     rLast = Date.now();
-    const typing = panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+    const typing = ctl.dragging || (panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName));
     if (rTab === "engines") loadRoles();
     if (rTab === "controls") { loadRoles(); try { ctl.swap = await api("/model/swap"); } catch { ctl.swap = null; } }
     if (rTab === "journal") { try { jPages = (await api("/char/journal")).pages; } catch { jPages = jPages || []; } }
