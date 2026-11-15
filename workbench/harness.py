@@ -113,23 +113,23 @@ def _text(c: dict[str, str]) -> str:
     return c["name"] + (f' "{c["arg"]}"' if c.get("arg") else "")
 
 
-def starved(proposed: list[dict[str, str]]) -> str:
+def starved(proposed: list[dict[str, str]], force: bool = False) -> str:
     """The step that has waited longest, when the planner left it out: none of the last 12 runs was it. A small planner
     recites the same few commands, so without this, names never get pulled from notes and notes never get checked."""
     runs = [r["title"].removeprefix("Run: ") for r in _rows("Run: %", 12)]
     if len(runs) < 12:
         return ""
-    _, blocked = char._blocks(True)
+    _, blocked = char._blocks(True, force)
     asked = {c["name"] for c in proposed}
     waiting = [k for k in COMMANDS if k not in asked and k not in runs and not blocked.get(k)]
     order = ("check", "extract", "review", "sort", "fold", "ideas", "wonder", "fill", "practise", "tune", "journal", "want")  # checking and reading for names first: the rest builds on them
     return next((k for k in order if k in waiting), waiting[0] if waiting else "")
 
 
-def validate(cmds: list[dict[str, str]], budget: int = BUDGET) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+def validate(cmds: list[dict[str, str]], budget: int = BUDGET, force: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """The controller, no model: each command must exist, point at real things, have its system on and not be blocked, and fit the budget.
     Note ids and names are repaired where the intent is plain (#12 → 12, a name in the wrong case). Returns (plan grouped by model, rejected)."""
-    _, blocked = char._blocks(True)
+    _, blocked = char._blocks(True, force)
     notes = {str(r["id"]) for r in _unchecked()}
     names = {n["name"].lower(): n["name"] for n in char.graph()["nodes"]}
     plan: list[dict[str, Any]] = []
@@ -233,7 +233,7 @@ def verify(executed: list[dict[str, Any]], s: settings.Settings, swaps: list[dic
     return [{"cmd": x["cmd"], **v} for x, v in zip(executed, verdicts)]  # type: ignore[dict-item]
 
 
-def cycle(budget: int = BUDGET) -> dict[str, Any]:
+def cycle(budget: int = BUDGET, force: bool = False) -> dict[str, Any]:
     """One full cycle: planner → controller → executor → Verifier. Persisted as "Cycle: n" and "Feedback: n" sheet rows."""
     if not _lock.acquire(blocking=False):
         raise RuntimeError("a cycle is already running")
@@ -245,6 +245,7 @@ def cycle(budget: int = BUDGET) -> dict[str, Any]:
         if sw := llm.ensure(s, s.planner_model):
             swaps.append(sw)
         msgs = prompt(budget)
+        char.NOW.update(sys=2, kind="planner")
         try:
             text = jobs.complete(_role_settings(s, "planner"), msgs, max_tokens=120) or ""
         except Exception as e:
@@ -252,12 +253,14 @@ def cycle(budget: int = BUDGET) -> dict[str, Any]:
             char._log("planner", msgs, f"(failed: {e})")
         else:
             char._log("planner", msgs, text)
+        finally:
+            char.NOW.clear()
         proposed, bad = parse(text)
         if bad or not proposed:  # a self-correction: two of these and the Verifier proposes the planner fix
             char._fail("planner")
-        if (k := starved(proposed)):
+        if (k := starved(proposed, force)):
             proposed = [{"name": k, "arg": ""}, *proposed]  # one per cycle, up front, so the budget does not cut it
-        plan, rejected = validate(proposed, budget)
+        plan, rejected = validate(proposed, budget, force)
         rejected += [{"cmd": b, "why": "could not read it as a command"} for b in bad]
         executed = execute(plan, s, swaps)
         verdicts = verify(executed, s, swaps)

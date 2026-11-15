@@ -82,3 +82,15 @@ def test_the_dataset_leaves_out_drift_that_only_names_its_game(monkeypatch):
         ex("Who or what is Panoptes?", "A Vex mind that Osiris and his Ghost fought, in Destiny.")]}])
     asked = [json.loads(l)["messages"][0]["content"] for l in train.dataset(1).splitlines()]
     assert asked == ["Tell me about Osiris.", "Who or what is Panoptes?"]
+
+
+def test_sampler_draws_a_lane_while_a_system_works(monkeypatch):
+    import threading, time as _t
+    from workbench import char, train
+    th = threading.Thread(target=_t.sleep, args=(0.45,)); th.start()
+    monkeypatch.setattr(train, "RUN", {"thread": th, "pause": threading.Event(), "lanes": [], "clock": 0.0})
+    monkeypatch.setattr(char, "NOW", {"sys": 2, "kind": "planner"})
+    train._sample(every=0.1)
+    lanes = train.RUN["lanes"]
+    assert len(lanes) == 1 and lanes[0][:2] == [2, "planner"] and lanes[0][3] > lanes[0][2]
+    assert train.RUN["clock"] > 0.3

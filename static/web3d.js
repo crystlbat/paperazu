@@ -317,7 +317,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   // ---- report mode: a plain readout of the experiment, the harness as sub-engines (/report-mode, /scene, or the menu) ----
   const panel = h("section", { class: "sw-report", "aria-label": "Experiment report", hidden: "" });
   root.append(panel);
-  const openSt = new Set(); let reporting = false, rTimer = 0, rData = null, rSeen = null, rFresh = new Set(), tFilter = "ok", tEngine = ""; // opens on what it did; the skips are one click away
+  const openSt = new Set(); let reporting = false, rTimer = 0, rLast = 0, rData = null, rSeen = null, rFresh = new Set(), tFilter = "ok", tEngine = ""; // opens on what it did; the skips are one click away
   const esc = (v) => String(v ?? ""), n0 = (v) => (typeof v === "number" ? v : 0), r2 = (v) => (typeof v === "number" ? Math.round(v * 100) / 100 : "–");
   const local = (t) => { if (!t) return ""; const d = new Date(t.replace(" ", "T") + "Z"); return isNaN(d) ? t : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }; // the server writes UTC
   const STAGE = { 2: ["Plan", "decides what to learn next"], 1: ["Goals", "turns the plan into questions"], 0: ["Execute", "looks things up and writes notes"], 3: ["Verifier", "checks notes and rereads replies"] };
@@ -387,52 +387,67 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
         h("label", { class: "sw-skip" }, h("input", { type: "checkbox", checked: !!D[`skip:${x.id}`], onchange: (e) => { D[`skip:${x.id}`] = e.target.checked; report(true); } }), "Let it go")))),
       h("div", { class: "sw-wbtns" }, h("button", { type: "button", disabled: !!ctl.busy, onclick: send }, "Submit")));
   };
-  const f1 = (d, loop) => { // one picture: every variable as a line on its own 0–1 scale, and the information flow as the floor it all stands on
+  const LANE = [[2, "S2 Plan"], [1, "S1 Goals"], [0, "S0 Execute"], [3, "V Verify"]];
+  const niceStep = (T) => [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200].find((x) => T / x <= 8) || 7200;
+  const tLabel = (t, T) => T < 120 ? `${Math.round(t)}s` : mmss(t);
+  const f1 = (d, loop) => { // the run as it happens, on one clock: every variable on top, which system is working in lanes under it, the flow counts last
     const run = d.train?.runs?.[0], live = !!d.train?.active && run && ["running", "paused"].includes(run.status), cfg = run?.config, log = run?.log || [], last = log.at(-1), tint = d.tint || "#6ff7ff";
-    const pts = log.length > 1 ? log : (() => { const S = Object.fromEntries((d.series || []).map((x) => [x.name, x.points || []])), n = Math.max(0, ...Object.values(S).map((p) => p.length)); return [...Array(n)].map((_, i) => Object.fromEntries(Object.entries(S).map(([k, p]) => [k, p[i] ?? 0]))); })();
+    const pts = log.length > 1 || live ? log : (() => { const S = Object.fromEntries((d.series || []).map((x) => [x.name, x.points || []])), n = Math.max(0, ...Object.values(S).map((p) => p.length)); return [...Array(n)].map((_, i) => Object.fromEntries([["t", i], ...Object.entries(S).map(([k, p]) => [k, p[i] ?? 0])])); })();
+    const clock = run?.clock ?? last?.t ?? 0, T = Math.max(10, clock, pts.at(-1)?.t || 0), byClock = !!log.length;
     const C = { curiosity: tint, maturity: "#ffb347", frontier: "#c79bff", ...NEED_C, trust: "#e4e4e7" };
-    const keys = pts.length > 1 ? Object.keys(C).filter((k) => pts.some((p) => typeof p[k] === "number")) : [];
-    const byTime = ctl.byTime && pts.some((p) => p.t), T = Math.max(1, pts.at(-1)?.t || 0), N = Math.max(1, pts.length - 1);
-    const X = (i) => (byTime ? (pts[i].t || 0) / T : i / N) * 1000, TOP = 18, BASE = 196; // lines live in 18–196; the flow is the floor under them
-    const scale = (k) => { const vs = pts.map((p) => +p[k] || 0), band = k === "curiosity" && cfg ? [cfg.lo, cfg.hi] : null, lo = Math.min(...vs, band?.[0] ?? Infinity), hi = Math.max(...vs, band?.[1] ?? -Infinity);
-      return { vs, band, Y: (v) => hi - lo < 1e-9 ? (TOP + BASE) / 2 : BASE - (v - lo) / (hi - lo) * (BASE - TOP) }; };
+    const has = pts.length ? Object.keys(C).filter((k) => pts.some((p) => typeof p[k] === "number")) : [], moved = (k) => new Set(pts.map((p) => r2(+p[k] || 0))).size > 1;
+    const keys = has.filter((k) => moved(k) || (live && k === "curiosity")), still = has.filter((k) => !keys.includes(k)); // a variable that never moved is a fact, not a line
+    const X = (t) => Math.min(800, (t / T) * 800), TOP = 14, BASE = 190; // x 0–800 is the clock, names to the right
+    const scale = (k) => { const vs = pts.map((p) => +p[k] || 0), band = k === "curiosity" && cfg ? [cfg.lo, cfg.hi] : null, lo0 = Math.min(...vs, band?.[0] ?? Infinity), hi0 = Math.max(...vs, band?.[1] ?? -Infinity);
+      const span = Math.max(hi0 - lo0, ["curiosity", "frontier"].includes(k) ? Math.max(1, Math.abs(hi0) * .2) : .25), lo = (hi0 + lo0) / 2 - span / 2; // a small wiggle stays small
+      return { vs, band, Y: (v) => BASE - (v - lo) / span * (BASE - TOP) }; };
+    const sc = Object.fromEntries(keys.map((k) => [k, scale(k)]));
+    const path = (k) => sc[k].vs.map((v, i) => `${i ? "L" : "M"}${X(pts[i].t || 0).toFixed(1)},${sc[k].Y(v).toFixed(1)}`).join("") + (live ? `L${X(clock).toFixed(1)},${sc[k].Y(sc[k].vs.at(-1)).toFixed(1)}` : ""); // live: each line runs on to now
+    const step = niceStep(T), grid = [...Array(Math.floor(T / step) + 1)].map((_, i) => i * step);
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 1000 200"); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("aria-hidden", "true");
+    const cb = sc.curiosity?.band, yHi = cb && sc.curiosity.Y(cb[1]), yLo = cb && sc.curiosity.Y(cb[0]);
+    svg.innerHTML = `<defs><linearGradient id="f1fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${tint}" stop-opacity=".2"/><stop offset="1" stop-color="${tint}" stop-opacity="0"/></linearGradient></defs>`
+      + (byClock ? pts.slice(1).map((p) => `<line x1="${X(p.t).toFixed(1)}" x2="${X(p.t).toFixed(1)}" y1="0" y2="200" stroke="#fff" opacity=".05" vector-effect="non-scaling-stroke"/>`).join("") : "") // a hairline where each step ended
+      + (cb ? `<rect x="0" width="800" y="${yHi.toFixed(1)}" height="${Math.max(1, yLo - yHi).toFixed(1)}" fill="#7dffa8" opacity=".06"/>`
+        + [yHi, yLo].map((y) => `<line x1="0" x2="800" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#7dffa8" opacity=".45" stroke-dasharray="5 5" vector-effect="non-scaling-stroke"/>`).join("") : "")
+      + (sc.curiosity ? `<path d="${path("curiosity")}L${X(live ? clock : pts.at(-1).t || 0).toFixed(1)},200L0,200Z" fill="url(#f1fill)" data-k="curiosity"/>` : "")
+      + keys.filter((k) => k !== "curiosity").map((k) => `<path d="${path(k)}" data-k="${k}" fill="none" stroke="${C[k]}" stroke-width="1.8" opacity=".85" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`).join("")
+      + (sc.curiosity ? `<path d="${path("curiosity")}" data-k="curiosity" fill="none" stroke="${tint}" stroke-width="3.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>` : "");
+    const at = (t, y, cls, extra = "") => h("i", { class: cls, style: `left:${X(t) / 10}%;top:${y / 2}%${extra}` });
+    const focus = (k) => svg.querySelectorAll("[data-k]").forEach((p) => { p.style.opacity = !k || p.dataset.k === k ? "" : ".08"; });
+    let floor = -Infinity; // each line's name sits at its end, nudged down so no two overlap
+    const labels = keys.map((k) => ({ k, y: sc[k].Y(sc[k].vs.at(-1)) })).sort((a, b) => a.y - b.y).map((l) => { l.y = Math.max(l.y, floor + 11); floor = l.y; return l; })
+      .map(({ k, y }) => { const v = sc[k].vs, dv = v.at(-1) - v[0];
+        return h("button", { type: "button", class: "f1-lab", style: `top:${y / 2}%;--c:${C[k]}`, onmouseenter: () => focus(k), onmouseleave: () => focus(), onfocus: () => focus(k), onblur: () => focus(), "aria-label": `${k}: ${r2(v.at(-1))}, ${dv >= 0 ? "up" : "down"} ${r2(Math.abs(dv))} this run` },
+          h("i"), k, h("b", {}, String(r2(v.at(-1)))), r2(Math.abs(dv)) ? h("small", { "data-d": dv > 0 ? "up" : "down" }, `${dv > 0 ? "▲" : "▼"}${r2(Math.abs(dv))}`) : ""); });
+    const plot = h("div", { class: "f1-plot" }, svg,
+      ...(sc.curiosity ? pts.map((p) => p.snap ? at(p.t || 0, sc.curiosity.Y(+p.curiosity || 0), "f1-bead") : null).filter(Boolean) : []),
+      live && sc.curiosity ? at(clock, sc.curiosity.Y(sc.curiosity.vs.at(-1)), "f1-nowdot") : "",
+      cb ? h("span", { class: "f1-target", style: `top:${yHi / 2}%` }, `target ${r2(cb[0])} – ${r2(cb[1])}`) : "",
+      ...(byClock ? pts.slice(1).map((p) => h("span", { class: "f1-stepno", style: `left:${X(p.t) / 10}%` }, String(p.step))) : []), ...labels);
+    const lanes = run?.lanes || [], showLanes = byClock && (live || lanes.length);
+    const lanesEl = showLanes ? h("div", { class: "f1-lanes" }, ...LANE.map(([n, name]) => h("div", { class: "f1-lane", style: `--c:${SC[n]}` },
+      h("div", { class: "f1-track" }, ...lanes.filter((l) => l[0] === n).map((l) => { const w = X(l[3]) - X(l[2]), on = live && l[3] >= clock - 1.6;
+        return h("span", { class: `f1-bar${on ? " on" : ""}`, style: `left:${X(l[2]) / 10}%;width:${Math.max(.4, w / 10)}%`, title: `${l[1]}: ${tLabel(l[2], T)} to ${tLabel(l[3], T)}` }, w > 50 ? l[1] : ""); })),
+      h("b", {}, name, live && lanes.at(-1)?.[0] === n && lanes.at(-1)[3] >= clock - 1.6 ? h("small", {}, ` · ${lanes.at(-1)[1]}`) : "")))) : "";
+    const axis = h("div", { class: "f1-time" }, ...grid.map((t) => h("span", { style: `left:${X(t) / 10}%` }, byClock ? tLabel(t, T) : `step ${t}`)));
+    const gridEl = h("div", { class: "f1-grid" }, ...grid.map((t) => h("i", { style: `left:${X(t) / 10}%` })), live ? h("i", { class: "f1-nowline", style: `left:${X(clock) / 10}%` }) : "");
+    const held = still.length ? h("p", { class: "f1-still" }, "Held steady: ", ...still.map((k) => h("span", { style: `--c:${C[k]}` }, k, h("b", {}, String(r2(+pts.at(-1)?.[k] || 0)))))) : "";
+    const head = live ? h("div", { class: "f1-head" }, h("i"), h("span", {}, run.status === "paused" ? "Paused" : "Training"), h("strong", {}, mmss(clock)), h("small", {}, `of ${mmss(cfg?.minutes * 60)}`),
+        h("strong", {}, String(n0(last?.step))), h("small", {}, `of ${n0(cfg?.max_steps)} steps`), h("strong", {}, String(n0(run.snaps))), h("small", {}, "checkpoints"))
+      : h("div", { class: "f1-head" }, h("i"), h("span", {}, run ? `Run ${run.id} ${run.status === "done" ? "finished" : run.status}${run.why ? `: ${run.why}` : ""}` : "No run yet: start one on Controls, then watch it here"));
     const L = d.learned || {}, st = (n) => { const s = loop.find((x) => x.system === n); return s ? stageOf(s).state : ["idle", ""]; }, gate = (d.trace || []).find((t) => t.kind === "evaluate");
     const S = [{ n: L.plans, k: "plan lines", c: SC[2], s: st(2), to: () => { rSys = 2; go("activity"); } }, { n: L.questions, k: "questions", c: SC[1], s: st(1), sub: `${n0(L.answered)} answered`, to: () => { rSys = 1; go("activity"); } },
       { n: L.notes, k: "notes written", c: SC[0], s: st(0), to: () => go("notes") }, { n: L.verified, k: "let in", c: SC[3], s: gate ? [gate.outcome === "ok" ? "working" : gate.outcome, gate.detail] : st(3), sub: `${n0(L.rejected)} turned away`, gate: true, to: () => go("notes") },
       { n: L.names, k: "names in the mesh", c: SC[0], s: ["", "people, places and things it can link"], to: () => { tEngine = "extract"; rSys = null; go("activity"); } }];
-    const most = Math.max(1, ...S.map((x) => n0(x.n))), w = (v) => 4 + (n0(v) / most) * 44, FY = 262; // ribbon width is how much got through each stage
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", "0 0 1000 300"); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("aria-hidden", "true");
-    const sc = Object.fromEntries(keys.map((k) => [k, scale(k)])), path = (k) => sc[k].vs.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${sc[k].Y(v).toFixed(1)}`).join("");
-    svg.innerHTML = `<defs><linearGradient id="f1fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${tint}" stop-opacity=".22"/><stop offset="1" stop-color="${tint}" stop-opacity="0"/></linearGradient>`
-      + S.slice(0, -1).map((x, i) => `<linearGradient id="f1r${i}"><stop offset="0" stop-color="${x.c}"/><stop offset="1" stop-color="${S[i + 1].c}"/></linearGradient>`).join("") + "</defs>"
-      + (byTime ? pts.slice(1).map((p, i) => `<rect x="${X(i).toFixed(1)}" width="${Math.max(0, X(i + 1) - X(i)).toFixed(1)}" y="0" height="${BASE + 8}" fill="#fff" opacity="${i % 2 ? .012 : .035}"/>`).join("") : "") // each band is one step: wide means slow
-      + [.25, .5, .75].map((f) => `<line x1="0" x2="1000" y1="${BASE - f * (BASE - TOP)}" y2="${BASE - f * (BASE - TOP)}" stroke="#fff" opacity=".04" vector-effect="non-scaling-stroke"/>`).join("")
-      + `<line x1="0" x2="1000" y1="${BASE + 8}" y2="${BASE + 8}" stroke="#27272a" vector-effect="non-scaling-stroke"/>`
-      + S.slice(0, -1).map((x, i) => { const x0 = 100 + i * 200, x1 = x0 + 200, a = w(Math.min(n0(x.n), n0(S[i + 1].n))), b = w(S[i + 1].n);
-        return `<path d="M${x0} ${FY - a / 2} C${x0 + 100} ${FY - a / 2} ${x1 - 100} ${FY - b / 2} ${x1} ${FY - b / 2} L${x1} ${FY + b / 2} C${x1 - 100} ${FY + b / 2} ${x0 + 100} ${FY + a / 2} ${x0} ${FY + a / 2}Z" fill="url(#f1r${i})" opacity=".3"/>`; }).join("")
-      + (sc.curiosity?.band ? `<rect x="0" width="1000" y="${sc.curiosity.Y(sc.curiosity.band[1]).toFixed(1)}" height="${Math.max(1, sc.curiosity.Y(sc.curiosity.band[0]) - sc.curiosity.Y(sc.curiosity.band[1])).toFixed(1)}" fill="#7dffa8" opacity=".07" data-k="curiosity"/>` : "")
-      + (sc.curiosity ? `<path d="${path("curiosity")}L1000,${BASE + 8}L0,${BASE + 8}Z" fill="url(#f1fill)" data-k="curiosity"/>` : "")
-      + keys.filter((k) => k !== "curiosity").map((k) => `<path d="${path(k)}" data-k="${k}" fill="none" stroke="${C[k]}" stroke-width="1.6" opacity=".8" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`).join("")
-      + (sc.curiosity ? `<path d="${path("curiosity")}" data-k="curiosity" fill="none" stroke="${tint}" stroke-width="3.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>` : "");
-    const pin = (x, y, cls, c) => h("i", { class: cls, style: `left:${x / 10}%;top:${y / 3}%${c ? `;--c:${c}` : ""}` });
-    const beads = sc.curiosity ? pts.map((p, i) => p.snap ? pin(X(i), sc.curiosity.Y(sc.curiosity.vs[i]), "f1-bead") : null).filter(Boolean) : [];
-    const plot = h("div", { class: "f1-plot" }, svg, ...beads, ...S.map((x, i) => pin(100 + i * 200, FY, "f1-stage", x.c)),
-      keys.length ? h("span", { class: "f1-t0" }, byTime ? "0:00" : "step 0") : "", keys.length ? h("span", { class: "f1-t1" }, byTime ? mmss(pts.at(-1)?.t) : `step ${N}`) : "");
-    const focus = (k) => svg.querySelectorAll("[data-k]").forEach((p) => { p.style.opacity = !k || p.dataset.k === k ? "" : ".08"; });
-    const legend = keys.length ? h("div", { class: "f1-leg" }, ...keys.map((k) => { const v = sc[k].vs, dv = v.at(-1) - v[0];
-      return h("button", { type: "button", style: `--c:${C[k]}`, onmouseenter: () => focus(k), onmouseleave: () => focus(), onfocus: () => focus(k), onblur: () => focus(), "aria-label": `${k}: ${r2(v.at(-1))}, ${dv >= 0 ? "up" : "down"} ${r2(Math.abs(dv))}` },
-        h("span", {}, k), h("strong", {}, String(r2(v.at(-1)))), h("small", { "data-d": dv > 0 ? "up" : dv < 0 ? "down" : "" }, dv ? `${dv > 0 ? "▲" : "▼"}${r2(Math.abs(dv))}` : "–")); })) : "";
-    const line = live ? `${run.status === "paused" ? "Paused" : "Training"} · step ${n0(last?.step)} of ${n0(cfg?.max_steps)} · ${mmss(last?.t)} of ${mmss(cfg?.minutes * 60)} · ${n0(run.snaps)} checkpoints` : run ? `Last run ${run.status === "done" ? "finished" : run.status}${run.why ? `: ${run.why}` : ""} · ${n0(run.snaps)} checkpoints` : "Start a training run on Controls";
-    const toggle = keys.length ? h("div", { class: "sw-dseg f1-x", role: "radiogroup", "aria-label": "Across the bottom" },
-      ...[["Steps", false], ["Time", true]].map(([t, v]) => h("button", { type: "button", role: "radio", "aria-checked": String(!!ctl.byTime === v), onclick: () => { ctl.byTime = v; report(true); } }, t))) : "";
-    return h("figure", { class: "f1 sw-flow", "data-live": String(!!live), style: `--team:${tint}` },
-      h("div", { class: "f1-line" }, h("i"), h("p", {}, line), toggle), legend, plot,
+    return h("figure", { class: "f1 sw-flow", "data-live": String(!!live), style: `--team:${tint}` }, head,
+      h("div", { class: "f1-chart" }, gridEl, plot, lanesEl), axis, held,
+      live && last?.outcome ? h("p", { class: "f1-now" }, `Step ${n0(last.step)}: ${esc(last.outcome)}`) : "",
+      h("h4", { class: "f1-flowh" }, "What it learned, stage by stage"),
       h("ol", {}, ...S.map((x) => h("li", { style: `--c:${x.c}` }, h("button", { type: "button", onclick: x.to, title: "Open the details" },
         h("strong", {}, String(n0(x.n))), h("b", {}, x.k), x.sub ? h("small", { class: x.gate ? "sw-out" : "" }, x.sub) : "",
-        x.s[1] ? h("p", { "data-s": x.s[0] }, esc(x.s[0] && x.s[0] !== "working" ? `${x.s[0]}: ${x.s[1]}` : x.s[1])) : "")))),
-      live && last?.outcome ? h("p", { class: "f1-now" }, `Step ${n0(last.step)}: ${esc(last.outcome)}`) : "",
-      h("figcaption", {}, "Lines: every variable over the run, each on its own scale. Floor: what it planned, asked, wrote, let in and linked, left to right."));
+        x.s[1] ? h("p", { "data-s": x.s[0] }, esc(x.s[0] && x.s[0] !== "working" ? `${x.s[0]}: ${x.s[1]}` : x.s[1])) : "")))));
   };
   const youBox = (d) => { const Y = { ...(d.you || {}) }, about = Y.about || ""; delete Y.about;
     const box = h("textarea", { rows: 3, placeholder: "e.g. I'm Osiris, your Guardian. You were my Ghost before you were destroyed.", "aria-label": "Who you are, in your own words" }); box.value = about;
@@ -578,6 +593,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   const tkey = (t) => `${t.at}|${t.kind}|${t.outcome}|${t.detail}`;
   async function pullReport(force) {
     if (!reporting || !root.isConnected) { clearInterval(rTimer); rTimer = 0; return; }
+    if (force !== true && !rData?.train?.active && Date.now() - rLast < 4800) return; // a live run is pulled every 2 s, the rest every 5
+    rLast = Date.now();
     const typing = panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
     if (rTab === "engines") loadRoles();
     if (rTab === "controls") { loadRoles(); try { ctl.swap = await api("/model/swap"); } catch { ctl.swap = null; } }
@@ -590,7 +607,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   document.addEventListener("submit", () => { if (reporting && rTab === "chat") for (const ms of [800, 4000, 10000, 20000]) setTimeout(() => pullReport(), ms); }, true);
   function report(on = !reporting) {
     reporting = on; root.classList.toggle("sw-reporting", on); panel.hidden = !on; reportBtn.textContent = on ? "← Mesh" : "Report"; reportBtn.setAttribute("aria-pressed", String(on));
-    clearInterval(rTimer); rTimer = 0; rSeen = null; if (on) { pullReport(); rTimer = setInterval(pullReport, 5000); }
+    clearInterval(rTimer); rTimer = 0; rSeen = null; if (on) { pullReport(); rTimer = setInterval(pullReport, 2000); }
   }
   menu.append(h("small", {}, "View"), h("span", {}, h("button", { type: "button", onclick: () => { shut(); report(); } }, "Report")));
   // the page always opens on the mesh, so you see it grow; the report is one click away

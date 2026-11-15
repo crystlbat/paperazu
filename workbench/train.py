@@ -105,7 +105,7 @@ def _one_step() -> tuple[str, str]:
     """One learning step, the way idle time runs them: a harness cycle in planner mode, else the Verifier's pick. Forced: a run ignores tiredness and quiet."""
     if char.mode() == "planner":
         from . import harness  # harness imports char
-        c = harness.cycle()
+        c = harness.cycle(force=True)
         did = [x for x in c.get("executed", []) if x.get("outcome") == "ok"]
         return ("ok" if did else "skipped"), " · ".join(x["cmd"] for x in did) or "cycle did nothing"
     r = char.rest(True, None, force=True)
@@ -171,6 +171,7 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
         log.append({"step": steps, "t": round(spent), "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": outcome, "outcome": detail[:120], "snap": bool(snap)})
         _set(run_id, log=json.dumps(log))
     snapshot(run_id, steps, f"end: {why}")
+    char.prune_questions()  # the letter that follows asks you only what is left
     if log:
         log[-1]["snap"] = True  # the closing checkpoint shows on the trace too
     _set(run_id, status=status, why=why, log=json.dumps(log), ended_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
@@ -191,9 +192,30 @@ def start(cfg: dict[str, Any]) -> dict[str, Any]:
         con.close()
         RUN.clear()
         RUN.update(id=run_id, pause=threading.Event(), stop=threading.Event())
+        RUN.update(lanes=[], clock=0.0)
         RUN["thread"] = threading.Thread(target=_loop, args=(run_id, c), daemon=True, name=f"train-{run_id}")
         RUN["thread"].start()
+        threading.Thread(target=_sample, daemon=True, name=f"train-{run_id}-lanes").start()
     return status()
+
+
+def _sample(every: float = 1.0) -> None:
+    """While the run lives, once a second: the run's clock, and which system is at work, as lanes [sys, kind, t0, t1] the Story draws growing.
+    shortcut: lanes live in memory, so a past run's lanes are gone after a restart; store them on the run row if that matters."""
+    last = time.time()
+    while active():
+        time.sleep(every)
+        now = time.time()
+        if RUN["pause"].is_set():
+            last = now
+            continue
+        RUN["clock"] += now - last
+        last = now
+        lanes, w, t = RUN["lanes"], dict(char.NOW), round(RUN["clock"], 1)
+        if lanes and lanes[-1][0] == w.get("sys") and lanes[-1][1] == w.get("kind") and lanes[-1][3] >= t - every * 1.5:
+            lanes[-1][3] = t
+        elif w.get("sys") is not None:
+            lanes.append([w["sys"], w["kind"], round(t - every, 1), t])
 
 
 def control(action: str) -> dict[str, Any]:
@@ -215,7 +237,8 @@ def status() -> dict[str, Any]:
         live = active() and RUN.get("id") == r["id"]
         st = r["status"] if live or r["status"] not in ("running", "paused") else "stopped"  # its thread died with the server
         out.append({"id": r["id"], "status": ("paused" if live and RUN["pause"].is_set() else st), "why": r["why"] or ("the app restarted" if st != r["status"] else ""),
-                    "config": json.loads(r["config"]), "log": json.loads(r["log"]), "snaps": r["snaps"], "examples": r["examples"], "started": r["started_at"], "ended": r["ended_at"]})
+                    "config": json.loads(r["config"]), "log": json.loads(r["log"]), "snaps": r["snaps"], "examples": r["examples"], "started": r["started_at"], "ended": r["ended_at"],
+                    **({"lanes": RUN.get("lanes", []), "clock": round(RUN.get("clock", 0), 1)} if RUN.get("id") == r["id"] else {})})
     return {"active": active(), "runs": out, "defaults": DEFAULTS}
 
 

@@ -1521,3 +1521,12 @@ def test_a_wish_is_the_character_asking_not_a_fan_asking_about_it():
     assert not char.in_voice("Why is Osiris so important to Sagira? I want to be a better friend to her.", "Sagira From Destiny 2")
     assert not char.in_voice("Help me understand her role in the game!", "Sagira From Destiny 2")
     assert not char.in_voice("", "Sagira From Destiny 2")
+
+
+def test_prune_questions_lets_go_of_repeats_and_off_world_ones(monkeypatch):
+    monkeypatch.setattr(char, "world_words", lambda: {"Sagira", "Osiris", "Vex", "Traveler"})
+    monkeypatch.setattr(char, "_start", lambda: 0)
+    for q in ("Who is Osiris?", "who is osiris", "What is the political landscape?", "Where do the Vex come from?"):
+        char.add_memory(f"Question: {q}"[:80], q, source="question")
+    assert char.prune_questions() == 2
+    assert char._open_questions(0) == ["Who is Osiris?", "Where do the Vex come from?"]

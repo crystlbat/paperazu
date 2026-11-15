@@ -1478,6 +1478,19 @@ def _want_from() -> tuple[str, str, str] | None:
     return None
 
 
+def prune_questions() -> int:
+    """At the end of a run: open questions off its world, or asked twice in other words, are let go, so the letter asks only what matters. No model."""
+    words, seen, gone = world_words(), set(), 0
+    for q in _open_questions(_start()):
+        key = " ".join(re.findall(r"[a-z0-9]+", q.lower()))
+        why = "off its world" if not on_world(q, words) else "asked before" if key in seen else ""
+        seen.add(key)
+        if why:
+            add_memory(f"Reflection: {q}"[:80], f"(pruned: {why})", source="sheet")
+            gone += 1
+    return gone
+
+
 def letter() -> dict[str, Any]:
     """What it needs from you, as one letter you answer in place: its waiting wishes and its open questions, only those about its world."""
     words = world_words()
@@ -1629,6 +1642,7 @@ class _Trace(deque):
 
 
 TRACE: deque[dict[str, Any]] = _Trace(maxlen=60)  # shortcut: the run log lives in memory like PROMPTS; a restart clears it
+NOW: dict[str, Any] = {}  # the engine at work this moment, {"sys", "kind"}: what a training run samples into its system lanes
 ENGINES: dict[str, dict[str, Any]] = {}  # kind -> what it did the last time it was tried, for /char/engines; in memory like TRACE
 ENGINE_ORDER = ("plan", "goal", "ask", "wonder", "fill", "want", "reflect", "extract", "ideas", "practise", "sort", "fold", "evaluate", "check", "review", "tune", "bake", "journal", "reply", "correction", "persona", "model", "cycle")
 NO_MODEL = ("bake", "correction")  # the engines that never call the model
@@ -1666,11 +1680,11 @@ def _blocked(kind: str, off: set[int], braked: bool, quiet: bool, up: bool = Tru
     return f"{mode()} mode" if quiet and kind in SYS_OF else ""
 
 
-def _blocks(up: bool) -> tuple[set[int], dict[str, str]]:
+def _blocks(up: bool, force: bool = False) -> tuple[set[int], dict[str, str]]:
     """The systems off, and why each engine could not run now ("" when it could): shared by /char/engines and /char/report."""
     off, d = systems_off(), disposition()
-    braked, quiet = (d["nE"] > 0 or d["dial"] == 0) and d["curiosity"] <= 0, mode() in ("quiet", "sleeping")
-    t = tired()
+    braked, quiet = (d["nE"] > 0 or d["dial"] == 0) and d["curiosity"] <= 0, mode() in ("quiet", "sleeping") and not force
+    t = tired() and not force  # a training run you started ignores tiredness and quiet, as rest(force=True) does
     return off, {k: _blocked(k, off, braked, quiet, up) or ("tired: resting until its energy comes back" if t and k in SYS_OF and k not in NO_MODEL else "") for k in ENGINE_ORDER}
 
 
@@ -2191,12 +2205,14 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             continue
         tried.append(kind)
         _sys, _failed, skip["why"] = SYS_OF[kind], "", ""
+        NOW.update(sys=SYS_OF[kind], kind=kind)
         try:
             got = step(kind)
         except Exception as e:
             got, _failed = None, _failed or f"error: {e}"[:200]
         finally:
             _sys = None
+            NOW.clear()
         if got:
             _engine(kind, "ok", f"{got[0]}: {got[1]}")
         else:
