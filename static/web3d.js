@@ -480,6 +480,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
         return st.length ? h("div", { class: "st-cells", style: `--c:${SC[n]}` }, h("div", {}, ...st.map((t) => h("i", { "data-o": t.outcome, title: `${t.kind} · ${local(t.at)}: ${t.detail}` }))), h("small", {}, `last ${st.length} steps: ${did} did something`)) : ""; };
       const newRun = h("button", { type: "button", class: "st-new", onclick: () => to(7) }, live ? `a run is going · watch it →` : "▶ new run");
       fill(0, `${who}.`, [b(T.steps), " steps since ", local(d.since), ". ", b(T.ok), " did something, ", b(T.skipped), " found nothing to do."],
+        h("div", { class: "st-model", "data-up": String(!!d.model?.up) }, h("span", {}, h("i"), d.model?.up ? (d.now?.sys != null ? "thinking on" : "running on") : "model down"), h("strong", {}, esc((d.model_name || "no model set").split("/").pop()))),
         newRun, rows([["curiosity", r2(d.disposition?.curiosity)], ["cycles", `${n0(HL.cycles_run)} · ${n0(HL.executed)} of ${n0(HL.proposed)} proposed steps ran`], stuck ? ["mostly stuck on", `${stuck[0]} (${stuck[1]}×)`, "#ffe600"] : null].filter(Boolean)));
       fill(1, "The dot is just a body.", ["Four systems inside it. What each is doing now:"],
         rows([[2, "S2 plans"], [1, "S1 asks"], [0, "S0 reads"], [3, "V checks"]].map(([n, t]) => { const s = loop.find((x) => x.system === n), stt = s ? stageOf(s).state : ["idle", ""]; return [t, D.now?.sys === n ? `working: ${DOING[D.now.kind] || D.now.kind}` : stt[1] || stt[0], SC[n]]; })));

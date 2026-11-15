@@ -1263,3 +1263,10 @@ body:has(.st) .sp-ear { position: fixed; z-index: 70; }
 .st-new { justify-self: start; background: var(--sig); color: #000; border: 0; padding: 10px 16px; font: 12px var(--mono, monospace); letter-spacing: .14em; text-transform: uppercase; cursor: pointer; }
 .st-new:hover { background: #fff; }
 .f1-drag { cursor: ns-resize; touch-action: none; user-select: none; }
+/* the model it thinks with, in the dotted face, lit while it is working */
+.st-model { display: grid; gap: 6px; margin-bottom: 6px; }
+.st-model span { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: rgb(255 255 255 / .55); }
+.st-model i { width: 7px; height: 7px; border-radius: 50%; background: #3f3f46; }
+.st-model[data-up="true"] i { background: var(--sig); animation: pn-beat 1.8s ease-in-out infinite; }
+.st-model strong { font: 800 clamp(26px, 3vw, 44px)/1 "Doto", var(--mono, monospace); letter-spacing: .02em; color: var(--sig); overflow-wrap: anywhere; }
+.st-model[data-up="false"] strong { color: rgb(255 255 255 / .35); }
