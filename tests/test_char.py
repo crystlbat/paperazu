@@ -288,6 +288,17 @@ def test_reflect_saves_nothing_when_search_finds_nothing(monkeypatch):
     assert char.reflect(on_char=True)["topic"] != r["topic"]  # the failed topic no longer blocks the next
 
 
+def test_a_dead_topic_cut_at_a_space_is_let_go(monkeypatch):
+    # the 80-char key ends on a space here: the marker must still match it, or reflect retries this topic forever and nothing is answered
+    _reflect_mocks(monkeypatch, found=False)
+    q = 'What is the significance of the "Curse of Osiris" in the context of the ancient Egyptian "Book of th?'
+    assert f"Reflection: {q}"[:80].endswith(" ")
+    char.add_memory(f"Question: {q}"[:80], f"{q} (from 0)", source="question")
+    assert char.reflect(on_char=True)["topic"] == q
+    assert q not in char._open_questions()
+    assert char.reflect(on_char=True, topic=q)["done"]
+
+
 def test_a_reflection_reaches_the_next_char_prompt_and_the_route(monkeypatch, mock_model):
     _reflect_mocks(monkeypatch)
     r = client.post("/char/reflect", json={"char": True})

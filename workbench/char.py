@@ -389,7 +389,7 @@ def add_memory(title: str, content: str, source: str = "manual") -> dict[str, An
     with con:
         cur = con.execute(
             "INSERT INTO char_memories (title, content, source) VALUES (?, ?, ?)",
-            (title.strip(), content.strip(), source.strip()),
+            (title.lstrip(), content.strip(), source.strip()),  # not rstrip: callers look titles up as f"...{x}"[:80], which can end on a space
         )
         mem_id = cur.lastrowid
         # Update knowledge accumulator variable
