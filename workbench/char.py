@@ -531,6 +531,20 @@ def _offworld(since: int | None = None) -> set[str]:
     return out
 
 
+def world_words() -> set[str]:
+    """The proper nouns of its world, read exactly: its name, its work, and the names its sheet and its wiki reference use mid-sentence."""
+    p = get_profile(); ref = (chibi.cached(p["name"]) or {}).get("about", "")
+    own = {w for w in re.findall(r"[A-Za-z][\w'-]{2,}", p["name"]) if w.lower() != "from"}
+    words = own | set((chibi.where_from(p["persona"]) or "").split()) | {w.removesuffix("'s") for w in re.findall(r"(?<=[a-z,;] )[A-Z][\w'-]{2,}", f"{p['persona']} {ref}")}
+    return words if len(words - own) >= 3 else set()  # too little known of its world to judge by: no gate rather than no learning
+
+
+def on_world(text: str, words: set[str] | None = None) -> bool:
+    """A topic the model made up belongs to its world only if it names something from it: no model, so a small one can't drift it to "the political landscape"."""
+    words = world_words() if words is None else words
+    return not words or any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
+
+
 LENSES = ("Who or what is {name}?", "Why does {name} matter to {who}?", "Where and when does {name} show up?")  # a name seen through a lens is a question; each answer opens the next
 IDEA_LENSES = ("How did {name} start?", "What makes {name} hard?", "How has {name} changed?")  # an idea is a doing, so it gets asked about its start, its friction and its change
 
@@ -722,8 +736,8 @@ def pruner() -> dict[str, Any]:
     before = _held()
     if not row:
         return {"creature": "Pruner", "note": None, "notes": before[0], "chars": before[1]}
-    verdict = _ask(f"You keep the memory of {who}. Persona: {p['persona'][:300]}\nDoes this note help {who} answer as themself, about their own world? Answer KEEP or DROP.", f"{row['title']}: {row['content'][:600]}", 4)
-    drop = verdict.strip().upper().startswith("DROP")
+    drop = not on_world(f"{row['title']} {row['content'][:600]}") or _ask(  # names nothing from its world: dropped without asking the model
+        f"You keep the memory of {who}. Persona: {p['persona'][:300]}\nDoes this note help {who} answer as themself, about their own world? Answer KEEP or DROP.", f"{row['title']}: {row['content'][:600]}", 4).strip().upper().startswith("DROP")
     con = db.connect()
     with con:
         if drop:
@@ -1303,7 +1317,21 @@ def you() -> dict[str, str]:
     rows = con.execute("SELECT title, content FROM char_memories WHERE source = 'sheet' AND title LIKE 'You: %' AND id > ? ORDER BY id", (_start(),)).fetchall()
     con.close()
     got = {r["title"].removeprefix("You: "): r["content"] for r in rows}
-    return {k: got[k] for k in dict.fromkeys(k for k, _, _ in ABOUT_YOU) if k in got}  # name first, then who they are to it
+    return {k: got[k] for k in dict.fromkeys(["about", *(k for k, _, _ in ABOUT_YOU)]) if k in got}  # what you wrote first, then your name, then who you are to it
+
+
+def set_you(about: str | None = None, forget: str | None = None) -> dict[str, str]:
+    """What you write about yourself on the Story page (replacing the last), or forget one thing it learned about you."""
+    con = db.connect()
+    with con:
+        if forget:
+            con.execute("DELETE FROM char_memories WHERE source = 'sheet' AND title = ? AND id > ?", (f"You: {forget}", _start()))
+        if about is not None:
+            con.execute("DELETE FROM char_memories WHERE source = 'sheet' AND title = 'You: about' AND id > ?", (_start(),))
+            if about.strip():
+                con.execute("INSERT INTO char_memories (title, content, source) VALUES ('You: about', ?, 'sheet')", (about.strip()[:1500],))
+    con.close()
+    return you()
 
 
 def learn_you(text: str) -> list[str]:
@@ -1324,6 +1352,8 @@ def _you_line() -> str:
     known, n, tr = you(), sum(1 for t in _chat_since() if t["role"] == "user"), trust()
     feel = (" You trust them: be warm and open, and say what you are unsure of." if tr["trusted"] else
             " You do not trust them much yet: be polite and a little guarded." if tr["n"] >= TRUST_AFTER and tr["value"] < LOW else "")
+    if about := known.pop("about", ""):
+        return f"The person you talk to, in their own words: {about}" + (f" Also: {'; '.join(known.values())}." if known else "") + f" You have talked {n} times.{feel}"
     if not known:
         return f"You do not know who the person you talk to is yet: they are not anyone from your world unless they tell you. You have talked {n} times.{feel}"
     return f"The person you talk to (they told you this): {'; '.join(known.values())}. You have talked {n} times.{feel}"
@@ -1476,6 +1506,14 @@ TOOL_MAKES = {"plan": ("plan", None), "goal": ("question", None), "ask": ("quest
               "check": ("note", None), "extract": ("name", "name"), "ideas": ("name", "idea"), "fold": ("name", None), "reply": ("chat", "it"), "review": ("chat", "it"), "tune": ("trait", None)}
 TOOL_FLOW = [("plan", "goal"), ("goal", "reflect"), ("ask", "reflect"), ("wonder", "reflect"), ("want", "reflect"), ("reflect", "check"), ("reflect", "extract"),
              ("extract", "ideas"), ("extract", "fold"), ("check", "journal"), ("reply", "review"), ("review", "tune"), ("bake", "plan")]  # which step feeds which
+
+
+def prompt_now() -> str:
+    """Its reply prompt as it stands, without this turn's moods and notes: who it is, who you are, its tone and your standing instructions."""
+    parts = [get_profile()["persona"], _you_line(), _tone()]
+    if told := instructions()[:5]:
+        parts.append("Standing instructions from the person you talk to (always follow them):\n" + "\n".join(f"- {i['text']}" for i in told))
+    return "\n\n".join(x for x in parts if x)
 
 
 def toolnet(mesh_nodes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -1846,8 +1884,11 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             out = _ask("You are a research planner. Reply with 3 topics, one per line, 2 to 6 words each. No sentences, no numbering. Only the topics." + _fix("plan"),
                        f"Character: {me['who']}\nAlready read about: {', '.join(x['name'] for x in g['nodes'] if x['known']) or 'nothing'}\n"
                        f"Not read about yet: {', '.join(x['name'] for x in g['nodes'] if not x['known']) or 'nothing'}\nWhich 3 new topics about this character's world should be researched next?", 50)
-            had = {pl["content"].lower() for pl in plans}
-            lines = [x for x in dict.fromkeys(re.sub(r"^[\s\-*\d.)]+", "", ln).strip(" .\"'") for ln in out.splitlines()) if 4 <= len(x) <= 80 and x.lower() not in had][:3]
+            had, ww = {pl["content"].lower() for pl in plans}, world_words()
+            lines = [x for x in dict.fromkeys(re.sub(r"^[\s\-*\d.)]+", "", ln).strip(" .\"'") for ln in out.splitlines()) if 4 <= len(x) <= 80 and x.lower() not in had]
+            for x in [x for x in lines if not on_world(x, ww)]:
+                add_memory(f"Off-world: {x}"[:80], f"plan line names nothing from {me['who']}'s world", source="sheet")
+            lines = [x for x in lines if on_world(x, ww)][:3]
             for ln in lines[::-1]:  # titles() reads newest first, so the first line is saved last and S1 takes it first
                 add_memory(f"Plan: {ln}"[:80], ln, source="sheet")
             if not lines:
@@ -1863,7 +1904,7 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             topic = note["title"].removeprefix("Reflection: ")
             ground = titles("source = 'sheet' AND title = ?", (f"Ground: {note['id']}",))
             loose = bool(ground) and float(ground[0]["content"]) < 0.5  # read exactly, no model: half its names are in no source
-            drop = loose or _ask(f"You check notes for {me['who']}. Does this note answer the topic, and is it about the world of {me['who']}? Reply KEEP or DROP.", f"Topic: {topic}\nNote: {note['content'][:500]}", 4).strip().upper().startswith("DROP")
+            drop = loose or not on_world(f"{topic} {note['content'][:500]}") or _ask(f"You check notes for {me['who']}. Does this note answer the topic, and is it about the world of {me['who']}? Reply KEEP or DROP.", f"Topic: {topic}\nNote: {note['content'][:500]}", 4).strip().upper().startswith("DROP")
             add_memory(f"Checked: {note['id']}", "drop" if drop else "keep", source="sheet")
             if drop:  # kept as a sheet row under the same title: out of its replies, but the topic is not looked up again and nothing is lost
                 con = db.connect()
@@ -1911,7 +1952,7 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             s1, tw = _meets(want, trial, asked) if trial else (None, "")
             if s1 is None:
                 return None
-            add_memory(f"Tone tried: {turns[i]['id']}", json.dumps({"tone": new, "met": s1 == 1, "score": s1, "why": tw, "trial": trial[:300]}), source="sheet")
+            add_memory(f"Tone tried: {turns[i]['id']}", json.dumps({"tone": new, "met": s1 == 1, "score": s1, "why": tw, "trial": trial[:300], "asked": asked[:300]}), source="sheet")
             if s1 > score:  # better than the reply it would replace: keep it, the next miss climbs from here
                 add_memory("Tone", new, source="sheet")
                 add_memory(f"Tuned: {turns[i]['id']}", json.dumps({"met": False, "fixed": True, "score": s1}), source="sheet")  # this reply is done: the new tone answers it
@@ -1959,6 +2000,8 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
                     con.execute("UPDATE char_memories SET title = ? WHERE id = ?", (f"Plan (dropped): {pl['content']}"[:80], pl["id"]))
                 con.close()
                 return no("plan line dropped: its question was asked before")
+            if not on_world(q):  # the model wandered off the plan line: ask the plain question, which names the line's own anchor
+                q = f"What matters about {pl['content']}"
             add_memory(f"Question: {q}?"[:80], f"{q}? (from {pl['id']})", source="question")
             return pl["content"], q + "?"
         if kind == "want":  # S1: it asks you for something it lacks, grounded in what went wrong, the way Pino asks at his shrine
@@ -1969,6 +2012,8 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             if not (got := _want_from()):
                 return no("nothing it lacks that you could give")
             thing, because, topic = got
+            if not on_world(f"{thing} {topic}"):
+                return no("off its world: it wanted something that names nothing from it")
             said = _clean(_ask(f"{me['text'][:500]}\n\nIn one sentence, in the first person, ask the person you talk to for this and say why. Use only the facts given.",
                                f"You want: {thing}\nWhy: {because}", 60), 300) or f"Could you find me {thing}? {because}."
             add_memory(f"Want: {topic}"[:80], json.dumps({"thing": thing, "because": because, "topic": topic, "said": said, "status": "waiting"}), source="sheet")
@@ -2043,6 +2088,9 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             q += "?"
             if any(r["content"].split(" (from")[0].lower() == q.lower() for r in titles("source = 'question' AND id > ?", (since,))):
                 return no("that question was asked before")  # a small model repeats itself
+            if not on_world(q):
+                add_memory(f"Off-world: {q}"[:80], f"names nothing from {get_profile()['name']}'s world", source="sheet")
+                return no("off its world: names nothing from it")
             add_memory(f"Question: {q}"[:80], f"{q} (from {last['id']})", source="question")
             con = db.connect()
             with con:
@@ -2458,6 +2506,12 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
     outfit = None  # "wear a red cape": the app changes its chibi look itself and says so; no model to promise what it cannot draw
     if direct is None and not become_match and (dr := chibi.dress(get_profile()["name"], text)):
         direct, outfit = dr["said"], dr["spec"]
+    refs_card = None  # "show me chibi references": pictures to pick from; the one you pick, Dot pours itself into
+    if direct is None and not become_match and chibi.SHOW.search(text):
+        prof = get_profile()
+        refs = chibi.find_refs(prof["name"], prof["persona"])
+        direct = "Here are some I found. Pick one and I'll pour myself into it." if refs else "I couldn't find any pictures just now. The image search didn't answer."
+        refs_card = {"kind": "chibi", "refs": refs} if refs else None
 
     # 4. The character's own moods
     _, moods = update_coupled_system(text)
@@ -2625,7 +2679,7 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
     if up == "SLEEP":  # its question is the last thing it said, so your next message is the answer (the same path as a correction)
         add_memory(f"Asking: {dot_id}", json.dumps({"asked": text[:300], "said": "", "why": ASK_WAY, "chat": dot_id, "kind": "direction"}), source="sheet")
 
-    card = tool_card or spawned_card
+    card = tool_card or spawned_card or refs_card
     if not card and spawned_job:
         card = {
             "kind": "job",

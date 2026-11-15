@@ -151,3 +151,15 @@ def test_the_race_counts_distance_pace_laps_and_pit_stops_from_its_own_rows():
     r = verse.race(rows)
     assert r == {"distance": 9.5, "verified": 1, "notes": 1, "names": 1, "laps": 1, "pits": 1, "steps": 2, "ok": 1, "pace": 0.5}
     assert verse.personas()["personas"][0]["race"]["steps"] >= 0
+
+
+def test_start_over_deletes_every_persona_and_what_it_learned():
+    from workbench import char, verse, chibi
+    char.update_profile("Cortana", "You are Cortana.", [], "#4f8cff")
+    char.add_memory("Reflection: Halo", "A ring.", source="reflection")
+    chibi._save("Cortana", {"name": "Cortana", "kind": "humanoid", "colours": [], "features": []})
+    verse.leave(); char.update_profile("Alfred", "You are Alfred.", [], "")
+    char.add_memory("Reflection: Manor", "A house.", source="reflection")
+    verse.reset_all()
+    assert verse.personas()["personas"][0]["name"] == "Dot" and len(verse.personas()["personas"]) == 1
+    assert char.mind()["memories"] == [] and chibi.cached("Cortana") is None and char.variables()

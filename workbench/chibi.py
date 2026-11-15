@@ -7,9 +7,12 @@ Each persona's reference is stored, so it is looked up once. Only the persona's 
 """
 from __future__ import annotations
 
+import hashlib
 import html
+import ipaddress
 import json
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -167,6 +170,7 @@ def dress(name: str, text: str) -> dict[str, Any] | None:
     verb, what = (m.group(1) or m.group(3) or "").lower(), (m.group(2) or m.group(4) or "")
     if m.group(5) or re.search(r"(?i)\b(?:usual|normal|original|default|old)\b", what):
         spec.update(features=list(base["features"]), colours=list(base["colours"]))
+        spec.pop("silhouette", None); spec.pop("silhouette_from", None)  # out of the picture it was poured into, too
         _save(name, spec)
         return {"spec": spec, "said": "Back to my usual look."}
     off = verb.startswith(("take", "remove", "lose"))
@@ -188,6 +192,92 @@ def dress(name: str, text: str) -> dict[str, Any] | None:
     if cant:
         said += f" A body like mine can't show {say(cant)}."
     return {"spec": spec, "said": said}
+
+
+SHOW = re.compile(r"(?i)\b(?:show|find|get|pull up|look up|search(?: for)?)\b.{0,20}\bchibi\b.{0,12}\b(?:references?|refs?|images?|pictures?|pics?|art|looks?)\b")
+MAX_IMAGE = 4_000_000
+
+
+def find_refs(name: str, persona: str = "", fetch: Callable[[str], str] | None = None) -> list[dict[str, str]]:
+    """Chibi pictures of the persona from an image search: a thumbnail to show and the full image to pour Dot into. Empty when offline."""
+    flat = re.sub(r"(?i)\s+from\s+.*$", "", name.replace(".", ""))
+    q = f"{flat} {where_from(persona) or name.removeprefix(flat).replace(' From ', ' ').strip()} chibi"
+    try:
+        page = (fetch or _page)("https://www.bing.com/images/search?" + urllib.parse.urlencode({"q": q, "form": "HDRSC2"}))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return []
+    out = []
+    for m in re.finditer(r'\bm="(\{[^"]+\})"', page):  # each result carries its image (murl), thumbnail (turl), title and page
+        try:
+            j = json.loads(html.unescape(m.group(1)))
+        except ValueError:
+            continue
+        if str(j.get("murl", "")).startswith(("http://", "https://")) and str(j.get("turl", "")).startswith("https://"):
+            out.append({"url": j["murl"], "thumb": j["turl"], "title": html.unescape(j.get("t", ""))[:120], "page": j.get("purl", "")})
+        if len(out) == 12:
+            break
+    return out
+
+
+def _page(url: str) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) PaperWorkbench/1.0", "Accept-Language": "en"})
+    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — a fixed host, only the persona name in the query
+        return resp.read().decode("utf-8", "replace")
+
+
+def _public(url: str) -> bool:
+    """Only a public web image: no local or private addresses, so a search result can't make the app fetch something on your network."""
+    u = urllib.parse.urlparse(url)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return False
+    try:
+        return all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(u.hostname, None))
+    except (OSError, ValueError):
+        return False
+
+
+EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}
+
+
+def image_dir() -> Any:
+    return db.DATA_DIR / "chibi"
+
+
+def _image(url: str) -> str:
+    """Saves the picture under data/chibi and returns the app's own link to it, so the canvas can read its pixels without the other site's permission."""
+    if not _public(url):
+        raise ValueError("not a public web address")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) PaperWorkbench/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 — checked public above
+        kind = resp.headers.get_content_type()
+        if kind not in EXT:
+            raise ValueError(f"not a picture ({kind})")
+        data = resp.read(MAX_IMAGE + 1)
+    if len(data) > MAX_IMAGE:
+        raise ValueError("picture too big")
+    name = f"{hashlib.sha1(data).hexdigest()[:16]}.{EXT[kind]}"
+    image_dir().mkdir(parents=True, exist_ok=True)
+    (image_dir() / name).write_bytes(data)
+    return f"/char/chibi/image/{name}"
+
+
+def pick(name: str, url: str, thumb: str = "", look: list[str] | None = None, load: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """Pour Dot into the picture you chose: it is kept with the persona's look, and an empty url takes it back off."""
+    spec = cached(name) or spec_from(name, "", look)
+    if not url:
+        spec.pop("silhouette", None); spec.pop("silhouette_from", None)
+    else:
+        err = None
+        for u in (url, thumb):  # the full image, or its thumbnail when the site refuses
+            try:
+                spec["silhouette"], spec["silhouette_from"] = (load or _image)(u), url
+                break
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+                err = e
+        else:
+            raise ValueError(f"could not load that picture: {err}")
+    _save(name, spec)
+    return spec
 
 
 def _save(name: str, spec: dict[str, Any]) -> None:

@@ -17,7 +17,7 @@ from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from . import canvas, char, checker, chibi, db, export, guide, harness, jobs, marks, framework, graph, library, llm, notes, primer, sections, settings, shelf, space, themes, verse, websearch
+from . import canvas, char, checker, chibi, db, export, guide, harness, jobs, marks, framework, graph, library, llm, notes, primer, sections, settings, shelf, space, themes, train, verse, websearch
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -1036,6 +1036,39 @@ def char_journal() -> dict[str, Any]:
     return {"pages": char.journal()}
 
 
+@app.get("/char/train")
+def char_train() -> dict[str, Any]:
+    """The live persona's training runs, newest first, with their logs."""
+    return train.status()
+
+
+@app.post("/char/train")
+def char_train_do(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """start (with minutes, lo, hi, max_steps), pause, resume or stop a training run."""
+    action = str(body.get("action") or "start")
+    try:
+        return train.start(body) if action == "start" else train.control(action)
+    except (RuntimeError, KeyError, ValueError) as e:
+        raise HTTPException(409, detail=str(e) if not isinstance(e, KeyError) else f"no action {action}")
+
+
+@app.get("/char/train/{run_id}/snapshots")
+def char_train_snaps(run_id: int) -> dict[str, Any]:
+    return {"snapshots": train.snapshots(run_id)}
+
+
+@app.get("/char/train/{run_id}/dataset.jsonl")
+def char_train_dataset(run_id: int) -> Response:
+    """The run's fine-tuning set: JSONL, one {"system", "messages"} example per line."""
+    return Response(train.dataset(run_id), media_type="application/jsonl", headers={"Content-Disposition": f'attachment; filename="{char.get_profile()["name"].replace(" ", "-").lower()}-run-{run_id}.jsonl"'})
+
+
+@app.post("/char/you")
+def char_you(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Tell it who you are in your own words (`about`), or make it forget one thing it learned about you (`forget`: name, theirs, mine, role, work)."""
+    return {"you": char.set_you(body.get("about") if "about" in body else None, body.get("forget"))}
+
+
 @app.get("/char/tools")
 def char_tools() -> dict[str, Any]:
     """Its tools as a graph, wired into its mesh: what each step made, which feeds which, and the model they run on."""
@@ -1059,7 +1092,8 @@ def char_want(want_id: int, body: dict[str, Any] = Body(default={})) -> dict[str
 
 @app.get("/char/report")
 def char_report() -> dict[str, Any]:
-    return {**char.report(*_model()), "harness_loop": harness.totals(), "cycles": harness.cycles(30), "mode": char.mode(), "tracker": char.tracker()}
+    return {**char.report(*_model()), "harness_loop": harness.totals(), "cycles": harness.cycles(30), "mode": char.mode(), "tracker": char.tracker(),
+            "race": verse.live_race(), "train": train.status()}
 
 
 @app.post("/char/cycle")
@@ -1086,6 +1120,8 @@ def model_swap() -> dict[str, Any]:
 
 @app.post("/char/rest")
 def char_rest(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    if body.get("char") and train.active() and not body.get("only"):  # a training run is driving it: idle learning stands aside, one step at a time
+        return {"done": True, "kind": "", "topic": "", "note": "", "why": "a training run is driving it", "training": True, "questions": char._open_questions(char._start())[::-1][:3], "graph": char.graph()}
     if body.get("char") and char.mode() == "planner" and not body.get("only"):  # planner mode: idle time runs one harness cycle instead of the rule loop; a step you ask for by name still runs
         try:
             c = harness.cycle()
@@ -1131,6 +1167,17 @@ def verse_new(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     return {**verse.personas(), "said": said}  # says so when the model was down and it got a generic voice
 
 
+@app.post("/verse/reset")
+def verse_reset(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Delete every persona and all they learned, then (when `then` names someone) become them fresh."""
+    verse.reset_all()
+    said = char.become_persona(str(body["then"]))[1] if body.get("then") else "reset"
+    for p in verse.personas()["personas"]:  # becoming someone puts the blank placeholder away: it is not a persona of yours
+        if not p["live"] and p["name"] == "Dot":
+            verse.delete("Dot")
+    return {**verse.personas(), "said": said}
+
+
 @app.delete("/verse/personas/{name:path}")  # :path so a name with a "/" in it can still be deleted
 def verse_delete(name: str) -> dict[str, Any]:
     try:
@@ -1140,6 +1187,30 @@ def verse_delete(name: str) -> dict[str, Any]:
     except ValueError as e:
         raise HTTPException(409, detail=str(e))
     return verse.personas()
+
+
+@app.get("/char/chibi/refs")
+def char_chibi_refs() -> dict[str, Any]:
+    """Chibi pictures of the live persona from an image search, to pour Dot into."""
+    p = char.get_profile()
+    return {"refs": chibi.find_refs(p["name"], p["persona"])}
+
+
+@app.post("/char/chibi/pick")
+def char_chibi_pick(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Pour Dot into the picture at `url` (its `thumb` if the site refuses); an empty url goes back to the drawn look."""
+    p = char.get_profile()
+    try:
+        return chibi.pick(p["name"], str(body.get("url") or ""), str(body.get("thumb") or ""), p["look"])
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+
+
+@app.get("/char/chibi/image/{name}")
+def char_chibi_image(name: str) -> FileResponse:
+    if not re.fullmatch(r"[0-9a-f]{16}\.(png|jpg|webp|gif)", name) or not (chibi.image_dir() / name).is_file():
+        raise HTTPException(404)
+    return FileResponse(chibi.image_dir() / name)
 
 
 @app.get("/char/chibi")

@@ -1130,7 +1130,7 @@ def test_report_route_shape_counts_and_persona_scoping(monkeypatch):
     con.close()
     char.add_memory("Baked", '{"nE": 0, "nAE": 0}', source="sheet")
     r = client.get("/char/report").json()
-    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "series", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker"}
+    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "series", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train"}
     assert r["who"] == "Sherlock" and r["since"] and r["model"] == {"up": True, "label": "Model ready"}
     t = r["totals"]
     assert t["steps"] == t["ok"] + t["skipped"] + t["failed"] == len(r["trace"]) and t["ok"] == 3 and t["skipped"] >= 2  # reflect, the intake gate, and one more
@@ -1482,3 +1482,23 @@ def test_its_tools_are_a_graph_wired_to_what_they_made_and_the_model():
     assert {"tool:reflect", "tool:check", "tool:model"} <= set(ids) and ids["tool:check"]["state"] == "idle"
     assert ["tool:reflect", f"m{n}"] in t["edges"] and ["tool:reflect", "tool:check"] in t["edges"] and ["tool:model", "tool:reflect"] in t["edges"]
     assert "1 of 1 runs did something" in ids["tool:reflect"]["body"]
+
+
+def test_you_can_write_who_you_are_and_it_reads_it_before_replying(monkeypatch):
+    seen = []
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: seen.append(m) or "ok")
+    char.say("My name is Bibin")
+    assert char.set_you(about="I'm Osiris, your Guardian.") == {"about": "I'm Osiris, your Guardian.", "name": "Their name is Bibin"}
+    char.say("hello")
+    assert "in their own words: I'm Osiris, your Guardian. Also: Their name is Bibin." in json.dumps(seen[-1])
+    assert char.set_you(forget="name") == {"about": "I'm Osiris, your Guardian."}
+    assert char.set_you(about="") == {}
+
+
+def test_a_topic_must_name_something_from_its_world():
+    from workbench import char
+    char.update_profile("Sagira From Destiny 2", "You are Sagira, the Ghost of the Warlock Osiris. You studied the Vex with him.", [], "")
+    w = char.world_words()
+    assert {"Sagira", "Destiny", "Osiris", "Vex", "Ghost"} <= w
+    assert not char.on_world("What is the political landscape", w) and not char.on_world("the role of the Archon in governance", w)
+    assert char.on_world("How did Osiris lose his Light?", w) and not char.on_world("a ghost story", w)  # proper nouns only, as written

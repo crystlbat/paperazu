@@ -108,6 +108,21 @@ def delete(name: str) -> None:
     chibi.forget(name)  # its look goes with it
 
 
+def reset_all() -> None:
+    """Start over: every persona goes, stored and live, with its notes, chat, rules, looks and training runs. Your Dot page is not touched."""
+    leave()  # the live one's rules leave space_vars with it, so deleting the verse takes them too
+    con = _con()
+    with con:
+        for t in ("verse", "char_memories", "char_turns", "char_vars", "char_chibi", "train_runs"):
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (t,)).fetchone():
+                con.execute(f"DELETE FROM {t}")
+        con.execute("UPDATE char_profile SET name = 'Dot', persona = ?, look = '[]', tint = '#6ff7ff' WHERE id = 1", (char.FALLBACK,))
+    con.close()
+    char.init_db()  # the moods come back at their starting values
+    for log in (char.TRACE, char.PROMPTS, char.DECISION):
+        log.clear()
+
+
 def race(mems: list[dict[str, Any]]) -> dict[str, Any]:
     """How far a persona has come, from its own rows: what it learned and let in is distance, steps that did something per hour is pace,
     journal pages are laps, and corrections it took are pit stops."""
@@ -122,6 +137,14 @@ def race(mems: list[dict[str, Any]]) -> dict[str, Any]:
     ok = runs.count("ok")
     return {"distance": round(verified * 3 + notes + names * 0.5 + laps * 5, 1), "verified": verified, "notes": notes, "names": names,
             "laps": laps, "pits": pits, "steps": len(runs), "ok": ok, "pace": round(ok / hours, 1)}
+
+
+def live_race() -> dict[str, Any]:
+    con = _con()
+    m = _marker(con)
+    rows = [dict(r) for r in con.execute("SELECT title, content, source, created_at FROM char_memories WHERE id >= ?", (m["id"] if m else 0,))]
+    con.close()
+    return race(rows)
 
 
 def personas() -> dict[str, Any]:

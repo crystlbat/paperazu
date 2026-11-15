@@ -84,3 +84,28 @@ def test_a_machine_says_what_its_body_cannot_show():
     chibi._save("Sagira", {"name": "Sagira", "kind": "mech", "colours": [], "features": ["optic"]})
     got = chibi.dress("Sagira", "wear a suit and goggles")
     assert got["spec"]["features"] == ["optic", "visor"] and "can't show suit" in got["said"]
+
+
+BING = ('<a class="iusc" m="{&quot;murl&quot;:&quot;https://art.example/sagira.png&quot;,&quot;turl&quot;:&quot;https://ts1.mm.bing.net/th?id=1&quot;,&quot;t&quot;:&quot;Sagira chibi&quot;,&quot;purl&quot;:&quot;https://art.example/p&quot;}">'
+        '<a class="iusc" m="{&quot;murl&quot;:&quot;file:///etc/passwd&quot;,&quot;turl&quot;:&quot;https://ts1.mm.bing.net/th?id=2&quot;}">')
+
+
+def test_you_ask_for_chibi_pictures_pick_one_and_go_back(monkeypatch, tmp_path):
+    from workbench import char, db, jobs
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: "ok")
+    monkeypatch.setattr(db, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(chibi, "_page", lambda url: BING)
+    char.update_profile("Sagira From Destiny 2", "You are Sagira.", [], "")
+    chibi._save("Sagira From Destiny 2", {"name": "Sagira", "kind": "humanoid", "colours": [], "features": []})
+    r = char.say("show me some chibi references")
+    assert r["card"]["kind"] == "chibi" and [x["url"] for x in r["card"]["refs"]] == ["https://art.example/sagira.png"]  # only web pictures
+    assert not chibi.SHOW.search("I drew a chibi of you yesterday")
+    loaded = []
+    spec = chibi.pick("Sagira From Destiny 2", "https://art.example/sagira.png", "https://ts1.mm.bing.net/th?id=1", load=lambda u: loaded.append(u) or "/char/chibi/image/0123456789abcdef.png")
+    assert spec["silhouette"] == "/char/chibi/image/0123456789abcdef.png" and chibi.cached("Sagira From Destiny 2")["silhouette"] and loaded == ["https://art.example/sagira.png"]
+    assert "silhouette" not in char.say("back to your usual look")["outfit"]
+
+
+def test_a_picture_is_only_fetched_from_the_public_web():
+    assert not chibi._public("http://127.0.0.1/x.png") and not chibi._public("http://localhost/x.png") and not chibi._public("file:///etc/passwd")
+    assert not chibi._public("http://192.168.1.4/x.png")

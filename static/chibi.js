@@ -5,7 +5,51 @@
 // Shared by web3d.js (/char) and verse.js (the persona planets).
 function chibiShade(c, f) { const m = /^#?([0-9a-f]{6})$/i.exec(c || ""); if (!m) return c; const n = parseInt(m[1], 16);
   return "#" + [n >> 16, (n >> 8) & 255, n & 255].map((v) => Math.round(f < 0 ? v * (1 + f) : v + (255 - v) * f).toString(16).padStart(2, "0")).join(""); }
+// ---------- poured: Dot squeezed into a picture you picked ----------
+// The picture's figure is cut from its background (its own transparency, or a flood from the edges), Dot's liquid fills it from the
+// bottom up while the picture stays faint over it, and the eyes ride the rising surface until it passes the face, then spring into place.
+const chibiCuts = new Map(); // picture url -> {img, mask, w, h, eye: {x, y, gap}} once loaded; null while loading
+function chibiCut(src) {
+  if (chibiCuts.has(src)) return chibiCuts.get(src);
+  chibiCuts.set(src, null); const img = new Image();
+  img.onload = () => { const S = 256 / Math.max(img.width, img.height), w = Math.max(1, Math.round(img.width * S)), h = Math.max(1, Math.round(img.height * S));
+    const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d", { willReadFrequently: true }); x.drawImage(img, 0, 0, w, h);
+    const px = x.getImageData(0, 0, w, h), d = px.data, fg = new Uint8Array(w * h).fill(1), at = (i) => [d[i * 4], d[i * 4 + 1], d[i * 4 + 2], d[i * 4 + 3]];
+    const clear = [0, w - 1, (h - 1) * w, h * w - 1].some((i) => at(i)[3] < 40);
+    if (clear) for (let i = 0; i < w * h; i++) fg[i] = d[i * 4 + 3] > 40 ? 1 : 0; // it has its own transparency: use it
+    else { const diff = (i, j) => Math.abs(d[i * 4] - d[j * 4]) + Math.abs(d[i * 4 + 1] - d[j * 4 + 1]) + Math.abs(d[i * 4 + 2] - d[j * 4 + 2]), q = []; // grow the background in from the edges, step by step, so a gradient goes too
+      for (let i = 0; i < w; i++) q.push(i, i, (h - 1) * w + i, (h - 1) * w + i); for (let j = 0; j < h; j++) q.push(j * w, j * w, j * w + w - 1, j * w + w - 1);
+      while (q.length) { const from = q.pop(), i = q.pop(); if (!fg[i] || diff(i, from) > 24) continue; fg[i] = 0; const X = i % w;
+        if (X > 0) q.push(i - 1, i); if (X < w - 1) q.push(i + 1, i); if (i >= w) q.push(i - w, i); if (i < w * (h - 1)) q.push(i + w, i); } }
+    let top = h, bot = 0; const rows = []; for (let j = 0; j < h; j++) { let a = w, b = -1; for (let i = 0; i < w; i++) if (fg[j * w + i]) { a = Math.min(a, i); b = i; } rows.push([a, b]); if (b >= 0) { top = Math.min(top, j); bot = j; } }
+    if (bot <= top) { chibiCuts.set(src, { img, mask: null, w, h }); return; }
+    const H = bot - top; let neck = Math.round(top + H * .55), nw = w; // a chibi's head is its widest part up top; the neck is the narrowest row below it
+    for (let j = Math.round(top + H * .3); j < top + H * .7; j++) { const r = rows[j]; if (r[1] >= 0 && r[1] - r[0] < nw) { nw = r[1] - r[0]; neck = j; } }
+    const ey = Math.round(top + (neck - top) * .58), er = rows[ey][1] >= 0 ? rows[ey] : [0, w]; // eyes a little below the middle of the head
+    for (let i = 0; i < w * h; i++) d[i * 4 + 3] = fg[i] ? d[i * 4 + 3] : 0; x.putImageData(px, 0, 0); // c is now the figure alone, background gone
+    chibiCuts.set(src, { img: c, mask: c, w, h, top, bot, eye: { x: (er[0] + er[1]) / 2, y: ey, gap: Math.max(6, (er[1] - er[0]) * .2) } }); };
+  img.onerror = () => chibiCuts.set(src, { img: null, mask: null });
+  img.src = src; return null;
+}
+function drawPoured(g, x, y, R, spec, tint, k, t, alpha) {
+  const cut = chibiCut(spec.silhouette), face = { x, y, s: 1, ink: "#06222a" };
+  if (!cut?.mask || k < .01) return face;
+  const sc = (R * 2.7) / (cut.bot - cut.top), w = cut.w * sc, h = cut.h * sc, ox = x - (cut.eye.x * sc), oy = y + R - cut.bot * sc; // its feet where the sphere's bottom was, centred on its face
+  const level = oy + (cut.bot - (cut.bot - cut.top) * Math.min(1, k * 1.08)) * sc; // the liquid's surface, rising as it pours in
+  g.save(); g.globalAlpha = alpha * .28 * Math.min(1, k * 3); g.drawImage(cut.img, ox, oy, w, h); // the picture, faint
+  g.beginPath(); g.moveTo(ox, oy + h); for (let i = 0; i <= 24; i++) g.lineTo(ox + w * i / 24, level + Math.sin(i * .9 + t * 3) * R * .04 * (1 - k)); g.lineTo(ox + w, oy + h); g.closePath(); g.clip();
+  const L = chibiCuts.get(spec.silhouette + "#" + tint) || (() => { const c = document.createElement("canvas"); c.width = cut.w; c.height = cut.h; const q = c.getContext("2d");
+    const gr = q.createRadialGradient(cut.w * .4, cut.top + (cut.bot - cut.top) * .25, 2, cut.w / 2, (cut.top + cut.bot) / 2, cut.h * .7); gr.addColorStop(0, "#ffffff"); gr.addColorStop(.25, tint); gr.addColorStop(1, "#0d3a42");
+    q.fillStyle = gr; q.fillRect(0, 0, cut.w, cut.h); q.globalCompositeOperation = "destination-in"; q.drawImage(cut.mask, 0, 0); chibiCuts.set(spec.silhouette + "#" + tint, c); return c; })();
+  g.globalAlpha = alpha * .82; g.drawImage(L, ox, oy, w, h); // Dot's liquid, in the figure's shape
+  g.globalAlpha = alpha * .3; g.globalCompositeOperation = "overlay"; g.drawImage(cut.img, ox, oy, w, h); g.restore(); // the picture's lines show through it
+  const ex = ox + cut.eye.x * sc, ey = oy + cut.eye.y * sc, s = (cut.eye.gap * sc) / (R * .256), now = performance.now();
+  if (level > ey) { spec._eyesAt = 0; return { x: ex + Math.sin(t * 2.2) * cut.eye.gap * sc * .8, y: Math.max(level, ey), s: s * .8, ink: face.ink }; } // riding the surface, looking about
+  spec._eyesAt ||= now; const dt = (now - spec._eyesAt) / 1000, wob = Math.exp(-dt * 4) * Math.cos(dt * 16); // the surface passed the face: they spring into place
+  return { x: ex + wob * cut.eye.gap * sc * .5, y: ey - wob * R * .06, s: s * (1 + wob * .25), ink: face.ink };
+}
 function drawChibi(g, x, y, R, spec, tint, k, t, alpha = 1) {
+  if (spec.silhouette) return drawPoured(g, x, y, R, spec, tint, k, t, alpha);
   const f = new Set(spec.features || []), mech = spec.kind === "mech", holo = f.has("holo") && !mech, beast = spec.kind === "creature";
   const suit = f.has("suit") && !mech, c1 = suit ? "#1d212b" : spec.colours?.[0] || (mech ? "#9aa3ad" : tint), // a butler wears black, whatever else his article mentions
     c2 = f.has("grey_hair") && !mech ? "#c3c7cf" : spec.colours?.[1] && !suit ? spec.colours[1] : (mech ? "#5d6670" : holo ? chibiShade(c1, -.45) : beast ? chibiShade(c1, -.3) : "#3b2a20");

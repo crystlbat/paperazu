@@ -572,6 +572,14 @@ async function renderSpace(base = "/space") {
           c.note ? h("div", { class: "sp-note", style: `--i:${c.highlights.length}` }, c.note) : null,
           !c.highlights.length && !c.note ? h("p", { class: "sp-empty" }, "No highlights or notes on this paper yet.") : null),
         h("button", { type: "button", class: "sp-open", onclick: () => travel(c.paper) }, "Open the paper →")];
+    } else if (c.kind === "chibi") { // pictures to pour Dot into: pick one and it fills it
+      body = [h("header", {}, h("b", {}, "Pick a look"), h("span", {}, `${c.refs.length} pictures`)),
+        h("div", { class: "sp-chibis" }, ...c.refs.map((r, i) => h("button", { type: "button", class: "sp-chibi", style: `--i:${i}`, title: r.title,
+          onclick: async (e) => { const card = e.target.closest(".sp-card"); card?.classList.add("pouring");
+            const res = await fetch("/char/chibi/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: r.url, thumb: r.thumb }) }).catch(() => null);
+            if (res?.ok) { web?.reform(await res.json()); card?.remove(); mood("happy"); ripple("#6ff7ff", 380); }
+            else { card?.classList.remove("pouring"); e.target.closest("button")?.remove(); } } }, // that site refused: drop it, pick another
+          h("img", { src: r.thumb, alt: r.title || "", loading: "lazy", referrerpolicy: "no-referrer", onerror: (e) => e.target.closest("button").remove() }))))];
     } else if (c.kind === "creature") {
       const j = c.job, reads = (j.steps || []).map((x) => CR_READS[x.scope] || x.scope).join(", then ");
       body = [h("header", {}, h("b", {}, c.new ? "New creature" : "Creature"), h("span", {}, j.name)),

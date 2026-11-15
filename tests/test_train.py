@@ -1,0 +1,64 @@
+import json
+import threading
+
+from workbench import char, train
+
+
+def _run(monkeypatch, curiosities, cfg):
+    it = iter(curiosities)
+    level = {"c": next(it)}
+    monkeypatch.setattr(char, "disposition", lambda: {"curiosity": level["c"], "maturity": 0.1})
+    def step():
+        level["c"] = next(it, level["c"])
+        return "ok", "reflect: something"
+    monkeypatch.setattr(train, "_one_step", step)
+    con = train._con()
+    with con:
+        run_id = con.execute("INSERT INTO train_runs (persona, config, status) VALUES (?, ?, 'running')", (char.get_profile()["name"], json.dumps(cfg))).lastrowid
+    con.close()
+    train.RUN.clear(); train.RUN.update(id=run_id, pause=threading.Event(), stop=threading.Event())
+    train._loop(run_id, {**train.DEFAULTS, **cfg})
+    return run_id
+
+
+def test_a_run_learns_until_curiosity_reaches_the_target_and_snapshots_as_it_falls(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    char.add_memory("Resting: char Sagira", "0", source="sheet")
+    run_id = _run(monkeypatch, [5.0, 4.4, 3.8, 3.5, 2.9, 0.8], {"lo": 0.0, "hi": 1.0, "max_steps": 50})
+    r = train.status()["runs"][0]
+    assert r["status"] == "done" and "target range" in r["why"] and r["log"][-1]["curiosity"] == 0.8
+    snaps = train.snapshots(run_id)
+    assert [s["why"].split(" ")[0] for s in snaps] == ["start", "curiosity", "curiosity", "curiosity", "curiosity", "end:"]  # 4.4, 3.8, 2.9, 0.8 each fell by 0.5 or more; 3.5 did not
+    assert snaps[0]["prompt"].startswith("You are Sagira.") and "works" in snaps[0] and "fails" in snaps[0]
+
+
+def test_a_run_stops_at_its_step_budget_and_its_dataset_is_claude_fine_tuning_jsonl(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    char.add_memory("Resting: char Sagira", "0", source="sheet")
+    con = char.db.connect()
+    with con:
+        u = con.execute("INSERT INTO char_turns (role, text) VALUES ('user', 'Who is Osiris?')").lastrowid
+        d = con.execute("INSERT INTO char_turns (role, text) VALUES ('dot', 'My Warlock. Brilliant, stubborn, mine.')").lastrowid
+    con.close()
+    char.add_memory(f"Reviewed: {d}", "ok", source="sheet")
+    n = char.add_memory("Reflection: Who is Xivu Arath?", "The Hive god of war.", source="reflection")["id"]
+    char.add_memory(f"Checked: {n}", "keep", source="sheet")
+    run_id = _run(monkeypatch, [5.0] * 10, {"lo": 0.0, "hi": 1.0, "max_steps": 3})
+    assert train.status()["runs"][0]["why"] == "the step budget is spent"
+    lines = [json.loads(x) for x in train.dataset(run_id).splitlines()]
+    assert {l["messages"][0]["content"] for l in lines} == {"Who is Osiris?", "Who is Xivu Arath?"}
+    assert all(l["system"].startswith("You are Sagira.") and [m["role"] for m in l["messages"]] == ["user", "assistant"] for l in lines)
+
+
+def test_pause_holds_a_run_and_stop_ends_it(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    monkeypatch.setattr(train, "_one_step", lambda: ("skipped", "nothing"))
+    monkeypatch.setattr(train, "IDLE_STOP", 10_000)
+    s = train.start({"minutes": 5, "max_steps": 10_000, "lo": -2, "hi": -1})
+    assert s["active"]
+    train.control("pause")
+    assert train.status()["runs"][0]["status"] == "paused"
+    train.control("stop")
+    train.RUN["thread"].join(5)
+    r = train.status()["runs"][0]
+    assert not train.active() and r["status"] == "stopped" and r["why"] == "you stopped it"
