@@ -53,6 +53,17 @@ def test_controller_rejects_with_reasons():
     assert why["extract"] == why["sort"] == "over budget (3)"
 
 
+def test_a_skipped_command_stays_off_the_plan_until_something_new_comes_in():
+    char._engine("tune", "skipped", "no grown traits to meet")
+    char._engine("tune", "skipped", "no grown traits to meet")
+    assert "tune" in harness.stale()
+    harness.char.add_memory("Feedback: 1", "[]", source="sheet")  # its own bookkeeping is not news
+    plan, rejected = harness.validate([{"name": "tune", "arg": ""}])
+    assert not plan and rejected[0]["why"] == "skipped last time and nothing has changed for it"
+    char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")
+    assert "tune" not in harness.stale()
+
+
 def _models(monkeypatch, planner: str, judge: str = "1 KEEP useful\n2 DROP repeats itself") -> list[list[dict[str, Any]]]:
     calls: list[list[dict[str, Any]]] = []
 

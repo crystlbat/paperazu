@@ -460,6 +460,16 @@ def test_wonder_falls_back_and_never_leaves_more_than_three_open(monkeypatch):
     assert len(char.rest(True, 1)["questions"]) == 3
 
 
+def test_a_question_too_long_to_keep_is_not_saved_clipped(monkeypatch):
+    _rest_mocks(monkeypatch)
+    long_q = "What is the significance of the Curse of Osiris in the context of the ancient Egyptian Book of the Dead and Thoth"
+    monkeypatch.setattr(char, "_ask", lambda *a, **k: long_q)
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    char.add_memory("Reflection: fog", "fog", source="reflection")
+    char.rest(True, 1)
+    assert [c.split(" (from")[0] for _, c in _memories("question")] == ["What else matters about fog?"]  # the plain fallback, not the long one cut to "...Book of th?"
+
+
 def test_rest_route(monkeypatch):
     _rest_mocks(monkeypatch)
     r = client.post("/char/rest", json={"char": True, "n": 0})

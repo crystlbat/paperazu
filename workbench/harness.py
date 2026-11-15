@@ -48,6 +48,15 @@ def _unchecked() -> list[Any]:
     return rows
 
 
+def stale() -> set[str]:
+    """Commands whose last run was skipped with nothing new since: run again, they skip again. Any row but the harness's own bookkeeping counts as new."""
+    con = db.connect()
+    rows = con.execute("SELECT title, content, MAX(id) AS id FROM char_memories WHERE source = 'sheet' AND title LIKE 'Run: %' AND id > ? GROUP BY title", (char._start(),)).fetchall()
+    new = con.execute("SELECT COALESCE(MAX(id), 0) AS m FROM char_memories WHERE NOT (source = 'sheet' AND (title LIKE 'Run: %' OR title = 'Tick' OR title LIKE 'Cycle: %' OR title LIKE 'Feedback: %'))").fetchone()["m"]
+    con.close()
+    return {r["title"].removeprefix("Run: ") for r in rows if r["id"] > new and '"outcome": "skipped"' in r["content"]}
+
+
 def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
     """The planner's messages: goal (open plan lines), the command catalogue, a state summary and the last Verifier feedback."""
     who = char.get_profile()["name"]
@@ -61,10 +70,10 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
              "unchecked notes: " + (", ".join(f"{r['id']} ({r['title'].removeprefix('Reflection: ')[:50]})" for r in _unchecked()[:5]) or "none"),
              "names in its graph: " + (", ".join(names) or "none"),
              "needs (0 to 1; a low one says what to do first): " + ", ".join(f"{k} {v:.2f}" for k, v in char.needs().items())]
-    if fb:  # in plain words, not command syntax: a small planner copied "cmd: drop (why)" lines back as its next commands
+    if idle := sorted(stale()):  # in plain words, not command syntax: a small planner copied "cmd: drop (why)" lines back as its next commands
+        state.append("nothing to do for these until something new comes in (do not pick them): " + ", ".join(idle))
+    if fb:
         vs = json.loads(fb[0]["content"])
-        if idle := sorted({v["cmd"].split()[0] for v in vs if not v["keep"]}):
-            state.append("did nothing last cycle (do not pick again unless the state changed): " + ", ".join(idle))
         if worked := sorted({v["cmd"].split()[0] for v in vs if v["keep"]}):
             state.append("worked last cycle: " + ", ".join(worked))
     useful = [f'reflect "{qs[0]}"' for qs in [char._open_questions(char._start())] if qs] + \
@@ -134,8 +143,7 @@ def validate(cmds: list[dict[str, str]], budget: int = BUDGET, force: bool = Fal
     names = {n["name"].lower(): n["name"] for n in char.graph()["nodes"]}
     plan: list[dict[str, Any]] = []
     rejected: list[dict[str, str]] = []
-    fb = _rows("Feedback: %")
-    idle = {v["cmd"].split()[0] for v in json.loads(fb[0]["content"]) if not v["keep"]} if fb else set()
+    idle = stale()
     ready = {"reflect"} if char._open_questions(char._start()) else set()
     ready |= {"check"} if _unchecked() else set()
     cmds = sorted(cmds, key=lambda c: c["name"] not in ready)  # a small planner recites the catalogue in order; work that can happen now goes first
@@ -147,7 +155,7 @@ def validate(cmds: list[dict[str, str]], budget: int = BUDGET, force: bool = Fal
         elif re.search(r"did not do anything|\bdrop \(|\bkeep \(", arg):
             why = "copied last cycle's feedback, not a command"
         elif c["name"] in idle and c["name"] not in ready:
-            why = "did nothing last cycle and nothing has changed for it"
+            why = "skipped last time and nothing has changed for it"
         elif blocked.get(c["name"]):
             why = blocked[c["name"]]
         elif spec["args"] == "note id" and arg:

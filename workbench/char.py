@@ -162,23 +162,27 @@ MAKE_VARS_PATTERN = re.compile(
 )
 
 
+_SCHEMA_DONE: set[str] = set()  # DB files whose schema and migrations ran in this process: a training step calls init_db hundreds of times
+
+
 def init_db() -> None:
     """Ensure char tables and default variables exist."""
     con = db.connect()
     with con:
-        con.executescript(CHAR_SCHEMA)
-        # Migration for existing char_vars table
-        cols = {r["name"] for r in con.execute("PRAGMA table_info(char_vars)")}
-        for col, ctype in (
-            ("min_val", "REAL"),
-            ("max_val", "REAL"),
-            ("decay", "REAL DEFAULT 0"),
-            ("act", "TEXT NOT NULL DEFAULT ''"),
-            ("act_arg", "TEXT NOT NULL DEFAULT ''"),
-            ("act_on", "TEXT NOT NULL DEFAULT ''"),
-        ):
-            if col not in cols:
-                con.execute(f"ALTER TABLE char_vars ADD COLUMN {col} {ctype}")
+        if str(db.DB_PATH) not in _SCHEMA_DONE:
+            con.executescript(CHAR_SCHEMA)
+            # Migration for existing char_vars table
+            cols = {r["name"] for r in con.execute("PRAGMA table_info(char_vars)")}
+            for col, ctype in (
+                ("min_val", "REAL"),
+                ("max_val", "REAL"),
+                ("decay", "REAL DEFAULT 0"),
+                ("act", "TEXT NOT NULL DEFAULT ''"),
+                ("act_arg", "TEXT NOT NULL DEFAULT ''"),
+                ("act_on", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if col not in cols:
+                    con.execute(f"ALTER TABLE char_vars ADD COLUMN {col} {ctype}")
 
         # Ensure profile exists
         row = con.execute("SELECT id FROM char_profile WHERE id = 1").fetchone()
@@ -206,6 +210,7 @@ def init_db() -> None:
                     ),
                 )
     con.close()
+    _SCHEMA_DONE.add(str(db.DB_PATH))
 
 
 def get_profile() -> dict[str, Any]:
@@ -2045,8 +2050,8 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             if (k := len(_open_questions(since))) >= 3:
                 return no(f"{k} questions already open")
             had = {r["content"].split(" (from")[0].lower() for r in titles("source = 'question' AND id > ?", (since,))}
-            q = _clean(_ask("Write one short question that asks about this topic. Only the question." + _fix("goal"), pl["content"], 30), 100).rstrip("?").strip()
-            if not re.match(r"(?i)(?:who|what|where|when|why|how|which)\b.{6}", q) or re.match(r"(?i)\w+,\s*\w+,", q) or q.lower() + "?" in had:  # clipped, parroted or asked before
+            q = _clean(_ask("Write one short question that asks about this topic. Only the question." + _fix("goal"), pl["content"], 30), 101).rstrip("?").strip()
+            if len(q) > 99 or not re.match(r"(?i)(?:who|what|where|when|why|how|which)\b.{6}", q) or re.match(r"(?i)\w+,\s*\w+,", q) or q.lower() + "?" in had:  # clipped, parroted or asked before
                 _fail("goal")
                 q = f"What matters about {pl['content']}"
             if q.lower() + "?" in had:  # nothing new to ask of it: the line is spent
@@ -2136,8 +2141,8 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             if any(q["content"].endswith(f"(from {last['id']})") for q in titles("source = 'question' AND id > ?", (since,))):
                 return no("already asked about the newest note")
             topic = last["title"].removeprefix("Reflection: ")
-            q = _clean(_ask("Read the note. Ask one short follow-up question about something the note does not say. Start with Who, What, Where, When, Why or How. Only the question." + _fix("wonder"), last["content"], 30), 100).rstrip("?").strip()
-            if not re.match(r"(?i)(?:who|what|where|when|why|how|which)\b.{6}", q) or re.match(r"(?i)\w+,\s*\w+,", q):  # "Who, What, Where…" is the prompt parroted back  # a clipped or empty question: ask the plain one, but never about a question
+            q = _clean(_ask("Read the note. Ask one short follow-up question about something the note does not say. Start with Who, What, Where, When, Why or How. Only the question." + _fix("wonder"), last["content"], 30), 101).rstrip("?").strip()
+            if len(q) > 99 or not re.match(r"(?i)(?:who|what|where|when|why|how|which)\b.{6}", q) or re.match(r"(?i)\w+,\s*\w+,", q):  # "Who, What, Where…" is the prompt parroted back  # a clipped or empty question: ask the plain one, but never about a question
                 _fail("wonder")
                 if topic.endswith("?"):
                     return no("the model's question was unusable")
