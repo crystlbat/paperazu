@@ -1104,7 +1104,7 @@ def char_want(want_id: int, body: dict[str, Any] = Body(default={})) -> dict[str
 @app.get("/char/report")
 def char_report() -> dict[str, Any]:
     return {**char.report(*_model()), "harness_loop": harness.totals(), "cycles": harness.cycles(30), "mode": char.mode(), "tracker": char.tracker(),
-            "race": verse.live_race(), "train": train.status(), "letter": char.letter()}
+            "race": verse.live_race(), "train": train.status(), "letter": char.letter(), "now": dict(char.NOW)}
 
 
 @app.post("/char/cycle")

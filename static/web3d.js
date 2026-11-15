@@ -387,6 +387,29 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
         h("label", { class: "sw-skip" }, h("input", { type: "checkbox", checked: !!D[`skip:${x.id}`], onchange: (e) => { D[`skip:${x.id}`] = e.target.checked; report(true); } }), "Let it go")))),
       h("div", { class: "sw-wbtns" }, h("button", { type: "button", disabled: !!ctl.busy, onclick: send }, "Submit")));
   };
+  const DOING = { planner: "Planning what to learn next", plan: "Writing a plan", reflect: "Looking it up, writing a note", extract: "Pulling names out of its notes", ideas: "Finding ideas in its notes", ask: "Asking itself questions", wonder: "Wondering", goal: "Setting goals", fill: "Filling in its sheet", want: "Working out what it needs from you", journal: "Writing in its journal", check: "Checking a note", review: "Rereading a reply", tune: "Tuning a prompt", bake: "Consolidating", fold: "Folding notes together", sort: "Sorting", practise: "Practising its voice" };
+  const nowCard = (d, who) => { // after Pino's "right now": one sentence of what it is doing this second, then how it feels, what it needs, what is on its mind
+    const run = d.train?.runs?.[0], live = !!d.train?.active, N = d.now || {}, L = d.life || {}, D = d.disposition || {}, last = run?.log?.at(-1), t0 = (d.trace || [])[0];
+    const doing = N.kind ? DOING[N.kind] || N.kind : live ? "Between steps" : d.mode === "sleeping" ? "Asleep" : L.tired ? "Resting until its energy comes back" : "Waiting for you";
+    const why = live && last?.outcome ? `Step ${n0(last.step)}: ${last.outcome}` : t0 ? `Last, it ${VERB[t0.kind] || t0.kind} ${t0.detail}` : "";
+    const cfg = run?.config, cmax = Math.max(12, (cfg?.hi || 0) * 2), cur = n0(D.curiosity), tr = L.trust?.value ?? 0;
+    const meter = (lo, hi, v, at, band) => h("div", { class: "pn-meter" }, h("div", { class: "pn-line" }, band ? h("b", { style: `left:${band[0] * 100}%;width:${(band[1] - band[0]) * 100}%` }) : "", h("i", { style: `left:${Math.max(0, Math.min(1, at)) * 100}%` })),
+      h("div", { class: "pn-ends" }, h("span", {}, lo), h("span", { class: "pn-num" }, v), h("span", {}, hi)));
+    const cells = (v) => h("span", { class: "pn-cells" }, ...[...Array(12)].map((_, i) => h("i", i < Math.round(v * 12) ? { "data-on": v < .3 ? "hot" : "on" } : {})));
+    const mind = d.letter?.items || [];
+    return h("section", { class: "pn", "data-live": String(live || !!N.kind) },
+      h("div", { class: "pn-row" }, h("span", { class: "pn-label" }, `${who}, right now`), h("span", { class: "pn-chip" }, h("i"), live ? `run ${run.id} · ${mmss(run.clock ?? last?.t)}` : d.mode || "idle")),
+      h("p", { class: "pn-doing" }, doing), why ? h("p", { class: "pn-why" }, esc(why).slice(0, 220)) : "",
+      h("div", { class: "pn-grid" },
+        h("div", {}, h("span", { class: "pn-label" }, "how it feels"),
+          meter("settled", "restless", r2(cur), cur / cmax, cfg ? [cfg.lo / cmax, Math.min(1, cfg.hi / cmax)] : null), h("small", { class: "pn-cap" }, "curiosity" + (cfg ? ", target band marked" : "")),
+          meter("wary", "open", (tr >= .5 ? "+" : "") + r2(tr * 2 - 1), tr), h("small", { class: "pn-cap" }, "trust in you")),
+        h("div", {}, h("span", { class: "pn-label" }, "what it needs"), h("ul", { class: "pn-needs" }, ...Object.entries(L.needs || {}).map(([k, v]) => h("li", { title: L.about?.[k] || "" }, h("span", {}, k), cells(v))))),
+        h("div", {}, h("span", { class: "pn-label" }, "on its mind"),
+          h("p", { class: "pn-big" }, h("strong", {}, String(mind.length)), h("span", { class: "pn-label" }, mind.length === 1 ? "thing open" : "things open")),
+          mind.length ? h("p", { class: "pn-why" }, `Loudest: a ${mind[0].kind}. “${esc(mind[0].ask).slice(0, 140)}”`) : h("p", { class: "pn-why" }, "Nothing open. It asks you here when it needs something."),
+          mind.length ? h("button", { type: "button", class: "pn-link", onclick: () => go("letter") }, "answer in the letter →") : "")));
+  };
   const LANE = [[2, "S2 Plan"], [1, "S1 Goals"], [0, "S0 Execute"], [3, "V Verify"]];
   const niceStep = (T) => [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200].find((x) => T / x <= 8) || 7200;
   const tLabel = (t, T) => T < 120 ? `${Math.round(t)}s` : mmss(t);
@@ -502,8 +525,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
               h("dt", {}, "Talked with you"), h("dd", {}, `${p.chats} time${p.chats === 1 ? "" : "s"}`))))); },
       letter: () => letterBox(d) || h("p", { class: "sw-dmut" }, "Nothing to answer. After a run, what it needs from you shows up here."),
       story: () => { const done = trace.filter((t) => t.outcome === "ok").slice(0, 6), old = n0(D.curiosity) - n0(F.term);
-        const nL = d.letter?.items?.length || 0;
-        return h("div", { class: "sw-story" }, nL ? h("button", { type: "button", class: "sw-lnote", onclick: () => go("letter") }, h("i"), `${who} wrote you a letter: ${nL} thing${nL === 1 ? "" : "s"} it needs from you`, h("span", {}, "Read it →")) : "", f1(d, loop),
+        return h("div", { class: "sw-story" }, nowCard(d, who), f1(d, loop),
           h("div", { class: "sw-story2" },
             h("section", {}, h("h4", {}, "Just now"), done.length ? h("ol", { class: "sw-feed" }, ...done.map((t) => h("li", {}, h("button", { type: "button", onclick: () => { rSel = { step: tkey(t), note: t.ref }; go("activity"); } },
               h("time", {}, local(t.at)), h("p", {}, h("b", { style: `color:${SC[t.system] || "#d4d4d8"}` }, `${who} ${VERB[t.kind] || t.kind}`), ` ${esc(t.detail.split(":")[0])}`)))))
