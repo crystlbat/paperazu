@@ -783,6 +783,7 @@ def test_guess_then_correct_scores_surprise(monkeypatch):
     assert char._surprise("his loyal butler", "Alfred is the loyal butler of Bruce Wayne") == 0.0
     assert char._surprise("a rival detective", "Alfred is the loyal butler of Bruce Wayne") == 1.0
     char.add_memory("Question: Who is Alfred?", "Who is Alfred? (from 0)", source="question")
+    monkeypatch.setattr(char, "_intake", lambda *a: True)  # an admitted find: the guess is scored against it
     seen, inner = [], jobs.complete
     monkeypatch.setattr(jobs, "complete", lambda st, m, **k: seen.append(m) or inner(st, m, **k))
     r = char.reflect(True)  # the mock guesses and finds the same words: no surprise
@@ -1582,6 +1583,7 @@ def test_it_speculates_from_a_summary_checks_the_guess_and_keeps_it_only_when_it
     char.update_profile("Sagira", "You are Sagira, in a world of Osiris, Thoth and the Infinite Forest.", [], "")
     char.add_memory("Resting: char Sagira", "0", source="sheet")
     monkeypatch.setattr(char, "on_world", lambda *a, **k: True)
+    monkeypatch.setattr(char, "_intake", lambda *a: True)  # the find is on its world and supported: only then is the guess held against it
     char.add_memory("Summary: Osiris", "Osiris is a Warlock. He studies the Vex. He found the Infinite Forest.", source="summary")
     r = char.rest(True, only="speculate")
     q = "Where does Osiris hide the Book of Thoth?"
@@ -1639,3 +1641,15 @@ def test_compression_falls_when_unfolded_ideas_pile_up_and_that_wakes_curiosity(
     for idea in ("rain", "mist", "smog"):
         char.add_memory(f"Idea: {idea}", "9", source="entity")
     assert char.compression()["S"] < one["S"]  # three new ideas, each seen once: less compressed
+
+
+def test_a_find_the_gate_turns_away_does_not_score_the_guess(monkeypatch):
+    _rest_mocks(monkeypatch)
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    char.add_memory("Question: Who is Alfred?", "Who is Alfred? (from 0)", source="question")
+    monkeypatch.setattr(char, "_intake", lambda *a: False)  # the search came back off-world
+    r = char.reflect(True)
+    assert "surprise" not in r and r["unscored"] == "Remember the fog."
+    con = db.connect()
+    assert con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE title LIKE 'Guess: %'").fetchone()["c"] == 0  # J's surprise is not dragged up by a miss of the search
+    con.close()

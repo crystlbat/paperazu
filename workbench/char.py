@@ -895,7 +895,9 @@ def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
     out = {"done": False, "topic": topic, "note": note, "left": len(todo) - 1}
     if on_char:
         out["admitted"] = _intake(saved["id"], who, topic, note, lines)
-    if guess:
+    if guess and on_char and out.get("admitted") is False:  # the find was turned away (off-world or unsupported): there is nothing to hold the guess against, so it is not scored
+        out["unscored"] = guess
+    elif guess:
         sur = _surprise(guess, note)
         add_memory(f"Guess: {saved['id']}", f"{sur:.2f}|{guess}", source="sheet")
         out |= {"guess": guess, "surprise": sur}
