@@ -17,3 +17,23 @@ def _fresh_model_memory() -> None:
     """The window a server reported and the model picked are remembered per process; each test starts clean."""
     llm._windows.clear()
     llm._picked.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network(monkeypatch) -> None:
+    """No test reaches a real server or the internet: a running Unsloth or a live web search made tests slow and flaky.
+    A test that needs a server replaces urlopen (or the client) itself."""
+    import urllib.error
+    import urllib.request
+
+    def blocked(*a, **k):
+        raise urllib.error.URLError("no network in tests")
+    monkeypatch.setattr(urllib.request, "urlopen", blocked)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_engine_memory() -> None:
+    from workbench import graph
+    graph._working.clear()
+    graph._broken.clear()
+    llm._dory["proc"] = None

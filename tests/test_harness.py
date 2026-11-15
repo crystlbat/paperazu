@@ -306,3 +306,11 @@ def test_without_a_dory_command_dory_is_just_a_name_on_unsloth(monkeypatch):
     settings.update({"dory_cmd": ""})
     s = settings.get_all()
     assert not llm.is_dory(s, "dory") and llm.url_for(s, "dory") == s.base_url
+
+
+def test_with_steps_still_to_run_it_is_never_spent_and_bookkeeping_is_no_wall(monkeypatch):
+    for _ in range(harness.STUCK_AFTER):
+        char.add_memory(f"Feedback: {_}", json.dumps([{"cmd": "reflect", "keep": False, "why": "x"}]), source="sheet")
+    char._engine("cycle", "skipped", "cycle 9: 1 proposed, 1 rejected, 0 run, 0 kept")
+    me = harness.notice(10, [{"name": "reflect", "arg": "", "role": "chat"}], [])
+    assert me["stuck"] and not me["spent"] and "cycle 9" not in me["on"]

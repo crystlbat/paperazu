@@ -971,7 +971,8 @@ BAKE_EVERY = 4  # answers between two consolidations
 def frontier() -> dict[str, Any]:
     """How much of the mesh still points nowhere. Per layer n (plan, question, note) paired with the next layer: open(n) = nodes with no edge down to
     a node of layer n+1, c(n) = open(n) / (open(n) + count(n+1)); a pair with both 0 is skipped. F = mean of the kept c(n), 0 if none.
-    D = index of the deepest non-empty layer (plan 1 ... name 4, 0 if empty). term = D * (1 - F)."""
+    D = index of the deepest non-empty layer (plan 1 ... name 4, 0 if empty). term = D * F: the open work pulls, so answering it brings curiosity down.
+    (It was D * (1 - F) before: that rose as questions were answered, so learning kept curiosity up and it could never settle.)"""
     m = mesh()
     layer = {n["id"]: n["layer"] for n in m["nodes"]}
     count = {k: sum(v == k for v in layer.values()) for k in LAYERS}
@@ -984,7 +985,7 @@ def frontier() -> dict[str, Any]:
             cs[n] = o / (o + count[nxt])
     F = sum(cs.values()) / len(cs) if cs else 0.0
     D = max((i + 1 for i, k in enumerate(LAYERS) if count[k]), default=0)
-    return {"F": round(F, 4), "D": D, "layers": {k: round(c, 4) for k, c in cs.items()}, "term": round(D * (1 - F), 4)}
+    return {"F": round(F, 4), "D": D, "layers": {k: round(c, 4) for k, c in cs.items()}, "term": round(D * F, 4)}
 
 
 def dial() -> float:
@@ -1069,12 +1070,15 @@ def _direction() -> str:
     return r["content"] if r else ""
 
 
+MOMENTUM_EASE = 0.9  # each step that did something keeps this share of momentum
+
+
 def _ease_momentum() -> None:
     """Learning matures it: every step that did something takes a tenth off momentum, so the push you gave is optimised away.
     Asleep, it is learning in the direction you gave; when the push is spent it wakes and tells you."""
     if (m := _var("momentum", 0)) <= 0.05:
         return
-    m = _set_var("momentum", round(m * 0.9, 2))
+    m = _set_var("momentum", round(m * MOMENTUM_EASE, 2))
     if _var("asleep", 0) == 1 and m < WAKE_BELOW:
         _set_var("momentum", 0)
         _set_var("asleep", 0)
@@ -1090,12 +1094,14 @@ def disposition() -> dict[str, Any]:
     """The two variables every character starts with, read from its graph and never set by hand (the Riddiary formula, as kept in ghost's memory harness):
         tau       = unmet / x     per name: the share of its questions (its lenses, the quota x) still unanswered; here the mean over names
         maturity  = 1 - exp(-nAE / nE)   answers per name, from counts frozen at the last consolidation ("baked"), not the live graph
-        curiosity = tau * dnE * exp(-nAE / nE) + D * (1 - F)   dnE: names met since that consolidation; D, F: see frontier()
-    Curiosity is the brake: at 0 the character stops reaching outward. With the frontier term the brake only holds when D == 0 or F == 1. New names (from your chat, or from notes it has not read for names) raise it again."""
+        curiosity = dial * (tau * dnE * exp(-nAE / nE) + D * F) + momentum   dnE: names met since that consolidation; D, F: see frontier()
+    Curiosity is the brake: at 0 the character stops reaching outward. It reaches 0 when no new names wait and nothing in its mesh is left open.
+    New names, and new open questions (its own speculations included), raise it again."""
     start = _start()
     con = db.connect()
     done = {r["title"] for r in con.execute("SELECT title FROM char_memories WHERE source IN ('reflection', 'sheet') AND title LIKE 'Reflection: %' AND id > ?", (start,))}
     bake = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Baked' AND id > ? ORDER BY id DESC LIMIT 1", (start,)).fetchone()
+    sur = [float(r["content"].split("|")[0]) for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Guess: %' AND id > ? ORDER BY id DESC LIMIT 5", (start,)) if r["content"].split("|")[0]]
     con.close()
     who, names = get_profile()["name"], [n for n in graph()["nodes"] if n["kind"] == "concrete"]
     met = [sum((i == 0 and n["known"]) or f"Reflection: {lens.format(name=n['name'], who=who)}"[:80] in done for i, lens in enumerate(LENSES)) for n in names]
@@ -1107,14 +1113,32 @@ def disposition() -> dict[str, Any]:
     fr = frontier()
     k = dial()
     mo = _var("momentum", 0)
-    return {"curiosity": round(k * (tau * dnE * damper + fr["term"]) + mo, 2), "dial": k, "momentum": mo, "frontier": fr, "maturity": round(1 - damper, 2), "tau": round(tau, 2), "dnE": dnE, "nE": nE, "nAE": nAE, "baked": baked}
+    sp = speculations()
+    know, miss = 1 - math.exp(-nAE / nE) if nE else 0.0, sum(sur) / len(sur) if sur else 0.5  # no guess checked yet: as likely right as wrong
+    return {"curiosity": round(k * (tau * dnE * damper + fr["term"]) + mo, 2), "dial": k, "momentum": mo, "frontier": fr, "maturity": round(1 - damper, 2), "tau": round(tau, 2), "dnE": dnE, "nE": nE, "nAE": nAE, "baked": baked,
+            "terms": {"names": round(tau * dnE * damper, 3), "damper": round(damper, 3), "frontier": fr["term"]},  # the formula's parts, so the page can show which one holds curiosity up
+            "optim": {"ease": MOMENTUM_EASE, "bake_every": BAKE_EVERY, "since_bake": max(0, nAE - baked["nAE"]), "keep": SPECULATION_KEEP, "target": SURPRISE_TARGET,
+                      "speculated": len(sp), "held": sum(bool(x.get("held")) for x in sp), "last_surprise": sp[0]["surprise"] if sp else None},
+            "score": {"J": round(know * (1 - miss), 3), "know": round(know, 3), "surprise": round(miss, 3)}}  # the one number to push up: how much it has answered, times how often its guesses come out right
 
 
 def _tick(what: str) -> None:
     """One row per thing it does, so the page can draw how each variable moved and how many cycles it took."""
     d = disposition()
-    add_memory("Tick", json.dumps({"at": time.strftime("%H:%M:%S"), "what": what, "curiosity": d["curiosity"], "maturity": d["maturity"], "frontier": d["frontier"]["term"], "names": d["nE"], "answers": d["nAE"],
+    add_memory("Tick", json.dumps({"at": time.strftime("%H:%M:%S"), "what": what, "curiosity": d["curiosity"], "maturity": d["maturity"], "frontier": d["frontier"]["term"], "score": d["score"]["J"], "names": d["nE"], "answers": d["nAE"],
                                    **{f"var:{v['name']}": v["value"] for v in mine()}}), source="sheet")
+
+
+def gains(last: int = 200) -> dict[str, dict[str, float]]:
+    """What each kind of step did to the score J, from the ticks: the mean change it made and how often it ran. The planner reads this to pick what pays."""
+    con = db.connect()
+    ticks = [json.loads(r["content"]) for r in con.execute("SELECT content FROM (SELECT id, content FROM char_memories WHERE source = 'sheet' AND title = 'Tick' AND id > ? ORDER BY id DESC LIMIT ?) ORDER BY id", (_start(), last))]
+    con.close()
+    by: dict[str, list[float]] = {}
+    for a, b in zip(ticks, ticks[1:]):
+        if "score" in a and "score" in b:  # ticks written before the score existed carry none
+            by.setdefault(b["what"], []).append(b["score"] - a["score"])
+    return {k: {"gain": round(sum(v) / len(v), 4), "runs": len(v)} for k, v in sorted(by.items(), key=lambda kv: -sum(kv[1]) / len(kv[1]))}
 
 
 def monitor() -> dict[str, Any]:
@@ -1126,9 +1150,9 @@ def monitor() -> dict[str, Any]:
     cycles = con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE source = 'sheet' AND title LIKE 'Answered: %' AND id > ?", (start,)).fetchone()["c"]
     steps = con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE source = 'sheet' AND title = 'Tick' AND id > ?", (start,)).fetchone()["c"]
     con.close()
-    keys = ["curiosity", "maturity", "frontier", *dict.fromkeys(k for t in ticks for k in t if k.startswith("var:"))]
+    keys = ["curiosity", "maturity", "frontier", "score", *dict.fromkeys(k for t in ticks for k in t if k.startswith("var:"))]
     rv, d = review(), disposition()
-    return {"disposition": d, "steps": steps, "series": [{"name": k.removeprefix("var:"), "yours": k.startswith("var:"), "points": [t[k] for t in ticks if k in t]} for k in keys],
+    return {"disposition": d, "gains": gains(), "steps": steps, "series": [{"name": k.removeprefix("var:"), "yours": k.startswith("var:"), "points": [t[k] for t in ticks if k in t]} for k in keys],
             "last": json.loads(last["content"]) if last else None,
             "loop": {"reviewed": rv["reviewed"], "mistakes": rv["mistakes"], "cycles": cycles, "instructions": len(rv["instructions"]), "fixes": sum(c["state"] == "on" for c in corrections())}}
 
@@ -1783,7 +1807,7 @@ def report(up: bool, label: str) -> dict[str, Any]:
     return {"notes": notes, "who": get_profile()["name"], "you": you(), "life": life(), "since": mark["created_at"] if mark else "", "model": {"up": up, "label": label},
             "totals": {"steps": len(runs), "ok": outcomes.count("ok"), "skipped": outcomes.count("skipped"), "failed": outcomes.count("failed"), "cycles": cycles,
                        "replies": sum(t["role"] == "dot" and not t["text"].startswith(NOT_A_REPLY) for t in _chat_since())},
-            "corrections": corr, "learned": learned, "disposition": disposition(), "series": monitor()["series"], "harness": harness, "trace": runs[:300]}
+            "corrections": corr, "learned": learned, "disposition": disposition(), "series": monitor()["series"], "gains": gains(), "harness": harness, "trace": runs[:300]}
 
 
 def _notes(start: int) -> list[dict[str, Any]]:

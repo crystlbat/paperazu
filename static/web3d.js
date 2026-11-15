@@ -326,6 +326,22 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const last = e.filter((x) => x.last).sort((a, b) => (b.last.at > a.last.at ? 1 : -1))[0]?.last, blocked = e.length && e.every((x) => x.blocked) ? e[0].blocked : "";
     const state = s.on === false ? ["off", "switched off"] : blocked ? ["blocked", blocked] : failed && last?.outcome === "failed" ? ["failed", last.detail] : ok && last?.outcome === "ok" ? ["working", last.detail] : last ? ["waiting", last.detail] : ["idle", "has not run yet"];
     return { ok, runs, state }; };
+  let fPrev = {}; // the values the last poll showed, so each term says which way it moved
+  const formulaBox = (D, G = {}) => { const T = D.terms || {}, F = D.frontier || {}, O = D.optim || {}, S = D.score || {};
+    const v = (k, x, tip) => { const p = fPrev[k], dir = typeof p?.x === "number" && typeof x === "number" && r2(p.x) !== r2(x) ? (x > p.x ? "↑" : "↓") : p?.dir || ""; fPrev[k] = { x, dir }; // the arrow stays until it moves again
+      return h("span", { class: "sw-fv", title: tip, "data-dir": dir === "↑" ? "up" : dir === "↓" ? "down" : "" }, h("b", {}, x == null ? "–" : r2(x)), h("small", {}, `${k}${dir}`)); };
+    const row = (k, x, tip, note) => h("li", {}, v(k, x, tip), h("p", {}, note));
+    return h("div", { class: "sw-formula" },
+      h("p", { class: "sw-fx sw-goal" }, v("J", S.J, "the score to push up, 0 to 1"), " = ", v("know", S.know, "1 − e^(−answers/names), live"), " × (1 − ", v("surprise", S.surprise, "mean surprise of its last 5 guesses"), ")"),
+      Object.keys(G).length ? h("p", { class: "sw-dmut" }, "what each step does to J: ", ...Object.entries(G).slice(0, 8).map(([k, g]) => h("span", { class: "sw-gain", "data-dir": g.gain > 0 ? "up" : g.gain < 0 ? "down" : "" }, `${k} ${g.gain > 0 ? "+" : ""}${g.gain.toFixed(3)} ×${g.runs}`))) : "",
+      h("p", { class: "sw-fx" }, v("curiosity", D.curiosity, "the brake: at 0 it stops reaching out"), " = ", v("dial", D.dial, "your hand on it"), " × ( ",
+        v("tau", D.tau, "share of each name's questions still unanswered"), " × ", v("dnE", D.dnE, "names met since the last consolidation"), " × ", v("damper", T.damper, "e^(−nAE/nE) from the last consolidation: 1 − maturity"),
+        " + ", v("D", F.D, "how many layers deep the mesh goes (max 4)"), " × ", v("F", F.F, "share of the mesh still open"), " ) + ", v("momentum", D.momentum, "the push your ups gave")),
+      h("p", { class: "sw-dmut" }, `names term ${r2(T.names)} · frontier term ${r2(T.frontier)} · maturity ${r2(D.maturity)}`),
+      h("ul", { class: "sw-optim" },
+        row("momentum", D.momentum, "eased each step that did something", `× ${O.ease ?? "–"} per step that did something, to 0 under 0.05`),
+        row("since bake", O.since_bake, "answers since the last consolidation", `consolidates every ${O.bake_every ?? "–"} answers: then dnE resets and the damper tightens`),
+        row("surprise", O.last_surprise, "last speculation's surprise", `speculations under ${O.keep ?? "–"} are kept (${n0(O.held)} of ${n0(O.speculated)}), aiming for ${O.target ?? "–"}`))); };
   const lineChart = (series) => { // curiosity, maturity and the frontier term on one chart, so you can see them move against each other
     const pick = series.filter((x) => ["curiosity", "maturity", "frontier"].includes(x.name) && (x.points || []).length > 1), all = pick.flatMap((x) => x.points), hi = Math.max(1, ...all), N = Math.max(...pick.map((x) => x.points.length)) - 1 || 1;
     const C = { curiosity: "#ffb347", maturity: "#7dffa8", frontier: "#6ff7ff" }, svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -568,9 +584,9 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const tc = live ? cfg : (ctl.tcfg ||= { minutes: 20, lo: 0, hi: 1, max_steps: 60 }); // idle: the band is the next run's target, and you drag it
     const pts = log.length > 1 || live ? [...log] : (() => { const S = Object.fromEntries((d.series || []).map((x) => [x.name, x.points || []])), n = Math.max(0, ...Object.values(S).map((p) => p.length)); return [...Array(n)].map((_, i) => Object.fromEntries([["t", i], ...Object.entries(S).map(([k, p]) => [k, p[i] ?? 0])])); })();
     if (live && log.length) { const D = d.disposition || {}, L = d.life || {}; // a live "now" point from the report itself, so a line moves inside a long cycle, not only when a step lands
-      pts.push({ t: run.clock ?? 0, step: last?.step, curiosity: D.curiosity, maturity: D.maturity, ...(typeof D.frontier?.term === "number" ? { frontier: D.frontier.term } : {}), ...(L.needs || {}), ...(typeof L.trust?.value === "number" ? { trust: L.trust.value } : {}), now: true }); }
+      pts.push({ t: run.clock ?? 0, step: last?.step, curiosity: D.curiosity, maturity: D.maturity, ...(typeof D.frontier?.term === "number" ? { frontier: D.frontier.term } : {}), ...(D.terms ? { names: D.terms.names, damper: D.terms.damper } : {}), ...(typeof D.frontier?.F === "number" ? { F: D.frontier.F, D: D.frontier.D } : {}), ...(typeof D.momentum === "number" ? { momentum: D.momentum } : {}), ...(typeof D.score?.J === "number" ? { score: D.score.J } : {}), ...(L.needs || {}), ...(typeof L.trust?.value === "number" ? { trust: L.trust.value } : {}), now: true }); }
     const clock = run?.clock ?? last?.t ?? 0, T = Math.max(10, clock, pts.at(-1)?.t || 0), byClock = !!log.length || live; // live: the clock and the lanes from the first second, before the first step lands
-    const C = { curiosity: tint, maturity: "#ffb347", frontier: "#c79bff", ...NEED_C, trust: "#e4e4e7" };
+    const C = { curiosity: tint, maturity: "#ffb347", frontier: "#c79bff", score: "#ffffff", names: "#ff7ab6", damper: "#9be564", F: "#5ec8ff", D: "#8a8aff", momentum: "#ffe600", ...NEED_C, trust: "#e4e4e7" };
     const has = pts.length ? Object.keys(C).filter((k) => pts.some((p) => typeof p[k] === "number")) : [], moved = (k) => new Set(pts.map((p) => r2(+p[k] || 0))).size > 1;
     const keys = has.filter((k) => moved(k) || k === "curiosity"), still = has.filter((k) => !keys.includes(k)); // a variable that never moved is a fact, not a line
     const X = (t) => Math.min(800, (t / T) * 800), TOP = 14, BASE = 190; // x 0–800 is the clock, names to the right
@@ -690,7 +706,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
               p.next?.length ? [h("dt", {}, "Wants to know"), h("dd", {}, p.next.map(esc).join(" · "))] : "",
               h("dt", {}, "Talked with you"), h("dd", {}, `${p.chats} time${p.chats === 1 ? "" : "s"}`))))); },
       letter: () => letterBox(d) || h("p", { class: "sw-dmut" }, "Nothing to answer. After a run, what it needs from you shows up here."),
-      story: () => { const done = trace.filter((t) => t.outcome === "ok").slice(0, 6), old = n0(D.curiosity) - n0(F.term);
+      story: () => { const done = trace.filter((t) => t.outcome === "ok").slice(0, 6);
         sty ||= makeStory(); sty.update(d, loop, cTurns);
         return h("div", { class: "sw-story" }, sty.el,
           h("div", { class: "sw-story2" },
@@ -700,7 +716,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
             feels(d.life), wishes(d.life),
             youBox(d),
             h("section", {}, h("h4", {}, "Curiosity"), h("p", { class: "sw-big" }, h("strong", {}, r2(D.curiosity)), h("span", {}, `maturity ${r2(D.maturity)}`)),
-              h("p", { class: "sw-dmut" }, `${r2(old)} comes from names it has met but not looked up, ${r2(F.term)} from the mesh still left open (${Math.round(n0(F.F) * 100)}% open, ${n0(F.D)} layers deep).`), lineChart(d.series || [])))); },
+              formulaBox(D, d.gains), lineChart(d.series || [])))); },
       notes: () => split([h("p", { class: "sw-dmut sw-lhead" }, `${notes.length} notes · ${n0(L.verified)} let in · ${n0(L.rejected)} turned away`), h("ol", { class: "sw-dl sw-dnotes" }, ...notes.map(noteRow))], inspect()),
       activity: () => { const steps = trace.filter((t) => (tFilter === "all" || t.outcome === tFilter) && (!tEngine || t.kind === tEngine) && (rSys == null || t.system === rSys)), eng = [...new Set(trace.map((t) => t.kind))].sort();
         const btn = (k, t) => h("button", { type: "button", "aria-pressed": String(tFilter === k), onclick: () => { tFilter = k; paintReport(); } }, t);

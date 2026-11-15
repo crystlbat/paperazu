@@ -736,15 +736,16 @@ def test_curiosity_and_maturity_follow_the_formula_and_curiosity_is_the_brake(mo
     char.rest(True, 0)  # a character that knows no names is not braked: it reads about its world first
     _name("Watson", known=True); _name("Moriarty")
     d = char.disposition()  # tau = mean(unmet / 3) = (2/3 + 3/3) / 2; nothing consolidated yet, so no damping and both names are new
-    assert (d["tau"], d["dnE"], d["maturity"], d["curiosity"]) == (0.83, 2, 0.0, 5.0)  # 1.67 + frontier term D*(1-F) = 4*(1-1/6): question c=0/(0+3), note c=1/(1+2) (the world note names nothing), F=1/6
+    assert (d["tau"], d["dnE"], d["maturity"], d["curiosity"]) == (0.83, 2, 0.0, 2.33)  # 1.67 + frontier term D*F = 4*(1/6): question c=0/(0+3), note c=1/(1+2) (the world note names nothing), F=1/6
     char.add_memory("Baked", '{"nE": 2, "nAE": 2}', source="sheet")
     d = char.disposition()  # consolidated: maturity = 1 - exp(-2/2), and with no new name since, curiosity is 0
-    assert (d["maturity"], d["dnE"], d["curiosity"]) == (0.63, 0, 3.33)  # only the frontier term is left
+    assert (d["maturity"], d["dnE"], d["curiosity"]) == (0.63, 0, 0.67)  # only the frontier term is left: the open share, not the answered one
+    assert round(d["dial"] * (d["terms"]["names"] + d["terms"]["frontier"]) + d["momentum"], 2) == d["curiosity"] and d["optim"]["since_bake"] == 0  # the parts the page shows add up to what it says
     assert char.rest(True, 0, force=True)["kind"] == "reflect"  # your own tap still runs a step
     _name("Irene")
     assert char.disposition()["curiosity"] == round((1 / 3 + 1 + 1) / 3 * 1 * 2.718281828 ** -1 + char.frontier()["term"], 2)  # a new name wakes it, damped by what it already knows (the tap answered one more of Watson's questions)
     assert char.rest(True, 0)["kind"] == "reflect"
-    assert [s["name"] for s in char.monitor()["series"]] == ["curiosity", "maturity", "frontier"] and char.monitor()["steps"] >= 2
+    assert [s["name"] for s in char.monitor()["series"]] == ["curiosity", "maturity", "frontier", "score"] and char.monitor()["steps"] >= 2
 
 
 def test_three_systems_plan_goal_execute_and_switch_off(monkeypatch):
@@ -1073,7 +1074,7 @@ def test_frontier_counts_what_points_nowhere(monkeypatch):
     fr = char.frontier()
     # plan: open 0 (has question), questions 2 -> 0/(0+2)=0; question: open 1 (q2), notes 1 -> 1/2; note: open 0, names 1 -> 0
     assert fr["layers"] == {"plan": 0.0, "question": 0.5, "note": 0.0}
-    assert (fr["F"], fr["D"], fr["term"]) == (round(0.5 / 3, 4), 4, round(4 * (1 - 0.5 / 3), 4))
+    assert (fr["F"], fr["D"], fr["term"]) == (round(0.5 / 3, 4), 4, round(4 * 0.5 / 3, 4))  # the open work pulls: one question in two still without a note
     assert char.disposition()["frontier"] == fr and char.disposition()["curiosity"] >= fr["term"] - 0.01
 
 
@@ -1084,14 +1085,15 @@ def test_frontier_empty_mesh_changes_nothing(monkeypatch):
     assert char.disposition()["curiosity"] == 0.0  # no names: tau * dnE = 0, term 0
 
 
-def test_frontier_brake_holds_only_when_nothing_deeper_is_open(monkeypatch):
+def test_curiosity_settles_when_nothing_is_open_and_an_open_question_pulls_it_up(monkeypatch):
     _rest_mocks(monkeypatch)
     char.update_profile("Sherlock", "a detective", [], "#fff")
     _name("Watson", known=True)
     char.add_memory("Baked", '{"nE": 1, "nAE": 1}', source="sheet")  # dnE = 0, so only the term is left
     d = char.disposition()
-    assert d["frontier"]["F"] == 0 and d["frontier"]["D"] > 0 and d["curiosity"] > 0  # closed mesh, D > 0: not braked
-    assert char.rest(True, 0)["kind"] == "reflect"  # an EXPLORES step runs: not braked
+    assert d["frontier"]["F"] == 0 and d["frontier"]["D"] > 0 and d["curiosity"] == 0  # all answered: it settles, the brake can hold
+    char.add_memory("q", "Who is Moriarty? (from 0)", source="question")  # a new open question, say from a speculation
+    assert char.disposition()["curiosity"] > 0
 
 
 def test_system_switch_and_mode_do_not_leak_into_a_new_persona():
@@ -1151,7 +1153,7 @@ def test_report_route_shape_counts_and_persona_scoping(monkeypatch):
     con.close()
     char.add_memory("Baked", '{"nE": 0, "nAE": 0}', source="sheet")
     r = client.get("/char/report").json()
-    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "series", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train", "letter", "now", "model_name", "models"}
+    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "series", "gains", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train", "letter", "now", "model_name", "models"}
     assert r["who"] == "Sherlock" and r["since"] and r["model"] == {"up": True, "label": "Model ready"}
     t = r["totals"]
     assert t["steps"] == t["ok"] + t["skipped"] + t["failed"] == len(r["trace"]) and t["ok"] == 3 and t["skipped"] >= 2  # reflect, the intake gate, and one more
@@ -1603,3 +1605,13 @@ def test_an_unusable_speculation_moves_on_instead_of_retrying_the_same_node(monk
     assert char.ENGINES["speculate"]["detail"] == "the speculation was unusable or off its world"
     char.rest(True, only="speculate")
     assert char.ENGINES["speculate"]["detail"] == "nothing it knows is left to speculate on"
+
+
+def test_gains_credit_each_step_kind_with_the_change_it_made_to_the_score():
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    for what, j in [("start", 0.1), ("reflect", 0.3), ("wonder", 0.25), ("reflect", 0.35)]:
+        char.add_memory("Tick", json.dumps({"what": what, "score": j}), source="sheet")
+    g = char.gains()
+    assert list(g) == ["reflect", "wonder"] and g["reflect"] == {"gain": 0.15, "runs": 2} and g["wonder"]["gain"] == -0.05
+    sc = char.disposition()["score"]
+    assert sc == {"J": 0.0, "know": 0.0, "surprise": 0.5}  # knows no names yet, and no guess checked: as likely right as wrong

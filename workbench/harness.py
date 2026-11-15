@@ -72,7 +72,7 @@ def notice(n: int, plan: list[dict[str, Any]], rejected: list[dict[str, str]], f
     walls: dict[str, int] = {}
     for r in _rows("Run: %", 12):
         c = json.loads(r["content"])
-        if c.get("outcome") == "skipped":
+        if c.get("outcome") == "skipped" and r["title"] not in ("Run: cycle", "Run: model"):  # its own bookkeeping is not a wall
             w = f"{r['title'].removeprefix('Run: ')}: {c.get('detail', '').removesuffix(' (arg ignored)')[:90]}"
             walls[w] = walls.get(w, 0) + 1
     for x in rejected:
@@ -83,8 +83,9 @@ def notice(n: int, plan: list[dict[str, Any]], rejected: list[dict[str, str]], f
     idle, have = stale(), {p["name"] for p in plan}
     nxt = next((k for k in UNSTICK if k not in idle and not blocked.get(k) and k not in have and k not in tried), "")
     said = (f"I keep hitting the same wall ({on}). " +
-            (f"So I will {DOES[nxt]} instead." if nxt else "I have tried every way to make new work on my own and none can run now. I will rest until something new comes in."))
-    me = {"stuck": True, "on": on, "try": nxt, "said": said, "spent": not nxt}
+            (f"So I will {DOES[nxt]} instead." if nxt else "I will run what my plan has and see what it turns up." if plan
+             else "I have tried every way to make new work on my own and none can run now. I will rest until something new comes in."))
+    me = {"stuck": True, "on": on, "try": nxt, "said": said, "spent": not nxt and not plan}  # with steps still to run, what they turn up may open the way
     char.add_memory(f"Stuck: {n}", json.dumps(me), source="sheet")
     return me
 
@@ -108,6 +109,10 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
         vs = json.loads(fb[0]["content"])
         if worked := sorted({v["cmd"].split()[0] for v in vs if v["keep"]}):
             state.append("worked last cycle: " + ", ".join(worked))
+    sc, g = d["score"], char.gains()
+    state.append(f"its score J = {sc['J']} (0 to 1, push it up: how much it has answered {sc['know']} times how often its guesses come out right {round(1 - sc['surprise'], 3)})")
+    if g:
+        state.append("what each command did to J on average (pick the ones that raised it): " + ", ".join(f"{k} {v['gain']:+.3f} over {v['runs']}" for k, v in list(g.items())[:8]))
     useful = [f'reflect "{qs[0]}"' for qs in [char._open_questions(char._start())] if qs] + \
              [f"check {u[0]['id']}" for u in [_unchecked()] if u]
     state.append("most useful now: " + ("; ".join(useful) or "plan, then goal, to make new questions"))

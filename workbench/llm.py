@@ -155,7 +155,7 @@ def _to_dory(s: Settings, timeout: float, poll: float) -> dict[str, Any] | None:
     SWAP["phase"] = "loading"
     try:
         log = open(Path(__file__).resolve().parent.parent / "data" / "dory.log", "ab")  # noqa: SIM115 — the child keeps it open
-        _dory["proc"] = subprocess.Popen(shlex.split(os.path.expanduser(s.dory_cmd)), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        _dory["proc"] = subprocess.Popen(shlex.split(os.path.expanduser(s.dory_cmd)), stdout=log, stderr=subprocess.STDOUT)  # same process group: killed with the app even when it gets no clean shutdown
         while time.time() - t0 < timeout:
             if _up(s.dory_url):
                 ok = True

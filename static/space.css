@@ -1321,3 +1321,10 @@ body:has(.st) .sp-ear { position: fixed; z-index: 70; }
 .kg-counts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 28px; font-size: 12px; color: rgb(255 255 255 / .6); }
 .kg-counts b { color: #fff; font-weight: 400; } .kg-counts i { color: #ffe600; font-style: normal; }
 .kg-plot svg { display: block; width: 100%; height: auto; font-family: var(--mono, monospace); overflow: visible; }
+
+.sw-formula { margin: 0 0 10px; } .sw-fx { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; margin: 0 0 6px; font-family: var(--mono, monospace); color: #a1a1aa; }
+.sw-fv { display: inline-flex; flex-direction: column; align-items: center; padding: 2px 5px; border-radius: 4px; background: #ffffff0d; } .sw-fv b { color: #f4f4f5; font-size: 14px; } .sw-fv small { font-size: 10px; color: #a1a1aa; }
+.sw-fv[data-dir="up"] b { color: #ff7a7a; } .sw-fv[data-dir="down"] b { color: #7dffa8; }
+.sw-optim { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; } .sw-optim li { display: flex; gap: 8px; align-items: center; } .sw-optim p { margin: 0; font-size: 12px; color: #a1a1aa; }
+.sw-goal .sw-fv b { color: #fff; } .sw-gain { margin-right: 8px; font-family: var(--mono, monospace); } .sw-gain[data-dir="up"] { color: #7dffa8; } .sw-gain[data-dir="down"] { color: #ff7a7a; }
+.sw-goal .sw-fv:first-child[data-dir="up"] b, .sw-goal .sw-fv:nth-child(2)[data-dir="up"] b { color: #7dffa8; } .sw-goal .sw-fv:first-child[data-dir="down"] b, .sw-goal .sw-fv:nth-child(2)[data-dir="down"] b { color: #ff7a7a; }

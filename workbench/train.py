@@ -112,7 +112,9 @@ def snapshot(run_id: int, step: int, why: str) -> dict[str, Any]:
 
 def _vars(d: dict[str, Any]) -> dict[str, float]:
     """Every number that moves while it learns, for the Story charts: its needs, trust and frontier beside curiosity and maturity."""
-    return {**{k: round(v, 3) for k, v in char.needs().items()}, "trust": char.trust()["value"], **({"frontier": round(d["frontier"]["term"], 3)} if isinstance(d.get("frontier"), dict) and "term" in d["frontier"] else {})}
+    fr, t = d.get("frontier") if isinstance(d.get("frontier"), dict) else {}, d.get("terms") or {}
+    return {**{k: round(v, 3) for k, v in char.needs().items()}, "trust": char.trust()["value"], **({"frontier": round(fr["term"], 3)} if "term" in fr else {}),
+            **({"names": t["names"], "damper": t["damper"]} if t else {}), **({"F": fr["F"], "D": fr["D"]} if "F" in fr else {}), **({"momentum": d["momentum"]} if "momentum" in d else {}), **({"score": d["score"]["J"]} if "score" in d else {})}
 
 
 WAIT_TURN = 300.0  # seconds a run step waits for a cycle already running
