@@ -361,7 +361,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   const ctl = { budget: 4, roles: null, busy: "", last: null, swap: null }; let rCyc = null, jPages = null, cnet = null, cMesh = null, cTurns = null; // its study journal, pulled while that tab is open
   try { rTab = localStorage.getItem("sw-rtab") || "story"; } catch { rTab = "story"; }
   if (!TABS.some(([k]) => k === rTab)) rTab = "story";
-  const go = (k) => { rTab = k; try { localStorage.setItem("sw-rtab", k); } catch { /* not remembered */ } if (k === "controls" || k === "engines") loadRoles(); paintReport(); };
+  const go = (k) => { if (rTab !== "story") ctl.lastTab = rTab; rTab = k; try { localStorage.setItem("sw-rtab", k); } catch { /* not remembered */ } if (k === "controls" || k === "engines") loadRoles(); paintReport(); };
   async function loadRoles() { if (ctl.roles) return;
     try { const [s, m] = await Promise.all([api("/settings"), api("/model/status").catch(() => ({ models: [] }))]);
       ctl.roles = { planner_model: s.planner_model || "", chat_model: s.chat_model || "", judge_model: s.judge_model || "" };
@@ -424,7 +424,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   let sty = null; // built once and kept between repaints, so the canvas keeps drawing and the inputs keep what you typed
   const makeStory = () => {
     const cv = h("canvas", { class: "st-cv", "aria-hidden": "true" }), scene = makeDotScene(cv), say = h("ol", { class: "st-say", "aria-live": "polite" });
-    const rail = h("div", { class: "st-rail", "aria-hidden": "true" }, ...KEYS.map(() => h("i"))), count = h("span", { class: "st-count" });
+    const rail = h("div", { class: "st-rail", "aria-hidden": "true" }, ...KEYS.map(() => h("i"))), count = h("span", { class: "st-count" }), name = h("span", { class: "st-name" });
     const S = KEYS.map((_, n) => { const t = h("h2", { class: "st-h" }), sub = h("p", { class: "st-sub" }), live = h("div", { class: "st-live" });
       return { el: h("section", { class: "st-slide", "data-n": String(n) }, h("span", { class: "st-no" }, `${String(n + 1).padStart(2, "0")} / ${String(KEYS.length).padStart(2, "0")}`), t, sub, live), t, sub, live }; });
     // the run form lives on its slide and is never rebuilt, so what you type stays while the numbers around it move
@@ -439,19 +439,27 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     S[7].live.append(h("div", { class: "st-form" }, num("minutes", "minutes", 1), num("max_steps", "steps", 1), num("lo", "curiosity from", .05), num("hi", "to", .05)),
       h("div", { class: "st-deck" }, play, stop, runSay));
     const watchBody = h("div", { class: "st-watchbody" }), watch = h("section", { class: "st-watch" }, h("span", { class: "st-no" }, "live"), h("h2", { class: "st-h" }, "Watch it learn."), watchBody);
-    const stage = h("div", { class: "st-stage" }, h("div", { class: "st-top" }, rail, count), cv, say);
-    const el = h("div", { class: "st" }, h("div", { class: "st-grid" }, h("div", { class: "st-left" }, ...S.map((x) => x.el)), stage), watch);
+    const to = (n) => (n >= S.length ? watch : S[Math.max(0, n)].el).scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    const exit = () => go(ctl.lastTab && ctl.lastTab !== "story" ? ctl.lastTab : "notes");
+    const back = h("button", { type: "button", class: "st-move", onclick: () => to(shown - 1) }, "back"), next = h("button", { type: "button", class: "st-move", onclick: () => to(shown + 1) }, "next →");
+    const stage = h("div", { class: "st-stage" }, cv, say);
+    const el = h("div", { class: "st", tabindex: "-1", onkeydown: (e) => { if (e.key === "Escape") exit(); } }, // the whole screen, like Pino's: Dot behind, the words over it, one slide a screen
+      h("div", { class: "st-bar" }, name, rail, h("button", { type: "button", class: "st-move", onclick: exit, title: "Back to the report tabs (Esc)" }, "details ✕")),
+      stage, h("div", { class: "st-left" }, ...S.map((x) => x.el)), watch, h("div", { class: "st-foot" }, count, h("span", {}, back, next)));
+    const GLYPH = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&*+=/";
+    const decode = (x) => { const text = x.want || ""; x.busy = true; let f = 0; clearInterval(x.timer); // the title types itself in, as Pino's do
+      x.timer = setInterval(() => { f++; const shownN = Math.floor(text.length * f / 16); x.t.textContent = [...text].map((c, i) => i < shownN || c === " " ? c : GLYPH[(i * 7 + f * 13) % GLYPH.length]).join("");
+        if (f >= 16) { clearInterval(x.timer); x.t.textContent = text; x.busy = false; } }, 28); };
     let D = { now: {} }, k = { ...KEYS[0] }, shown = -1;
-    const progress = () => { const r = stage.getBoundingClientRect(), mid = r.top + Math.min(r.height, innerHeight) / 2, c = S.map((x) => { const b = x.el.getBoundingClientRect(); return (b.top + b.bottom) / 2; });
+    const progress = () => { const mid = innerHeight / 2, c = S.map((x) => { const b = x.el.getBoundingClientRect(); return (b.top + b.bottom) / 2; });
       if (mid <= c[0]) return 0; for (let i = 0; i < c.length - 1; i++) if (mid < c[i + 1]) return i + (mid - c[i]) / (c[i + 1] - c[i]); return c.length - 1; };
     const frame = (now) => {
       if (!el.isConnected) { setTimeout(() => requestAnimationFrame(frame), 400); return; } // off the Story tab: idle, cheaply
-      const box = el.closest(".sw-dbody"), hgt = box ? `${box.clientHeight}px` : ""; if (hgt && el.style.getPropertyValue("--stage") !== hgt) el.style.setProperty("--stage", hgt); // one slide is one screen of the report
       const p = progress(), i = Math.min(KEYS.length - 2, Math.floor(p)), f = Math.min(1, p - i), e = f * f * (3 - 2 * f), A = KEYS[i], B = KEYS[i + 1];
       for (const key in A) k[key] += ((A[key] + (B[key] - A[key]) * e) - k[key]) * .12; // eased towards the scroll, so a fast flick still glides
       const L = D.learned || {};
       scene.draw(now, k, { sys: D.now?.sys, plans: L.plans, questions: L.questions, answered: L.answered, notes: L.notes, verified: L.verified, rejected: L.rejected, open: D.letter?.open });
-      const on = Math.round(p); if (on !== shown) { shown = on; [...rail.children].forEach((x, n) => x.toggleAttribute("data-on", n <= on)); count.textContent = `${String(on + 1).padStart(2, "0")} / ${String(KEYS.length).padStart(2, "0")}`; S.forEach((x, n) => x.el.toggleAttribute("data-on", n === on)); }
+      const on = Math.round(p); if (on !== shown) { shown = on; [...rail.children].forEach((x, n) => x.toggleAttribute("data-on", n <= on)); count.textContent = `${String(on + 1).padStart(2, "0")} / ${String(KEYS.length).padStart(2, "0")}`; S.forEach((x, n) => x.el.toggleAttribute("data-on", n === on)); if (S[on] && !matchMedia("(prefers-reduced-motion: reduce)").matches) decode(S[on]); back.disabled = on === 0; }
       requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
@@ -461,7 +469,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     return { el, update(d, loop, turns) {
       D = d; const L = d.learned || {}, who = (d.who || "").split(" ")[0], world = (d.who || "").split(/ from /i)[1] || "its world", run = d.train?.runs?.[0], live = !!d.train?.active;
       const plan = (d.trace || []).find((t) => t.kind === "plan" && t.outcome === "ok");
-      const fill = (n, title, sub, ...live) => { S[n].t.textContent = title; S[n].sub.replaceChildren(...sub); S[n].live.replaceChildren(...live); };
+      name.textContent = d.who || "";
+      const fill = (n, title, sub, ...live) => { S[n].want = title; if (!S[n].busy && S[n].t.textContent !== title) S[n].t.textContent = title; S[n].sub.replaceChildren(...sub); S[n].live.replaceChildren(...live); };
       fill(0, `${who}.`, [`The mind under the dot. It plans, asks, reads and checks itself, and it lives in ${world}.`], h("p", { class: "st-now" }, h("i"), `${d.mode || "idle"} · ${n0(d.totals?.ok)} of ${n0(d.totals?.steps)} steps did something`));
       fill(1, "The dot is just a body.", [`Open it up and there are four systems inside that make it ${who}.`],
         h("ul", { class: "st-key" }, ...[[2, "S2 plans"], [1, "S1 asks"], [0, "S0 reads"], [3, "V checks"]].map(([n, t]) => h("li", { style: `--c:${SC[n]}` }, h("i"), t))));
@@ -471,7 +480,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       fill(5, "A gate.", ["The Verifier reads every note before it is kept. ", b(L.verified), " let in, ", b(L.rejected), " turned away."], tag(3, loop));
       fill(6, "A memory that sleeps.", ["At the end of every run it sleeps: it keeps the newest ", b(24), " open questions about its world and lets the rest go. ", b(d.letter?.let_go), " let go so far, ", b(d.letter?.open), " open now."],
         d.letter?.items?.length ? h("button", { type: "button", class: "pn-link", onclick: () => go("letter") }, `what is left becomes your letter (${d.letter.items.length}) →`) : "");
-      S[7].t.textContent = "Set it running."; S[7].sub.replaceChildren("It learns on its own and stops when the minutes or the steps run out, or when curiosity settles in the target.");
+      S[7].want = "Set it running."; if (!S[7].busy) S[7].t.textContent = S[7].want; S[7].sub.replaceChildren("It learns on its own and stops when the minutes or the steps run out, or when curiosity settles in the target.");
       for (const key of ["minutes", "max_steps", "lo", "hi"]) { const inp = inputs[key]; inp.disabled = live; if (live && document.activeElement !== inp) inp.value = run.config[key]; }
       play.textContent = !live || run.status === "paused" ? "▶" : "❚❚"; play.setAttribute("aria-label", !live ? "Start" : run.status === "paused" ? "Resume" : "Pause"); play.disabled = !live && (!!ctl.busy || !d.model?.up); stop.disabled = !live;
       runSay.textContent = ctl.busy ? "…" : live ? `${run.status === "paused" ? "Paused" : "Running"} · step ${n0(run.log?.at(-1)?.step)} · ${mmss(run.clock)}` : run ? `Run ${run.id} ${run.status === "done" ? "finished" : run.status}${run.why ? `: ${run.why}` : ""}.` : "Ready.";
