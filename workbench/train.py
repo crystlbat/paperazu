@@ -10,6 +10,7 @@ The dataset is JSONL in the shape Anthropic's Claude fine-tuning takes: {"system
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from typing import Any
@@ -95,6 +96,11 @@ def snapshot(run_id: int, step: int, why: str) -> dict[str, Any]:
     return data
 
 
+def _vars(d: dict[str, Any]) -> dict[str, float]:
+    """Every number that moves while it learns, for the Story charts: its needs, trust and frontier beside curiosity and maturity."""
+    return {**{k: round(v, 3) for k, v in char.needs().items()}, "trust": char.trust()["value"], **({"frontier": round(d["frontier"]["term"], 3)} if isinstance(d.get("frontier"), dict) and "term" in d["frontier"] else {})}
+
+
 def _one_step() -> tuple[str, str]:
     """One learning step, the way idle time runs them: a harness cycle in planner mode, else the Verifier's pick. Forced: a run ignores tiredness and quiet."""
     if char.mode() == "planner":
@@ -113,7 +119,7 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
     d = char.disposition()
     mark = {"curiosity": d["curiosity"], "maturity": d["maturity"]}
     peaked = d["curiosity"] > cfg["hi"]  # "came down into the range": a fresh persona starts low, rises as it meets names, then settles
-    log.append({"step": 0, "t": 0, "curiosity": d["curiosity"], "maturity": d["maturity"], "kind": "start", "outcome": "", "snap": True})
+    log.append({"step": 0, "t": 0, "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": "start", "outcome": "", "snap": True})
     snapshot(run_id, 0, "start")
     status, why = "done", ""
     while True:
@@ -129,13 +135,13 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
             time.sleep(0.5)
             continue
         if spent >= cfg["minutes"] * 60:
-            why = "time is up"
+            why = f"time ran out ({cfg['minutes']:g} min)"
             break
         if steps >= cfg["max_steps"]:
-            why = "the step budget is spent"
+            why = f"used all {cfg['max_steps']} steps"
             break
         if steps and peaked and cfg["lo"] <= d["curiosity"] <= cfg["hi"]:
-            why = f"curiosity {d['curiosity']} is in the target range {cfg['lo']}–{cfg['hi']}"
+            why = f"reached the target: curiosity {d['curiosity']} settled between {cfg['lo']:g} and {cfg['hi']:g}"
             break
         if idle >= IDLE_STOP:
             why = f"{IDLE_STOP} steps in a row did nothing: nothing left to learn right now"
@@ -162,7 +168,7 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
         if snap:
             snapshot(run_id, steps, snap)
             mark = {"curiosity": d["curiosity"], "maturity": d["maturity"]}
-        log.append({"step": steps, "t": round(spent), "curiosity": d["curiosity"], "maturity": d["maturity"], "kind": outcome, "outcome": detail[:120], "snap": bool(snap)})
+        log.append({"step": steps, "t": round(spent), "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": outcome, "outcome": detail[:120], "snap": bool(snap)})
         _set(run_id, log=json.dumps(log))
     snapshot(run_id, steps, f"end: {why}")
     if log:
@@ -223,7 +229,10 @@ def snapshots(run_id: int) -> list[dict[str, Any]]:
 def dataset(run_id: int) -> str:
     """The run's examples as JSONL for a Claude fine-tune: one {"system", "messages"} per line; the same exchange once, from its latest snapshot."""
     seen: dict[str, dict[str, Any]] = {}
+    words = char.world_words()
     for s in snapshots(run_id):
         for e in s["examples"]:
+            if not (char.on_world(e["user"], words) or sum(bool(re.search(rf"\b{re.escape(w)}\b", e["assistant"])) for w in words) >= 3):
+                continue  # drift a note kept before the world check must not be taught: a news story that names its game once is not its world
             seen[e["user"].strip().lower()] = {"system": e["system"], "messages": [{"role": "user", "content": e["user"]}, {"role": "assistant", "content": e["assistant"]}]}
     return "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in seen.values())

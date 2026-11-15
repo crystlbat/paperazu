@@ -374,28 +374,35 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   async function act(label, fn) { ctl.busy = label; paintReport(); try { ctl.last = { label, ok: true, out: await fn() }; } catch (e) { ctl.last = { label, ok: false, out: String(e?.message || e) }; } ctl.busy = ""; await pullReport(true); }
   // ---------- F1 on the Story page: a broadcast of the training run, timing bar, sectors, telemetry, checkpoints ----------
   const mmss = (s) => `${Math.floor((s || 0) / 60)}:${String(Math.round(s || 0) % 60).padStart(2, "0")}`;
-  const telemetry = (pts, cfg, tint) => { // curiosity in its colour, maturity in amber, the target as a soft band, checkpoints as purple beads
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"), N = Math.max(1, pts.at(-1)?.step || pts.length - 1);
-    const cs = pts.map((p) => p.curiosity || 0), top = Math.max(...cs, cfg ? cfg.hi : -Infinity), bot = Math.min(...cs, cfg ? cfg.lo : Infinity), pad = Math.max(.1, (top - bot) * .15), hi = top + pad, lo = Math.max(0, bot - pad);
-    const X = (st) => (st / N * 800).toFixed(1), Y = (v) => (190 - (v - lo) / (hi - lo || 1) * 175).toFixed(1); // fit to the data, so small moves show
-    const path = (f) => pts.map((p, i) => `${i ? "L" : "M"}${X(p.step ?? i)},${Y(f(p))}`).join(""), cur = path((p) => p.curiosity || 0);
-    svg.setAttribute("viewBox", "0 0 800 200"); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Curiosity and maturity over the run");
-    svg.innerHTML = `<defs><linearGradient id="f1fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${tint}" stop-opacity=".18"/><stop offset="1" stop-color="${tint}" stop-opacity="0"/></linearGradient><filter id="f1glow"><feGaussianBlur stdDeviation="3"/></filter></defs>`
-      + (cfg ? `<rect x="0" width="800" y="${Y(cfg.hi)}" height="${Math.max(1, Y(cfg.lo) - Y(cfg.hi)).toFixed(1)}" fill="#7dffa8" opacity=".07"/>` : "")
-      + `<path d="${cur}L${X(pts.at(-1).step ?? pts.length - 1)},200L0,200Z" fill="url(#f1fill)"/>`
-      + `<path d="${path((p) => lo + (p.maturity || 0) * (hi - lo))}" fill="none" stroke="#ffb347" stroke-width="2" vector-effect="non-scaling-stroke" opacity=".8"/>`
-      + `<path d="${cur}" fill="none" stroke="${tint}" stroke-width="6" vector-effect="non-scaling-stroke" filter="url(#f1glow)" opacity=".6"/><path d="${cur}" fill="none" stroke="${tint}" stroke-width="2.5" vector-effect="non-scaling-stroke"/>`;
-    const beads = pts.filter((p) => p.snap).map((p) => h("i", { style: `left:${X(p.step) / 8}%;top:${Y(p.curiosity || 0) / 2}%` }));
-    return h("figure", { class: "f1-tel" }, svg, ...beads); };
+  const varChart = (k, pts, colour, band, byTime) => { // one variable over the run, on its own scale so small moves show; purple beads are checkpoints
+    const vs = pts.map((p) => +p[k] || 0), lo0 = Math.min(...vs, band ? band[0] : Infinity), hi0 = Math.max(...vs, band ? band[1] : -Infinity), pad = Math.max(.01, (hi0 - lo0) * .15), lo = lo0 - pad, hi = hi0 + pad;
+    const T = Math.max(1, pts.at(-1)?.t || 0), N = Math.max(1, pts.length - 1), X = (i) => ((byTime ? (pts[i].t || 0) / T : i / N) * 300).toFixed(1), Y = (v) => (76 - (v - lo) / (hi - lo) * 72).toFixed(1), path = vs.map((v, i) => `${i ? "L" : "M"}${X(i)},${Y(v)}`).join("");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"), id = `f1g-${k}`;
+    svg.setAttribute("viewBox", "0 0 300 80"); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("aria-hidden", "true");
+    const steps = byTime ? pts.slice(1).map((p, i) => `<rect x="${X(i)}" width="${Math.max(0, X(i + 1) - X(i)).toFixed(1)}" y="0" height="80" fill="#fff" opacity="${i % 2 ? .015 : .045}"/>`).join("") : ""; // each step's own width: how long it took
+    const ticks = pts.map((_, i) => `<circle cx="${X(i)}" cy="80" r="1.6" fill="#52525b"/>`).join("");
+    svg.innerHTML = steps + ticks + `<defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${colour}" stop-opacity=".28"/><stop offset="1" stop-color="${colour}" stop-opacity="0"/></linearGradient></defs>`
+      + (band ? `<rect x="0" width="300" y="${Y(band[1])}" height="${Math.max(1, Y(band[0]) - Y(band[1])).toFixed(1)}" fill="#7dffa8" opacity=".1"/>` : "")
+      + `<path d="${path}L300,80L0,80Z" fill="url(#${id})"/><path d="${path}" fill="none" stroke="${colour}" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
+    const last = vs.at(-1), dv = last - vs[0], beads = pts.map((p, i) => p.snap ? h("i", { style: `left:${X(i) / 3}%;top:${Y(vs[i]) / .8}%` }) : null).filter(Boolean);
+    return h("figure", { class: "f1-v", style: `--c:${colour}`, "aria-label": `${k}: ${r2(last)}, ${dv >= 0 ? "up" : "down"} ${r2(Math.abs(dv))} over the run` },
+      h("figcaption", {}, h("span", {}, k), h("strong", {}, String(r2(last))), h("small", { "data-d": dv > 0 ? "up" : dv < 0 ? "down" : "" }, dv ? `${dv > 0 ? "▲" : "▼"} ${r2(Math.abs(dv))}` : "flat")),
+      h("div", { class: "f1-plot" }, svg, ...beads)); };
   const f1 = (d) => {
     const run = d.train?.runs?.[0], live = !!d.train?.active && run && ["running", "paused"].includes(run.status), cfg = run?.config, log = run?.log || [], last = log.at(-1), tint = d.tint || "#6ff7ff";
-    const pts = log.length > 1 ? log : (() => { const c = (d.series || []).find((x) => x.name === "curiosity")?.points || [], m = (d.series || []).find((x) => x.name === "maturity")?.points || []; return c.map((v, i) => ({ step: i, curiosity: v, maturity: m[i] || 0 })); })();
-    const line = live ? `${run.status === "paused" ? "Paused" : "Training"} · step ${n0(last?.step)} of ${n0(cfg?.max_steps)} · ${mmss(last?.t)} of ${mmss(cfg?.minutes * 60)}` : run ? `Last run ${run.status}${run.why ? `: ${run.why}` : ""}` : "Start a training run on Controls";
-    const big = (v, t, c) => h("div", { style: `--c:${c}` }, h("strong", {}, String(v)), h("small", {}, t));
+    const pts = log.length > 1 ? log : (() => { const S = Object.fromEntries((d.series || []).map((x) => [x.name, x.points || []])), n = Math.max(0, ...Object.values(S).map((p) => p.length)); return [...Array(n)].map((_, i) => Object.fromEntries(Object.entries(S).map(([k, p]) => [k, p[i] ?? 0]))); })();
+    const C = { curiosity: tint, maturity: "#ffb347", frontier: "#c79bff", ...NEED_C, trust: "#e4e4e7" };
+    const keys = Object.keys(C).filter((k) => pts.some((p) => typeof p[k] === "number"));
+    const byTime = ctl.byTime && pts.some((p) => p.t), endT = pts.at(-1)?.t || 0;
+    const axis = h("div", { class: "f1-axis" }, h("span", {}, byTime ? "0:00" : "step 0"), h("div", { class: "sw-dseg f1-x", role: "radiogroup", "aria-label": "Across the bottom" },
+      ...[["Steps", false], ["Time", true]].map(([t, v]) => h("button", { type: "button", role: "radio", "aria-checked": String(!!ctl.byTime === v), onclick: () => { ctl.byTime = v; report(true); } }, t))),
+      h("span", {}, byTime ? mmss(endT) : `step ${pts.length - 1}`));
+    const line = live ? `${run.status === "paused" ? "Paused" : "Training"} · step ${n0(last?.step)} of ${n0(cfg?.max_steps)} · ${mmss(last?.t)} of ${mmss(cfg?.minutes * 60)} · ${n0(run.snaps)} checkpoints` : run ? `Last run ${run.status === "done" ? "finished" : run.status}${run.why ? `: ${run.why}` : ""} · ${n0(run.snaps)} checkpoints` : "Start a training run on Controls";
     return h("section", { class: "f1", "data-live": String(!!live), style: `--team:${tint}` },
       h("p", { class: "f1-line" }, h("i"), line),
-      h("div", { class: "f1-big" }, big(r2(d.disposition?.curiosity), "curiosity", tint), big(r2(d.disposition?.maturity), "maturity", "#ffb347"), big(n0(run?.snaps), "checkpoints", "#c79bff")),
-      pts.length > 1 ? telemetry(pts, cfg, tint) : "");
+      pts.length > 1 ? h("div", { class: "f1-vars" }, ...keys.map((k) => varChart(k, pts, C[k], k === "curiosity" && cfg ? [cfg.lo, cfg.hi] : null, byTime))) : "",
+      pts.length > 1 ? axis : "",
+      live && last?.outcome ? h("p", { class: "f1-now" }, `Step ${n0(last.step)}: ${esc(last.outcome)}`) : "");
   };
   const youBox = (d) => { const Y = { ...(d.you || {}) }, about = Y.about || ""; delete Y.about;
     const box = h("textarea", { rows: 3, placeholder: "e.g. I'm Osiris, your Guardian. You were my Ghost before you were destroyed.", "aria-label": "Who you are, in your own words" }); box.value = about;
@@ -500,23 +507,30 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
           (() => { // a training run: it learns by itself until the time, the steps or the curiosity target says stop
             const T = d.train || {}, run = T.runs?.[0], live = !!T.active && run && ["running", "paused"].includes(run.status), C = (ctl.tcfg ||= { ...(T.defaults || { minutes: 20, lo: 0, hi: 1, max_steps: 60 }) });
             const send = (action, extra = {}) => act(`training ${action}`, () => api("/char/train", { method: "POST", body: JSON.stringify({ action, ...extra }) }).then((r) => r.status || action));
-            const num = (k, label, min, max, step) => h("label", {}, label, h("input", { type: "number", min, max, step, value: C[k], disabled: live, oninput: (e) => { C[k] = +e.target.value; } }));
-            const snaps = run && ctl.snaps?.id === run.id ? ctl.snaps.list : null;
+            const num = (k, label, min, max, step) => h("label", {}, label, h("input", { type: "number", min, max, step, value: (live ? run.config : C)[k], disabled: live, oninput: (e) => { C[k] = +e.target.value; } }));
+            const snaps = ctl.snaps?.list, ds = ctl.ds, V = live ? run.config : C; // a live run shows its own settings, not the next run's
+            const stopped = !live && run ? `Run ${run.id} ${run.status === "done" ? "finished" : run.status}${run.why ? `: ${run.why}` : ""}.` : "";
             return h("section", { class: "sw-train" }, h("h4", {}, "Training run"),
+              h("div", { class: "sw-tblock" }, h("h5", {}, h("b", {}, "1"), "Set the run"),
+              h("p", { class: "sw-dmut" }, "It learns on its own and stops at whichever comes first: the minutes run out, the steps are used up, or curiosity comes down into the target range."),
               h("div", { class: "sw-tcfg" }, num("minutes", "Minutes", 1, 600, 1), num("max_steps", "Steps", 1, 1000, 1), h("label", { class: "sw-trange" }, "Curiosity target",
-                h("span", {}, h("input", { type: "number", min: 0, max: 5, step: 0.05, value: C.lo, disabled: live, "aria-label": "from", oninput: (e) => { C.lo = +e.target.value; } }), "–",
-                  h("input", { type: "number", min: 0, max: 5, step: 0.05, value: C.hi, disabled: live, "aria-label": "to", oninput: (e) => { C.hi = +e.target.value; } })))),
-              h("div", { class: "sw-tdeck" },
+                h("span", {}, h("input", { type: "number", min: 0, max: 5, step: 0.05, value: V.lo, disabled: live, "aria-label": "from", oninput: (e) => { C.lo = +e.target.value; } }), "–",
+                  h("input", { type: "number", min: 0, max: 5, step: 0.05, value: V.hi, disabled: live, "aria-label": "to", oninput: (e) => { C.hi = +e.target.value; } }))))),
+              h("div", { class: "sw-tblock" }, h("h5", {}, h("b", {}, "2"), "Run it"), h("div", { class: "sw-tdeck" },
                 h("button", { type: "button", class: "sw-tplay", "aria-label": !live ? "Start" : run.status === "paused" ? "Resume" : "Pause", disabled: !live && (!!ctl.busy || !d.model?.up),
                   onclick: () => !live ? send("start", { minutes: C.minutes, max_steps: C.max_steps, lo: Math.min(C.lo, C.hi), hi: Math.max(C.lo, C.hi) }) : send(run.status === "paused" ? "resume" : "pause") }, !live || run.status === "paused" ? "▶" : "❚❚"),
                 h("button", { type: "button", class: "sw-tstop", "aria-label": "Stop", disabled: !live, onclick: () => send("stop") }, "■"),
-                h("span", { class: "sw-dmut" }, ctl.busy ? "…" : live ? (run.status === "paused" ? "Paused" : "Learning on its own. Watch it on Story.") : "Ready")),
+                h("span", { class: "sw-dmut" }, ctl.busy ? "…" : live ? (run.status === "paused" ? "Paused" : "Learning on its own. Watch it on Story.") : stopped || "Ready"))),
+              h("div", { class: "sw-tblock" }, h("h5", {}, h("b", {}, "3"), "Results"), !(T.runs || []).length ? h("p", { class: "sw-dmut" }, "No runs yet. Each run keeps checkpoints and a fine-tuning dataset.") : "",
               (T.runs || []).length ? h("ol", { class: "sw-truns" }, ...T.runs.slice(0, 5).map((r) => h("li", {}, h("b", {}, `Run ${r.id}`), h("span", {}, `${r.status} · ${n0(r.snaps)} checkpoints`),
-                h("button", { type: "button", onclick: () => api(`/char/train/${r.id}/snapshots`).then((x) => { ctl.snaps = { id: r.id, list: x.snapshots }; report(true); }) }, "View"),
-                n0(r.examples) ? h("a", { href: `/char/train/${r.id}/dataset.jsonl`, download: "" }, "Dataset") : ""))) : "",
-              snaps ? h("div", { class: "sw-tsnaps" }, ...snaps.map((x) => h("details", {}, h("summary", {}, `Step ${x.step} · ${x.why}`),
+                h("button", { type: "button", "aria-pressed": String(ctl.snaps?.id === r.id), onclick: () => { if (ctl.snaps?.id === r.id) { ctl.snaps = null; return report(true); } api(`/char/train/${r.id}/snapshots`).then((x) => { ctl.snaps = { id: r.id, list: x.snapshots }; ctl.ds = null; report(true); }); } }, "View"),
+                n0(r.examples) ? h("button", { type: "button", "aria-pressed": String(ctl.ds?.id === r.id), onclick: () => { if (ctl.ds?.id === r.id) { ctl.ds = null; return report(true); } fetch(`/char/train/${r.id}/dataset.jsonl`).then((x) => x.text()).then((t) => { ctl.ds = { id: r.id, lines: t.trim().split("\n").filter(Boolean) }; ctl.snaps = null; report(true); }); } }, "Dataset") : ""))) : "",
+              ds ? h("div", { class: "sw-tsnaps" }, h("p", { class: "sw-dmut" }, `Run ${ds.id}: ${ds.lines.length} fine-tuning examples (Claude format, one per line) · `, h("a", { href: `/char/train/${ds.id}/dataset.jsonl`, download: `run-${ds.id}.jsonl`, target: "_blank" }, "Save .jsonl")),
+                ...ds.lines.map((l, i) => { let j = {}; try { j = JSON.parse(l); } catch {} const u = j.messages?.find((m) => m.role === "user")?.content, a = j.messages?.find((m) => m.role === "assistant")?.content;
+                  return h("details", {}, h("summary", {}, `${i + 1}. ${esc(u || "").slice(0, 90)}`), h("p", {}, h("b", {}, "User "), esc(u)), h("p", {}, h("b", {}, "Sagira "), esc(a))); })) : "",
+              snaps ? h("div", { class: "sw-tsnaps" }, h("p", { class: "sw-dmut" }, `Run ${ctl.snaps.id}: ${snaps.length} checkpoints`), ...snaps.map((x) => h("details", {}, h("summary", {}, `Step ${x.step} · ${x.why}`),
                 h("p", {}, esc(x.prompt)), ...[["Works", x.works], ["Fails", x.fails]].map(([t, g]) => h("div", { class: "sw-tgrp" }, h("b", {}, t), ...Object.entries(g || {}).filter(([, v]) => v.length).map(([k, v]) => h("p", {}, h("i", {}, `${k}: `), v.slice(0, 3).map(esc).join(" · "))))),
-                h("p", { class: "sw-dmut" }, `${(x.examples || []).length} examples`)))) : ""); })(),
+                h("p", { class: "sw-dmut" }, `${(x.examples || []).length} examples`)))) : "")); })(),
           h("section", {}, h("h4", {}, "Models"),
             sw?.busy ? h("div", { class: "sw-dswap" }, h("p", {}, `Swapping ${esc(sw.from) || "none"} for ${esc(sw.to)}, ${esc(sw.phase)}`), h("i", { style: `--f:${n0(sw.fraction)}` })) : "",
             !R ? h("p", { class: "sw-dmut" }, "Loading…") : R.error ? h("p", { class: "sw-dmut" }, "Could not read settings.") : h("form", { class: "sw-droles", onsubmit: (e) => { e.preventDefault(); act("save models", () => api("/settings", { method: "PATCH", body: JSON.stringify(R) }).then(() => "models saved")); } },

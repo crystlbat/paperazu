@@ -62,3 +62,23 @@ def test_pause_holds_a_run_and_stop_ends_it(monkeypatch):
     train.RUN["thread"].join(5)
     r = train.status()["runs"][0]
     assert not train.active() and r["status"] == "stopped" and r["why"] == "you stopped it"
+
+
+def test_each_step_logs_every_variable_the_story_charts(monkeypatch):
+    from workbench import char, train
+    d = char.disposition()
+    v = train._vars(d)
+    assert {"fullness", "energy", "wonder", "joy", "calm", "trust"} <= set(v) and all(isinstance(x, (int, float)) for x in v.values())
+
+
+def test_the_dataset_leaves_out_drift_that_only_names_its_game(monkeypatch):
+    import json
+    from workbench import char, train
+    char.update_profile("Sagira From Destiny 2", "You are Sagira, the Ghost of the Warlock Osiris. You studied the Vex with him.", [], "")
+    ex = lambda u, a: {"user": u, "assistant": a, "system": "s"}
+    monkeypatch.setattr(train, "snapshots", lambda run_id: [{"examples": [
+        ex("Tell me about Osiris.", "He was a Warlock."),
+        ex("What is the political landscape?", "Fans of Destiny 2 reacted to a White House post."),
+        ex("Who or what is Panoptes?", "A Vex mind that Osiris and his Ghost fought, in Destiny.")]}])
+    asked = [json.loads(l)["messages"][0]["content"] for l in train.dataset(1).splitlines()]
+    assert asked == ["Tell me about Osiris.", "Who or what is Panoptes?"]
