@@ -471,13 +471,22 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       const plan = (d.trace || []).find((t) => t.kind === "plan" && t.outcome === "ok");
       name.textContent = d.who || "";
       const fill = (n, title, sub, ...live) => { S[n].want = title; if (!S[n].busy && S[n].t.textContent !== title) S[n].t.textContent = title; S[n].sub.replaceChildren(...sub); S[n].live.replaceChildren(...live); };
-      fill(0, `${who}.`, [`The mind under the dot. It plans, asks, reads and checks itself, and it lives in ${world}.`], h("p", { class: "st-now" }, h("i"), `${d.mode || "idle"} · ${n0(d.totals?.ok)} of ${n0(d.totals?.steps)} steps did something`));
-      fill(1, "The dot is just a body.", [`Open it up and there are four systems inside that make it ${who}.`],
-        h("ul", { class: "st-key" }, ...[[2, "S2 plans"], [1, "S1 asks"], [0, "S0 reads"], [3, "V checks"]].map(([n, t]) => h("li", { style: `--c:${SC[n]}` }, h("i"), t))));
-      fill(2, "A planner.", ["S2 decides what to learn next. It has written ", b(L.plans), " plan lines."], plan ? h("p", { class: "st-quote" }, `“${esc(plan.detail).slice(0, 160)}”`) : "", tag(2, loop));
-      fill(3, "Questions.", ["S1 turns each plan into questions. ", b(L.questions), " asked, ", b(L.answered), " answered."], tag(1, loop));
-      fill(4, "Hands.", ["S0 looks each question up on the web and writes a note. ", b(L.notes), " notes so far."], tag(0, loop));
-      fill(5, "A gate.", ["The Verifier reads every note before it is kept. ", b(L.verified), " let in, ", b(L.rejected), " turned away."], tag(3, loop));
+      // every slide shows what is true right now (real items from the report), not a description of the machine
+      const rows = (items, empty) => items.length ? h("ol", { class: "st-rows" }, ...items.map(([k, v, c]) => h("li", c ? { style: `--c:${c}` } : {}, h("span", {}, k), h("b", {}, esc(String(v)).slice(0, 120))))) : h("p", { class: "st-empty" }, empty);
+      const T = d.totals || {}, HL = d.harness_loop || {}, cyc = d.cycles?.[0], skips = {};
+      for (const t of d.trace || []) if (t.outcome === "skipped" && t.kind !== "cycle") skips[t.detail] = (skips[t.detail] || 0) + 1;
+      const stuck = Object.entries(skips).sort((a, b) => b[1] - a[1])[0], notes = d.notes || [], kept = notes.filter((x) => x.verdict === "keep"), dropped = notes.filter((x) => x.verdict === "drop");
+      fill(0, `${who}.`, [b(T.steps), " steps since ", local(d.since), ". ", b(T.ok), " did something, ", b(T.skipped), " found nothing to do."],
+        rows([["curiosity", r2(d.disposition?.curiosity)], ["cycles", `${n0(HL.cycles_run)} · ${n0(HL.executed)} of ${n0(HL.proposed)} proposed steps ran`], stuck ? ["mostly stuck on", `${stuck[0]} (${stuck[1]}×)`, "#ffe600"] : null].filter(Boolean)));
+      fill(1, "The dot is just a body.", ["Four systems inside it. What each is doing now:"],
+        rows([[2, "S2 plans"], [1, "S1 asks"], [0, "S0 reads"], [3, "V checks"]].map(([n, t]) => { const s = loop.find((x) => x.system === n), stt = s ? stageOf(s).state : ["idle", ""]; return [t, D.now?.sys === n ? `working: ${DOING[D.now.kind] || D.now.kind}` : stt[1] || stt[0], SC[n]]; })));
+      fill(2, "A planner.", ["Its last plan, cycle ", b(cyc?.cycle), ": ", b(cyc?.proposed?.length), " proposed, ", b(cyc?.rejected?.length), " rejected."],
+        rows([...(cyc?.executed || []).map((x) => [x.outcome, `${x.cmd.split(" ")[0]}: ${x.detail}`]), ...(cyc?.rejected || []).map((x) => ["rejected", `${x.cmd}: ${x.why}`])], plan ? `“${esc(plan.detail).slice(0, 160)}”` : "No plan yet."), tag(2, loop));
+      fill(3, "Questions.", [b(L.questions), " asked, ", b(L.answered), " answered, ", b(d.letter?.open), " still open:"],
+        rows((d.letter?.items || []).filter((x) => x.kind === "question").slice(0, 4).map((x) => ["open", x.ask]), "Nothing open."), tag(1, loop));
+      fill(4, "Hands.", [b(L.notes), " notes written. The newest:"], rows(notes.slice(0, 4).map((x) => [x.verdict, `${x.topic} — ${x.text}`]), "No notes yet."), tag(0, loop));
+      fill(5, "A gate.", [b(L.verified), " let in, ", b(L.rejected), " turned away. Last decisions:"],
+        rows([...dropped.slice(0, 2).map((x) => ["dropped", `${x.topic} — ${x.text}`, "#ff6b6b"]), ...kept.slice(0, 2).map((x) => ["kept", x.topic, "#7dffa8"])], "Nothing judged yet."), tag(3, loop));
       fill(6, "A memory that sleeps.", ["At the end of every run it sleeps: it keeps the newest ", b(24), " open questions about its world and lets the rest go. ", b(d.letter?.let_go), " let go so far, ", b(d.letter?.open), " open now."],
         d.letter?.items?.length ? h("button", { type: "button", class: "pn-link", onclick: () => go("letter") }, `what is left becomes your letter (${d.letter.items.length}) →`) : "");
       S[7].want = "Set it running."; if (!S[7].busy) S[7].t.textContent = S[7].want; S[7].sub.replaceChildren("It learns on its own and stops when the minutes or the steps run out, or when curiosity settles in the target.");

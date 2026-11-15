@@ -1207,6 +1207,11 @@ body:has(#view.page-space, #view.page-char, #view.page-verse) .buddy { display: 
 .st-now { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: .04em; color: rgb(255 255 255 / .6); }
 .st-now i { width: 7px; height: 7px; border-radius: 50%; background: #3f3f46; flex: none; } .st-now[data-live] { color: #fff; } .st-now[data-live] i { background: var(--sig); animation: pn-beat 1.8s ease-in-out infinite; }
 .st-quote { margin: 0; max-width: 46ch; font-size: 13px; line-height: 1.55; color: rgb(255 255 255 / .7); border-left: 1px solid var(--sig); padding-left: 12px; }
+.st-rows { list-style: none; margin: 0; padding: 0; max-width: 52ch; border-top: 1px solid rgb(255 255 255 / .16); }
+.st-rows li { display: grid; grid-template-columns: 11ch 1fr; gap: 14px; padding: 9px 0; border-bottom: 1px solid rgb(255 255 255 / .16); font-size: 13px; line-height: 1.45; }
+.st-rows span { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--c, rgb(255 255 255 / .5)); padding-top: 2px; }
+.st-rows b { font: 400 13px/1.45 var(--mono, ui-monospace, monospace); color: #fff; overflow-wrap: anywhere; }
+.st-empty { margin: 0; font-size: 13px; color: rgb(255 255 255 / .5); }
 .st-key { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, auto); gap: 8px 28px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
 .st-key li { display: flex; align-items: center; gap: 8px; } .st-key i { width: 14px; height: 2px; background: var(--c); box-shadow: 0 0 8px var(--c); }
 .st-rail { display: flex; gap: 6px; } .st-rail i { width: 28px; height: 1px; background: rgb(255 255 255 / .2); transition: background .4s; } .st-rail i[data-on] { background: #fff; }
@@ -1233,9 +1238,9 @@ body:has(.st) .sp-ear { position: fixed; z-index: 70; }
 .st-stage { position: sticky; top: 0; height: 100vh; height: 100dvh; overflow: hidden; background-image: radial-gradient(rgb(255 255 255 / .045) 1px, transparent 1.2px); background-size: 5px 5px; } /* a fine dither under the lines */
 .st-cv { position: absolute; inset: 0 0 0 30%; width: 70%; height: 100%; display: block; }
 .st-left { position: relative; z-index: 1; margin-top: -100vh; margin-top: -100dvh; pointer-events: none; }
-.st-slide { height: 100vh; height: 100dvh; box-sizing: border-box; padding: 0 clamp(20px, 3vw, 48px); max-width: min(46vw, 640px); display: flex; flex-direction: column; justify-content: center; scroll-snap-align: start; opacity: .15; transition: opacity .6s; }
+.st-slide { min-height: 100vh; min-height: 100dvh; box-sizing: border-box; padding: 96px clamp(20px, 3vw, 48px) 128px; max-width: min(46vw, 640px); display: flex; flex-direction: column; justify-content: center; scroll-snap-align: start; opacity: .15; transition: opacity .6s; }
 .st-slide > * { pointer-events: auto; } .st-slide[data-on] { opacity: 1; }
-.st .st-h { font-size: clamp(44px, 6.4vw, 108px); }
+.st .st-h { font-size: clamp(36px, 4.8vw, 84px); }
 .st-bar { position: fixed; z-index: 3; inset: 0 0 auto; height: 64px; padding: 0 clamp(20px, 3vw, 48px); display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; pointer-events: none; }
 .st-bar > * { pointer-events: auto; } .st-bar > :last-child { justify-self: end; }
 .st-name { color: rgb(255 255 255 / .75); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
