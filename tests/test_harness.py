@@ -64,7 +64,7 @@ def test_a_skipped_command_stays_off_the_plan_until_something_new_comes_in():
     assert "tune" not in harness.stale()
 
 
-def test_stuck_it_names_the_wall_tries_a_way_out_and_then_asks_for_you(monkeypatch):
+def test_stuck_it_names_the_wall_tries_a_way_out_and_then_rests_without_you(monkeypatch):
     calls = _models(monkeypatch, "{{ not a command")  # a planner that gives it nothing to run
     r = harness.cycle()
     me = r["self"]
@@ -73,7 +73,7 @@ def test_stuck_it_names_the_wall_tries_a_way_out_and_then_asks_for_you(monkeypat
     assert "what it noticed about itself last cycle: I keep hitting" in harness.prompt()[1]["content"]
     for _ in range(len(harness.UNSTICK) + 2):  # each way out is tried, goes stale or is skipped as tried, until none is left
         r = harness.cycle()
-    assert r["self"]["need_you"] and r["self"]["try"] == "" and "I need something new from you" in r["self"]["said"]
+    assert r["self"]["spent"] and r["self"]["try"] == "" and "I will rest until something new comes in" in r["self"]["said"]
     assert _sheet("Stuck: %")
 
 

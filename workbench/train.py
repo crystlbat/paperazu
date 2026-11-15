@@ -74,15 +74,18 @@ def snapshot(run_id: int, step: int, why: str) -> dict[str, Any]:
     tones = [json.loads(r["content"]) for r in _rows("Tone tried: %", start)]
     guesses = [(int(r["title"].removeprefix("Guess: ")), *r["content"].split("|", 1)) for r in _rows("Guess: %", start) if "|" in r["content"] and r["title"].removeprefix("Guess: ").isdigit()]
     asks = [json.loads(r["content"]) for r in _rows("A%: %", start) if r["title"].startswith(("Asking: ", "Answered: "))]
+    specs = char.speculations()
     topic = lambda i: notes[i]["title"].removeprefix("Reflection: ") if i in notes else str(i)
     works = {"notes let in": [topic(i) for i, v in checked.items() if v == "keep"],
              "replies passed": [t["text"][:200] for t in turns if t["role"] == "dot" and reviewed.get(t["id"]) == "ok"],
              "tones that met its traits": [t["tone"][:300] for t in tones if t.get("met")],
-             "guesses that came out right": [f"{topic(i)}: {g[:160]}" for i, s, g in guesses if float(s) < 0.3]}
+             "guesses that came out right": [f"{topic(i)}: {g[:160]}" for i, s, g in guesses if float(s) < 0.3],
+             "speculations that held up": [f"{x['question']}: {x['guess'][:160]}" for x in specs if x["held"]]}
     fails = {"notes turned away": [topic(i) for i, v in checked.items() if v == "drop"],
              "mistakes": [f"asked {a.get('asked', '')[:120]!r}, said {a.get('said', '')[:160]!r}: {a.get('why', '')}" for a in asks],
              "tones that missed": [f"{t.get('why', '')}: {t['tone'][:200]}" for t in tones if not t.get("met")],
-             "guesses far off": [f"{topic(i)}: {g[:160]} ({round(float(s) * 100)}% off)" for i, s, g in guesses if float(s) >= 0.5]}
+             "guesses far off": [f"{topic(i)}: {g[:160]} ({round(float(s) * 100)}% off)" for i, s, g in guesses if float(s) >= 0.5],
+             "speculations filtered out": [f"{x['question']}: {x['guess'][:160]} ({round(x['surprise'] * 100)}% off)" for x in specs if not x["held"]]}
     examples = []
     for i, t in enumerate(turns):  # what it said well: a reply the Verifier passed, with what you asked
         if t["role"] == "dot" and reviewed.get(t["id"]) == "ok" and i and turns[i - 1]["role"] == "user":
@@ -90,6 +93,9 @@ def snapshot(run_id: int, step: int, why: str) -> dict[str, Any]:
     for t in tones:  # a better reply the tune step wrote and scored as meeting every trait
         if t.get("met") and t.get("trial") and t.get("asked"):
             examples.append({"kind": "tuned", "user": t["asked"], "assistant": t["trial"]})
+    for x in specs:  # a guess it made on its own that the web then backed: only those under the keep line are taught
+        if x["held"]:
+            examples.append({"kind": "speculation", "user": x["question"], "assistant": x["guess"]})
     for i, v in checked.items():  # what it knows: a question it asked itself, answered by a note its Verifier let in
         if v == "keep" and i in notes and notes[i]["source"] == "reflection":
             q = topic(i)
@@ -123,7 +129,7 @@ def _one_step() -> tuple[str, str]:
             return "skipped", "stopped while waiting its turn"
         c = harness.cycle(force=True, wait=5)
         did = [x for x in c.get("executed", []) if x.get("outcome") == "ok"]
-        if not did and c.get("self", {}).get("need_you"):  # it saw for itself there is nothing left to try alone
+        if not did and c.get("self", {}).get("spent"):  # it saw for itself there is nothing left to try
             return "stuck", c["self"]["said"]
         return ("ok" if did else "skipped"), " · ".join(x["cmd"] for x in did) or "cycle did nothing"
     r = char.rest(True, None, force=True)

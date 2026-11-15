@@ -802,6 +802,25 @@ def _open_questions(since: int = 0) -> list[str]:
     return [q for q in qs if f"Reflection: {q}"[:80] not in done]
 
 
+def speculations() -> list[dict[str, Any]]:
+    """Its checked speculations, newest first: what it guessed, the question that checked it, how far off it was, and whether it held."""
+    con = db.connect()
+    rows = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Speculated: %' AND id > ? ORDER BY id DESC", (_start(),)).fetchall()
+    con.close()
+    return [json.loads(r["content"]) for r in rows]
+
+
+def _speculated(q: str) -> str:
+    """The guess a speculation made before it asked q, so the look-up scores the speculation itself."""
+    con = db.connect()
+    r = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Speculation: %' AND content LIKE ? AND id > ? ORDER BY id DESC LIMIT 1", (f'%"question": {json.dumps(q)}%', _start())).fetchone()
+    con.close()
+    return json.loads(r["content"]).get("guess", "") if r else ""
+
+
+SPECULATE = re.compile(r"(?is)guess:\s*(.+?)\s*question:\s*(.+)")
+
+
 def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
     """One look-up while asleep: the first topic not yet reflected on (or the one named), searched, noted, saved."""
     if on_char:
@@ -830,8 +849,8 @@ def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
         return {"done": True, "topic": "", "note": "", "left": 0}
     topic = todo[0]
     # curiosity as guess and correction: it commits to an answer before looking, and the gap between guess and find is the surprise
-    guess = ""
-    if on_char and topic.endswith("?"):  # the guess sees its world and its nearest notes, so a miss is a real gap, not a blank mind (lower surprise is better: target SURPRISE_TARGET)
+    guess = _speculated(topic) if on_char else ""
+    if on_char and topic.endswith("?") and not guess:  # the guess sees its world and its nearest notes, so a miss is a real gap, not a blank mind (lower surprise is better: target SURPRISE_TARGET)
         known = "\n".join(f"- {r['title'].removeprefix('Reflection: ')}: {_clean(r['content'], 220)}" for r in recall(topic, 3)[0])
         guess = _clean(_ask("Answer in one short sentence from what you already know about your world. Use its own names and terms. If unsure, guess.",
                             f"Your world:\n{get_profile()['persona'][:600]}\nWhat you have read so far:\n{known or '- (nothing yet)'}\nQuestion: {topic}", 40), 200)
@@ -868,6 +887,9 @@ def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
         sur = _surprise(guess, note)
         add_memory(f"Guess: {saved['id']}", f"{sur:.2f}|{guess}", source="sheet")
         out |= {"guess": guess, "surprise": sur}
+        if on_char and guess == _speculated(topic):  # a speculation checked: kept if what it found backs it, filtered out if not
+            out["held"] = sur < SPECULATION_KEEP
+            add_memory(f"Speculated: {saved['id']}", json.dumps({"question": topic, "guess": guess, "surprise": sur, "held": out["held"]}), source="sheet")
     return out
 
 
@@ -903,6 +925,7 @@ def _intake(i: int, who: str, topic: str, note: str, lines: list[str]) -> bool |
 
 
 SURPRISE_TARGET = 0.1  # the share of a guess the search does not back; lower is better
+SPECULATION_KEEP = 0.3  # a speculation whose surprise is under this held up and is kept; the same line training calls "came out right"
 
 
 def _surprise(guess: str, found: str) -> float:
@@ -940,7 +963,7 @@ def self_model(text: str | None = None) -> dict[str, Any]:
     return out
 
 
-EXPLORES = ("reflect", "wonder", "ask", "plan", "goal", "fold")  # the steps that reach outward: the ones the brake holds
+EXPLORES = ("reflect", "wonder", "speculate", "ask", "plan", "goal", "fold")  # the steps that reach outward: the ones the brake holds
 LAYERS = ("plan", "question", "note", "name")  # the mesh layers the frontier walks, top to bottom
 BAKE_EVERY = 4  # answers between two consolidations
 
@@ -1173,7 +1196,7 @@ PROMPTS: deque[dict[str, Any]] = deque(maxlen=40)  # shortcut: the prompt log li
 # S2 thinks (writes a plan), S1 turns the plan and the names it knows into goals (questions, its own sheet), S0 just executes (search, note, names, voice).
 SYSTEMS: dict[int, tuple[str, str, tuple[str, ...]]] = {
     2: ("Plan", "Thinks about what the character should learn next and writes a short plan, and consolidates what it has answered so far, and writes its study journal.", ("plan", "bake", "journal")),
-    1: ("Goals", "Turns the plan and the names it knows into questions to answer, and fills in its own sheet.", ("goal", "ask", "wonder", "fill", "want")),
+    1: ("Goals", "Turns the plan and the names it knows into questions to answer, and fills in its own sheet.", ("goal", "ask", "wonder", "speculate", "fill", "want")),
     0: ("Execute", "Just does the work: looks a question up, writes the note, pulls out names and ideas from notes and from your chat, practises its voice.", ("reflect", "extract", "ideas", "practise", "sort", "fold")),
     3: ("Verify", "Watches the other three: picks the next step from everything that could run, checks each new note, and proposes a prompt fix when a system keeps slipping.", ("check", "review", "tune")),
 }
@@ -1444,7 +1467,7 @@ def _felt(kind: str, got: tuple[str, str]) -> None:
         con.close()
         sur = float(g["content"].split("|")[0]) if g else 0.5
         d |= {"joy": 0.1} if sur < 0.3 else {"joy": -0.05, "wonder": 0.05} if sur >= 0.5 else {}
-    elif kind in ("wonder", "ask", "plan", "goal"):
+    elif kind in ("wonder", "speculate", "ask", "plan", "goal"):
         d["wonder"] = 0.1
     elif kind == "check" and got[1].startswith("rejected"):
         d["calm"] = -0.1
@@ -1561,10 +1584,10 @@ def trust() -> dict[str, Any]:
     return {"kept": kept, "n": len(rows), "value": value, "trusted": len(rows) >= TRUST_AFTER and value >= HIGH}
 
 
-TOOL_MAKES = {"plan": ("plan", None), "goal": ("question", None), "ask": ("question", None), "wonder": ("question", None), "reflect": ("note", None),
+TOOL_MAKES = {"plan": ("plan", None), "goal": ("question", None), "ask": ("question", None), "wonder": ("question", None), "speculate": ("question", None), "reflect": ("note", None),
               "check": ("note", None), "extract": ("name", "name"), "ideas": ("name", "idea"), "fold": ("name", None), "reply": ("chat", "it"), "review": ("chat", "it"), "tune": ("trait", None)}
 TOOL_FLOW = [("plan", "goal"), ("goal", "reflect"), ("ask", "reflect"), ("wonder", "reflect"), ("want", "reflect"), ("reflect", "check"), ("reflect", "extract"),
-             ("extract", "ideas"), ("extract", "fold"), ("check", "journal"), ("reply", "review"), ("review", "tune"), ("bake", "plan")]  # which step feeds which
+             ("extract", "ideas"), ("extract", "fold"), ("fold", "speculate"), ("speculate", "reflect"), ("check", "journal"), ("reply", "review"), ("review", "tune"), ("bake", "plan")]  # which step feeds which
 
 
 def prompt_now() -> str:
@@ -1637,7 +1660,7 @@ def _choose(kinds: tuple[str, ...]) -> tuple[tuple[str, ...], str]:
     got = [float(r["content"].split("|")[0]) for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Guess: %' AND id > ? ORDER BY id DESC LIMIT 5", (_start(),))]
     con.close()
     sur = sum(got) / len(got) if got else 0.5
-    order = ("check", "review", "tune", "sort", "extract", "bake", "journal", "want", "reflect", "goal", "ask", "plan", "fold", "ideas", "wonder", "fill", "practise") if sur >= 0.3 else ("check", "review", "tune", "sort", "extract", "bake", "journal", "want", "goal", "ask", "plan", "reflect", "ideas", "wonder", "fill", "practise")
+    order = ("check", "review", "tune", "sort", "extract", "bake", "journal", "want", "reflect", "goal", "ask", "plan", "fold", "ideas", "wonder", "fill", "practise") if sur >= 0.3 else ("check", "review", "tune", "sort", "extract", "bake", "journal", "want", "goal", "ask", "plan", "reflect", "ideas", "wonder", "fill", "practise")  # speculate is not in the idle rotation: it runs when the harness sees it is stuck, or the planner picks it
     first = ("check", "review")  # verify before building on a note, always
     waited = [k for k in order if k not in first and TRIED["n"] - TRIED.get(k, -STARVE) >= STARVE]  # starved: at the end of the line too long, it gets a turn
     n = needs()
@@ -1657,7 +1680,7 @@ class _Trace(deque):
 TRACE: deque[dict[str, Any]] = _Trace(maxlen=60)  # shortcut: the run log lives in memory like PROMPTS; a restart clears it
 NOW: dict[str, Any] = {}  # the engine at work this moment, {"sys", "kind"}: what a training run samples into its system lanes
 ENGINES: dict[str, dict[str, Any]] = {}  # kind -> what it did the last time it was tried, for /char/engines; in memory like TRACE
-ENGINE_ORDER = ("plan", "goal", "ask", "wonder", "fill", "want", "reflect", "extract", "ideas", "practise", "sort", "fold", "evaluate", "check", "review", "tune", "bake", "journal", "reply", "correction", "persona", "model", "cycle")
+ENGINE_ORDER = ("plan", "goal", "ask", "wonder", "speculate", "fill", "want", "reflect", "extract", "ideas", "practise", "sort", "fold", "evaluate", "check", "review", "tune", "bake", "journal", "reply", "correction", "persona", "model", "cycle")
 NO_MODEL = ("bake", "correction")  # the engines that never call the model
 _sys: int | None = None  # the system whose step is running, so its prompts are filed under it
 _failed = ""  # set by _ask when the model call failed or said nothing, so a step that did nothing can tell "model failed" from "nothing to do"
@@ -1884,7 +1907,7 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
         d = disposition()  # curiosity is the brake: at 0 it stops reaching outward, but still reads your chat and checks its own work. A character that knows no names yet is not braked: it has to start somewhere
         braked = not force and (d["nE"] > 0 or d["dial"] == 0) and d["curiosity"] <= 0
     off = systems_off()
-    kinds = tuple(k for k in ("reflect", "wonder", "fill", "practise", "extract", "ideas", "ask", "plan", "goal", "check", "review", "tune", "sort", "fold", "bake", "journal", "want") if SYS_OF[k] not in off and not (braked and k in EXPLORES)) or ("check",)
+    kinds = tuple(k for k in ("reflect", "wonder", "speculate", "fill", "practise", "extract", "ideas", "ask", "plan", "goal", "check", "review", "tune", "sort", "fold", "bake", "journal", "want") if SYS_OF[k] not in off and not (braked and k in EXPLORES)) or ("check",)
     for k in SYS_OF:
         if k not in kinds:
             _engine(k, "blocked", _blocked(k, off, braked, False))
@@ -2159,6 +2182,29 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
                 con.execute("UPDATE char_vars SET value = MIN(max_val, value + 0.5) WHERE name = 'curiosity'")
             con.close()
             return "a question", q
+        if kind == "speculate":  # on its own: a guess from what it has compressed (summaries, else its newest notes), and the question that would prove it right or wrong
+            done = {r["title"].removeprefix("Speculation: ") for r in titles("source = 'sheet' AND title LIKE 'Speculation: %' AND id > ?", (since,))}
+            src = next((r for r in [*titles("source = 'summary' AND id > ?", (since,))[::-1], *titles("source = 'reflection' AND id > ?", (since,))] if str(r["id"]) not in done), None)
+            if not src:
+                return no("nothing it knows is left to speculate on")
+            if (k := len(_open_questions(since))) >= 3:
+                return no(f"{k} questions already open")
+            who = get_profile()["name"]
+            got = SPECULATE.search(_ask(f"You are {who}. From what you know below, speculate: make one bold guess about something it does not say, then write the one question whose answer would prove the guess right or wrong. "
+                                        "Two lines exactly:\nGuess: <one sentence>\nQuestion: <one short question starting with Who, What, Where, When, Why or How>" + _fix("speculate"),
+                                        f"{src['title']}\n{src['content'][:1500]}", 90))
+            guess, q = (_clean(got[1], 200), _clean(got[2], 101).rstrip("?").strip()) if got else ("", "")
+            if not guess or len(q) > 99 or not re.match(r"(?i)(?:who|what|where|when|why|how|which)\b.{6}", q) or not on_world(q + " " + guess):
+                _fail("speculate")
+                add_memory(f"Speculation: {src['id']}", json.dumps({"from": src["title"], "unusable": True}), source="sheet")  # move on to the next node, not retry this one forever
+                return no("the speculation was unusable or off its world")
+            q += "?"
+            if q.lower() in {r["content"].split(" (from")[0].lower() for r in titles("source = 'question' AND id > ?", (since,))}:
+                add_memory(f"Speculation: {src['id']}", json.dumps({"from": src["title"], "repeat": q}), source="sheet")
+                return no("that question was asked before")
+            add_memory(f"Speculation: {src['id']}", json.dumps({"from": src["title"], "guess": guess, "question": q}), source="sheet")
+            add_memory(f"Question: {q}"[:80], f"{q} (from {src['id']})", source="question")
+            return src["title"].split(": ", 1)[-1], f"guess: {guess} · to check: {q}"
         if not me:
             return no("no character yet")
         who = me["who"]
@@ -2207,8 +2253,9 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
     elif n is None and on_char and 3 not in off:  # no step named: the Verifier decides
         order, why = _choose(kinds)
     else:
-        start = (len(TRACE) if n is None else n) % len(kinds)
-        order, why = kinds[start:] + kinds[:start], ""
+        turn = tuple(k for k in kinds if k != "speculate") or kinds  # speculate runs when it is stuck, not in turn
+        start = (len(TRACE) if n is None else n) % len(turn)
+        order, why = turn[start:] + turn[:start], ""
     if on_char and not only and "reflect" in kinds and _var("asleep", 0) == 1:  # asleep, it learns the way you told it to grow before any housekeeping
         order = ("reflect",) + tuple(k for k in order if k != "reflect")
     tried: list[str] = []

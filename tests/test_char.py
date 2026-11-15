@@ -1561,3 +1561,45 @@ def test_sleep_keeps_the_newest_24_open_questions(monkeypatch):
     assert char.prune_questions() == 6
     assert char._open_questions(0)[0] == "Where is place 6?" and len(char._open_questions(0)) == 24
     assert char.letter()["let_go"] == 6
+
+
+def _speculate_mocks(monkeypatch, found: str):
+    from workbench import websearch
+    monkeypatch.setattr(websearch, "search", lambda s, q: {"results": [{"title": "T", "url": "u", "snippet": found}]})
+    def complete(s, messages, **kw):
+        if "speculate" in messages[0]["content"]:
+            return "Guess: Osiris hides the Book of Thoth inside the Infinite Forest.\nQuestion: Where does Osiris hide the Book of Thoth?"
+        return found  # the note reflect writes says what the search found
+    monkeypatch.setattr(jobs, "complete", complete)
+
+
+@pytest.mark.parametrize("found, held", [("Osiris hides the Book of Thoth inside the Infinite Forest.", True), ("Panoptes guards the Mercury gardens.", False)])
+def test_it_speculates_from_a_summary_checks_the_guess_and_keeps_it_only_when_it_holds(monkeypatch, found, held):
+    from workbench import train
+    _speculate_mocks(monkeypatch, found)
+    char.update_profile("Sagira", "You are Sagira, in a world of Osiris, Thoth and the Infinite Forest.", [], "")
+    char.add_memory("Resting: char Sagira", "0", source="sheet")
+    monkeypatch.setattr(char, "on_world", lambda *a, **k: True)
+    char.add_memory("Summary: Osiris", "Osiris is a Warlock. He studies the Vex. He found the Infinite Forest.", source="summary")
+    r = char.rest(True, only="speculate")
+    q = "Where does Osiris hide the Book of Thoth?"
+    assert r["kind"] == "speculate" and q in r["note"] and q in char._open_questions(char._start())
+    out = char.reflect(True, q)
+    assert out["guess"].startswith("Osiris hides") and out["held"] is held  # its own guess is what the look-up scores, no second guess call
+    sp = char.speculations()
+    assert [(x["question"], x["held"]) for x in sp] == [(q, held)]
+    assert char.rest(True, only="speculate")["done"] or char.ENGINES["speculate"]["outcome"] == "skipped"  # the summary is spent; the new note is next, not the same node twice
+    data = train.snapshot(0, 0, "test")
+    assert ({"kind": "speculation", "user": q, "assistant": out["guess"]} in [{k: e[k] for k in ("kind", "user", "assistant")} for e in data["examples"]]) is held
+    assert bool(data["works"]["speculations that held up"]) is held and bool(data["fails"]["speculations filtered out"]) is not held
+
+
+def test_an_unusable_speculation_moves_on_instead_of_retrying_the_same_node(monkeypatch):
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: "I am not sure.")
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    char.add_memory("Resting: char Sagira", "0", source="sheet")
+    char.add_memory("Summary: Osiris", "Osiris is a Warlock.", source="summary")
+    char.rest(True, only="speculate")
+    assert char.ENGINES["speculate"]["detail"] == "the speculation was unusable or off its world"
+    char.rest(True, only="speculate")
+    assert char.ENGINES["speculate"]["detail"] == "nothing it knows is left to speculate on"

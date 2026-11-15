@@ -14,6 +14,7 @@ DOES = {"plan": "write a short research plan (three topics) from what it has rea
         "goal": "turn the oldest open plan line into one question",
         "ask": "turn names in the graph into new questions",
         "wonder": "ask one follow-up question about the newest note",
+        "speculate": "guess something its summaries and notes do not say, and ask the question that would prove the guess right or wrong",
         "fill": "fill one empty slot of its sheet (world, what it calls you, catchphrase)",
         "reflect": "look a topic up on the web and write a note (default: the first open question)",
         "extract": "read the newest note for names",
@@ -58,7 +59,7 @@ def stale() -> set[str]:
 
 
 STUCK_AFTER = 3  # cycles in a row that kept nothing: it is going round in circles
-UNSTICK = ("goal", "plan", "ask", "wonder", "extract", "want")  # the steps that make new work, in the order it tries them; want asks you
+UNSTICK = ("goal", "plan", "ask", "wonder", "speculate", "extract")  # the steps that make new work on its own, in the order it tries them; none waits on you
 
 
 def notice(n: int, plan: list[dict[str, Any]], rejected: list[dict[str, str]], force: bool = False) -> dict[str, Any]:
@@ -82,8 +83,8 @@ def notice(n: int, plan: list[dict[str, Any]], rejected: list[dict[str, str]], f
     idle, have = stale(), {p["name"] for p in plan}
     nxt = next((k for k in UNSTICK if k not in idle and not blocked.get(k) and k not in have and k not in tried), "")
     said = (f"I keep hitting the same wall ({on}). " +
-            (f"So I will {DOES[nxt]} instead." if nxt else "I have nothing left to try on my own. I need something new from you: a question, a source, or a chat."))
-    me = {"stuck": True, "on": on, "try": nxt, "said": said, "need_you": not nxt}
+            (f"So I will {DOES[nxt]} instead." if nxt else "I have speculated on everything I know and asked what would check it. I will rest until something new comes in."))
+    me = {"stuck": True, "on": on, "try": nxt, "said": said, "spent": not nxt}
     char.add_memory(f"Stuck: {n}", json.dumps(me), source="sheet")
     return me
 
@@ -110,6 +111,8 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
     useful = [f'reflect "{qs[0]}"' for qs in [char._open_questions(char._start())] if qs] + \
              [f"check {u[0]['id']}" for u in [_unchecked()] if u]
     state.append("most useful now: " + ("; ".join(useful) or "plan, then goal, to make new questions"))
+    if sp := char.speculations():
+        state.append(f"its speculations: {sum(x['held'] for x in sp)} of {len(sp)} held up when checked" + "".join(f"; held: {x['guess'][:90]}" for x in sp if x["held"])[:400])
     if (last := cycles(1)) and last[0].get("self", {}).get("stuck"):
         state.append("what it noticed about itself last cycle: " + last[0]["self"]["said"])
     return [{"role": "system", "content": f"You plan the next steps of {who}'s learning. Pick at most {budget} commands from the catalogue. "
