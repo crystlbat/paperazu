@@ -158,7 +158,10 @@ def find(paper_id: str, heading: str, page: int) -> dict[str, Any] | None:
     fig = re.match(r"^\s*(fig(?:ure)?\.?|table)\s*(\d+)", heading, re.I)
     if fig:  # a figure stage: its caption, a few lines in one column
         word = "table" if fig.group(1).lower() == "table" else "fig"
-        at = next((i for i, r in enumerate(rows) if r["page"] >= page and re.match(rf"^{word}\w*\.?\s*{fig.group(2)}\b", r["text"], re.I)), None)
+        name = rf"^{word}\w*\.?\s*{fig.group(2)}"
+        # the caption ("Figure 4:") first; a sentence that starts "Fig. 4. We plot" only when there is no caption
+        at = next((i for pat in (name + r"\s*:", name + r"\b") for i, r in enumerate(rows)
+                   if r["page"] >= page and re.match(pat, r["text"], re.I)), None)
         if at is None:
             return None
         h = rows[at]

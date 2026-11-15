@@ -1,0 +1,498 @@
+"use strict";
+// ---------- /char as a 3D web: Dot is a sphere, what it knows is a mesh of neurons round it, its variables orbit close in ----------
+// Everything the learning loop does is something you can watch here. Near things are big and labelled, far things small and dim;
+// drag (or arrow keys) to turn. space.js owns the chat, the model calls and the modals; this file only draws and reports clicks.
+function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
+  root.classList.add("sp-web");
+  const cv = h("canvas", { class: "sw-cv", tabindex: "0", "aria-label": "The web of what it knows. Drag or use the arrow keys to turn. Click a labelled node for detail." }), g = cv.getContext("2d");
+  const lamps = h("span", { class: "sw-lamps", "aria-hidden": "true" }, ...[[2, "S2"], [1, "S1"], [0, "S0"], [3, "V"]].map(([id, t]) => h("span", { "data-s": id }, h("i", {}), t)));
+  const who = h("b", {}, "…"), modes = h("span", { class: "sw-modes", role: "radiogroup", "aria-label": "Mode" });
+  const status = h("p", { class: "sw-now", "aria-live": "polite" }), tower = h("div", { class: "sw-tower", "aria-label": "Telemetry: its variables over time" }), steps = h("div", { class: "sw-eng", "aria-label": "Engine status" }), facts = h("div", { class: "sw-facts" });
+  const hint = h("p", { class: "sw-hint" }), modeChip = h("span", { class: "sw-mode" });
+  const TINTS = ["#6ff7ff", "#ffe347", "#ff7ab6", "#7dffa8", "#b49cff", "#ff8f6b"]; // its colour: pick one when you meet it, change it any time
+  const tints = h("span", { class: "sw-tints", role: "group", "aria-label": "Its colour" }, ...TINTS.map((c) => h("button", { type: "button", style: `--c:${c}`, "aria-label": `Colour ${c}`, title: "Change its colour",
+    "aria-pressed": "false", onclick: async () => { try { await api("/char/tint", { method: "POST", body: JSON.stringify({ tint: c }) }); } catch { return; } tint = c; markTint(); reload(); } })));
+  const cur = h("span", { class: "sw-cur" }, h("i", {}), h("span", {})); // the live colour, even when it is not one of the swatches
+  const markTint = () => { const t = tint.toLowerCase(); tints.querySelectorAll("button").forEach((b, i) => b.setAttribute("aria-pressed", String(TINTS[i] === t))); cur.style.setProperty("--c", tint); cur.lastChild.textContent = `Now ${tint}`; };
+  const shut = () => { menu.hidden = true; menuBtn.setAttribute("aria-expanded", "false"); };
+  const ink = h("div", { class: "sw-ink" }), drop = h("i", { class: "sw-drop" }), peek = h("div", { class: "sw-peek", "aria-hidden": "true" }, h("i", {}), h("i", {})), chipsEl = h("div", { class: "sw-chips" });
+  const fx = h("div", { class: "sw-fx", "aria-hidden": "true" }); // the liquid: letters swell into each other, then a light picks out their edges
+  fx.innerHTML = `<svg width="0" height="0"><filter id="sw-liquid" x="-20%" y="-40%" width="140%" height="180%" color-interpolation-filters="sRGB">
+    <feMorphology id="sw-fat" in="SourceAlpha" operator="dilate" radius="1"/><feGaussianBlur id="sw-soft" stdDeviation="2"/>
+    <feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 20 -8" result="goo"/>
+    <feGaussianBlur in="goo" stdDeviation="2.2" result="dome"/>
+    <feSpecularLighting in="dome" surfaceScale="5" specularConstant="1.1" specularExponent="22" lighting-color="#ffffff" result="shine"><feDistantLight azimuth="235" elevation="52"/></feSpecularLighting>
+    <feDiffuseLighting in="dome" surfaceScale="4" diffuseConstant="1" lighting-color="#b9a6ff" result="hue"><feDistantLight azimuth="45" elevation="38"/></feDiffuseLighting>
+    <feFlood id="sw-tint" flood-color="#6ff7ff"/><feComposite in2="goo" operator="in" result="body"/>
+    <feComposite in="hue" in2="goo" operator="in" result="hue2"/><feBlend in="body" in2="hue2" mode="soft-light" result="lit"/>
+    <feComposite in="shine" in2="goo" operator="in" result="shine2"/>
+    <feMerge><feMergeNode in="lit"/><feMergeNode in="shine2"/></feMerge></filter></svg>`;
+  const cmds = h("div", { class: "sw-cmds", hidden: "", role: "listbox", "aria-label": "Commands" }); // Dot, poured into the list of commands
+  const bubble = h("div", { class: "sw-say", hidden: "" }, ink, peek, chipsEl), note = h("aside", { class: "sw-note", hidden: "", "aria-label": "Details" });
+  // the mesh, top to bottom: what S2 planned, the questions S1 made of it, the notes S0 found (the Verifier's verdict is their colour), the names in them, and the chat
+  const LAYERS = [["trait", "traits", -235], ["plan", "S2 plans", -170], ["question", "S1 questions", -85], ["note", "S0 notes", 5], ["name", "names", 100], ["chat", "chat", 190], ["var", "variables"]], hide = new Set();
+  const LY = Object.fromEntries(LAYERS.map(([k, t, y]) => [k, { t, y }]));
+  const stepBtn = h("button", { type: "button", onclick: async () => { stepBtn.disabled = true; await step(); stepBtn.disabled = false; } }, "Run one step");
+  // every control lives behind one button, so the scene stays a scene
+  const menu = h("div", { class: "sw-menu", hidden: "", role: "dialog", "aria-label": "Controls" },
+    h("small", {}, "Mode"), modes, h("small", {}, "Colour"), tints, cur,
+    h("small", {}, "Show"), h("span", { role: "group", "aria-label": "Layers" }, ...LAYERS.map(([k, t]) => h("button", { type: "button", class: `sw-lay ${k}`, "aria-pressed": "true",
+      onclick: (e) => { const on = hide.has(k); on ? hide.delete(k) : hide.add(k); e.currentTarget.setAttribute("aria-pressed", String(on)); } }, t))),
+    h("small", {}, "Look inside"), h("span", {}, stepBtn, h("button", { type: "button", onclick: () => { shut(); mind(); } }, "Mind"), h("button", { type: "button", onclick: () => { shut(); wiring(); } }, "Wiring")));
+  const menuBtn = h("button", { type: "button", class: "sw-menubtn", "aria-label": "Controls", "aria-expanded": "false", onclick: () => { menu.hidden = !menu.hidden; menuBtn.setAttribute("aria-expanded", String(!menu.hidden)); } }, "⋯");
+  const reportBtn = h("button", { type: "button", class: "sw-reportbtn", onclick: () => report() }, "Report");
+  root.append(cmds); root.append(fx, cv, h("div", { class: "sw-top" }, who, modeChip, lamps, reportBtn, menuBtn), menu, bubble, note,
+    h("aside", { class: "sw-left" }, tower), h("aside", { class: "sw-right" }, status, steps, facts), hint);
+  const nav = root.querySelector(".sp-top"); if (nav) { nav.append(h("a", { href: "#verse", class: "sp-home sw-verse" }, "Verse")); menu.append(h("small", {}, "Go to"), nav); nav.addEventListener("click", (e) => { if (e.target.closest("a, button")) shut(); }); } // Library, Notes and History join the other controls
+  root.addEventListener("pointerdown", (e) => { if (!menu.hidden && !e.target.closest(".sw-menu, .sw-menubtn")) shut(); });
+  const ear = root.querySelector(".sp-ear input"); // the chat line stays out of the way: start typing anywhere and it takes the words
+  addEventListener("keydown", function type(e) { if (!root.isConnected) return removeEventListener("keydown", type);
+    if (e.key === "Escape") { shut(); return; }
+    if (ear && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey && !e.target.closest?.("input, textarea, select, button, [contenteditable]") && !root.querySelector(".sp-steer-modal")) ear.focus(); });
+
+  const COL = { plan: "#ffb347", question: "#ffe347", verified: "#7dffa8", rejected: "#ff6b6b", unchecked: "#8b93a7", name: "#e8ecf4", curious: "#ffb347", idea: "#c79bff", you: "#9fb4ff", mistake: "#ff6b6b", trait: "#ff7ac6" };
+  const colour = (n) => n.layer === "note" ? COL[n.state] : n.layer === "name" ? (n.kind === "idea" ? COL.idea : n.state === "known" ? COL.name : COL.curious) : n.layer === "chat" ? (n.state === "mistake" ? COL.mistake : n.kind === "you" ? COL.you : tint) : n.layer === "question" && n.state === "open" ? "#a89a4a" : COL[n.layer];
+  const hoverAt = (q) => ptr && Math.hypot(q.x - ptr[0], q.y - ptr[1]) < 30;
+  const RS0 = 290; let bandY = {}, RS = RS0; // the globe grows with what it knows, so nodes keep their room
+  let planes = {}, W = 1, H = 1, K = 1, cx = 0, cy = 0, nodes = [], edges = [], vars = [], tint = "#6ff7ff", proj = [];
+  const EYES = { extract: "read", sort: "read", practise: "read", fill: "read", reflect: "search", wonder: "search", ideas: "search", plan: "think", goal: "think", ask: "think",
+    check: "verify", review: "verify", evaluate: "verify", fold: "fold", bake: "fold" };
+  const SYSC = { 2: "#c79bff", 1: "#ffb347", 0: "#6ff7ff", 3: "#7dffa8" }, VERB_OF = { read: "reading", search: "searching", think: "thinking", verify: "checking", fold: "folding" };
+  // expanded, each job is its own character: a small body in its system's colour, walking the net to the nodes it works on
+  const HOME = { reflect: "question", wonder: "question", ideas: "name", plan: "plan", goal: "question", ask: "question", check: "note", review: "chat", evaluate: "note",
+    extract: "note", sort: "chat", practise: "chat", fill: "trait", fold: "name", bake: "note" }, sysOf = {};
+  let agents = [];
+  const pickNode = (k) => { const pool = nodes.filter((n) => n.layer === HOME[k] && !hide.has(n.layer)); return (pool.length ? pool : nodes)[Math.random() * (pool.length || nodes.length) | 0]; };
+  function agentOf(k) { return agents.find((a) => a.k === k) || (agents.push({ k, x: cx, y: cy, n: null, work: 0, ph: Math.random() * 99, vx: 0 }), agents.at(-1)); }
+  function walk() { // each character heads for its node, works there with its eyes, then wanders to another of its kind; contracting, they all go home into Dot
+    if (!agents.length) return;
+    for (const a of agents) {
+      let tx = cx, ty = cy;
+      if (growTo) { if (!a.n || (a.work <= 0 && Math.random() < .004)) a.n = pickNode(a.k); const q = a.n && proj[nodes.indexOf(a.n)]; if (q) { tx = q.x; ty = q.y - 16; } }
+      const px0 = a.x; a.x += (tx - a.x) * (still ? 1 : .03); a.y += (ty - a.y) * (still ? 1 : .03); a.vx = a.x - px0; if (a.work > 0) a.work--;
+      const c = SYSC[sysOf[a.k]] || tint, r = 14 * K, t = tick * .06 + a.ph, bob = still ? 0 : Math.sin(t) * 2;
+      g.globalAlpha = growTo ? .95 : Math.min(.95, Math.hypot(a.x - cx, a.y - cy) / 60); const gr = g.createRadialGradient(a.x - r * .35, a.y + bob - r * .4, r * .1, a.x, a.y + bob, r);
+      gr.addColorStop(0, "#fff"); gr.addColorStop(.35, c); gr.addColorStop(1, "#0b1320"); g.fillStyle = gr; g.beginPath(); g.arc(a.x, a.y + bob, r, 0, 6.283); g.fill();
+      const mode = a.work > 0 ? EYES[a.k] : "", ph = 260 - a.work; let ex2 = Math.max(-2.5, Math.min(2.5, a.vx * 2)), ey2 = 0, lid = 1;
+      if (mode === "read") { ex2 = -2.5 + (ph % 50) / 50 * 5; ey2 = 1; } else if (mode === "search") { ex2 = Math.sin(ph * .12) * 2.5; ey2 = -2; } else if (mode === "think") ey2 = -2.5;
+      else if (mode === "verify") lid = .4; else if (mode === "fold") lid = .2;
+      g.fillStyle = "#06222a"; for (const o of [-4.8, 4.8]) { g.beginPath(); g.ellipse(a.x + o * K + ex2 * K, a.y + bob + ey2 * K, 2.2 * K, Math.max(.8, 5.4 * K * lid * (tick % 170 > 165 ? .15 : 1)), 0, 0, 6.283); g.fill(); }
+      if (a.work > 0 || growTo) { g.font = "600 11px ui-monospace, monospace"; g.textAlign = "center"; g.globalAlpha = a.work > 0 ? 1 : .7; g.fillStyle = c; g.fillText(a.work > 0 ? `${a.k} · ${VERB_OF[mode] || "working"}` : a.k, a.x, a.y + bob - r - 6); }
+      g.globalAlpha = 1;
+    }
+    if (!growTo) agents = agents.filter((a) => Math.hypot(a.x - cx, a.y - cy) > 6);
+  }
+  let form = null, formOf = "", cb = 0; // its chibi form: the live persona's look from /char/chibi, and how far it has morphed into it
+  let eyeTask = null, grow = 0, growTo = 0, detached = false, learning = false, lift = 1, yaw = .5, pitch = -.45, drag = null, moved = 0, tick = 0, ptr = null, ex = 0, ey = 0, happy = 0, blinkAt = 120, talk = 0, morph = 0, slab = null, wet = 1, px = 0, py = 0, busy = false, lit = -1, litT = 0, sparks = [], rings = [], gulp = [];
+  const hash = (t) => [...t].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+  function fit() { const d = devicePixelRatio || 1; W = root.clientWidth; H = root.clientHeight; cv.width = W * d; cv.height = H * d; g.setTransform(d, 0, 0, d, 0, 0); K = Math.max(.4, Math.min(W / (2 * RS + 280), H / (2 * RS + 130), 1.4)); cx = W / 2; cy = H * .47; }
+  const ro = new ResizeObserver(() => root.isConnected ? fit() : ro.disconnect()); ro.observe(root); fit();
+  function P(x, y, z) { y *= lift; const a = Math.cos(yaw), b = Math.sin(yaw), c = Math.cos(pitch), d = Math.sin(pitch), x1 = x * a + z * b, z1 = -x * b + z * a, y1 = y * c - z1 * d, z2 = y * d + z1 * c, s = 700 / (700 + z2 * K);
+    return { x: cx + x1 * s * K, y: cy + y1 * s * K, z: z2, s: s * K }; }
+
+  // ---- what it shows: the graph space.js already holds, and the wiring (signals, mode, the open correction) it fetches itself ----
+  function data() { meshLoad(); } // space.js calls this whenever its state changes: the mesh is read whole from /char/mesh
+  async function meshLoad() {
+    let m; try { m = await api("/char/mesh"); } catch { return; }
+    const old = new Map(nodes.map((n) => [n.key, n])), by = {};
+    for (const x of m.nodes) (by[x.layer] ||= []).push(x);
+    nodes = [];
+    // one full globe around Dot: every node evenly on a sphere (a Fibonacci spiral), in layer order from the top, so each layer is a band of latitude
+    // as tall as it is full; however lopsided the counts, the shape stays round, with no flat side
+    const order = LAYERS.map(([k]) => k).filter((k) => by[k]), N = order.reduce((s2, k) => s2 + by[k].length, 0); RS = RS0 * Math.min(1.7, Math.max(1, Math.sqrt(N / 80))); fit(); let k0 = 0; bandY = {};
+    for (const layer of order) { const list = by[layer], ys = [];
+      list.forEach((x, i) => { const u = 1 - 2 * (k0 + i + .5) / N, rr = RS * Math.sqrt(1 - u * u), a = (k0 + i) * 2.39996, o = old.get(x.id); ys.push(u * RS);
+        nodes.push({ ...x, key: x.id, x: rr * Math.cos(a), y: -u * RS, z: rr * Math.sin(a), R: rr, flash: o ? o.flash : old.size ? 70 : 0, born: o || !old.size ? 1 : 0 }); });
+      const mid = -(ys[0] + ys.at(-1)) / 2; bandY[layer] = mid; k0 += list.length; }
+    const at = new Map(nodes.map((n, i) => [n.id, i]));
+    edges = m.edges.map(([a, b]) => [at.get(a), at.get(b)]).filter((e) => e[0] != null && e[1] != null);
+    planes = Object.fromEntries(Object.keys(by).filter((k) => bandY[k] != null).map((k) => [k, RS * Math.sqrt(Math.max(0, 1 - (bandY[k] / RS) ** 2))]));
+  }
+  const spark = (pts, color) => { const el = h("span", { class: "sw-spark" }); if (pts.length < 2) return el; // one line per variable: how it moved, step by step
+    const lo = Math.min(...pts), hi = Math.max(...pts), span = hi - lo || 1, xy = pts.map((v, i) => `${(i / (pts.length - 1) * 96 + 2).toFixed(1)},${(22 - (v - lo) / span * 18).toFixed(1)}`).join(" ");
+    el.innerHTML = `<svg viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true"><polyline points="${xy}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>`; return el; };
+  const dialOut = h("output", {}, "×1"), dialIn = h("input", { type: "range", min: 0, max: 3, step: 0.25, value: 1, "aria-label": "Curiosity dial",
+    oninput: (e) => { dialOut.textContent = `×${e.target.value}`; }, onchange: async (e) => { try { await api("/char/dial", { method: "POST", body: JSON.stringify({ curiosity: +e.target.value }) }); } catch { /* the next poll shows the real value */ } watch(); } });
+  const trackOut = h("small", { class: "sw-track" }), num = (k, label) => h("label", { class: "sw-num" }, label, h("input", { type: "number", min: 0.5, max: 50, step: 0.5, "data-k": k, "aria-label": label,
+    onchange: async (e) => { try { paintTrack(await api("/char/tracker", { method: "POST", body: JSON.stringify({ [k]: +e.target.value }) })); } catch { /* the next poll shows the real value */ } refresh(); } }));
+  const sleepIn = num("sleep_at", "sleeps at"), maxIn = num("max", "max");
+  function paintTrack(T) { trackOut.textContent = `ups ${(T.ups ?? 0) % (T.every || 10)}/${T.every || 10} · momentum +${T.momentum ?? 0}`;
+    for (const [el, v] of [[sleepIn, T.sleep_at], [maxIn, T.max]]) { const i = el.querySelector("input"); if (document.activeElement !== i && v != null) i.value = v; } }
+  const dialEl = h("label", { class: "sw-dial", onclick: (e) => e.stopPropagation() }, h("small", {}, "your dial: 0 stops it, 3 triples it"), dialIn, dialOut, trackOut, h("span", { class: "sw-nums" }, sleepIn, maxIn)); // your hand on curiosity, opened by clicking its bar
+  async function watch() {
+    let m; try { m = await api("/char/monitor"); } catch { return; }
+    const d = m.disposition, fmt = (v) => String(Math.round(v * 100) / 100);
+    tower.replaceChildren(...m.series.map((x) => { const now = x.points.at(-1) ?? (x.name === "curiosity" ? d.curiosity : x.name === "maturity" ? d.maturity : 0), c = x.yours ? "#6ff7ff" : x.name === "maturity" ? "#7dffa8" : "#ffb347";
+      return h("div", { class: "sw-tel", style: `--c:${c}`, title: x.name === "curiosity" ? `How much it wants to learn: ${d.dnE} new names × ${fmt(d.tau)} still unanswered, damped by maturity. At 0 it stops reaching out.` : x.name === "maturity" ? `How much it has answered per name (${d.baked.nAE} answers about ${d.baked.nE} names at its last consolidation). The closer to 1, the harder curiosity is braked.` : "A variable of yours, step by step." },
+        h("small", {}, x.name), h("b", {}, fmt(now)), spark(x.points, c), ...(x.name === "curiosity" ? [dialEl] : [])); }));
+    const cur = tower.querySelector(".sw-tel"); if (cur && m.series[0]?.name === "curiosity") { cur.classList.add("sw-tel-dial"); cur.tabIndex = 0; cur.setAttribute("role", "button"); cur.setAttribute("aria-expanded", String(!dialEl.hidden));
+      cur.onclick = () => { dialEl.hidden = !dialEl.hidden; cur.setAttribute("aria-expanded", String(!dialEl.hidden)); }; cur.onkeydown = (e) => { if (e.target === cur && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); cur.click(); } }; }
+    if (document.activeElement !== dialIn) { dialIn.value = d.dial ?? 1; dialOut.textContent = `×${d.dial ?? 1}`; }
+    const row = (k, v, tip) => h("p", { title: tip || "" }, h("small", {}, k), v);
+    facts.replaceChildren(row("last reply", m.last ? `${m.last.names.length} names · ${m.last.notes.length} notes` : "none yet", m.last ? [...m.last.names, ...m.last.notes].join(" · ") : "Ask it something."),
+      row("corrections", `${m.loop.cycles} cycle${m.loop.cycles === 1 ? "" : "s"} · ${m.loop.instructions + m.loop.fixes} prompt change${m.loop.instructions + m.loop.fixes === 1 ? "" : "s"}`, `It reread ${m.loop.reviewed} of its replies and found ${m.loop.mistakes} mistakes. You answered ${m.loop.cycles} correction questions; ${m.loop.instructions} standing instructions and ${m.loop.fixes} approved prompt fixes are in use.`),
+      row("steps", String(m.steps), "Every learning step and every reply since this character began."));
+  }
+  const seen = {}; let engOk = true; // kind -> last.at, to flash a row when its engine runs again
+  async function engines() {
+    let e; try { e = await api("/char/engines"); detached = !e.model.up; } catch { detached = true; engOk = false; steps.replaceChildren(h("p", { class: "sw-engoff" }, "Engine status unavailable")); return; }
+    const first = engOk && Object.keys(seen).length === 0, grp = [[2, "S2"], [1, "S1"], [0, "S0"], [3, "Verifier"], [null, "Other"]], out = [];
+    engOk = true;
+    out.push(h("p", { class: "sw-engmodel", title: e.model.up ? "Model reachable" : "Model not reachable" }, h("i", { class: e.model.up ? "ok" : "failed" }), `Model: ${e.model.label}`));
+    for (const [sys, name] of grp) {
+      const rows = e.engines.filter((x) => (x.system ?? null) === sys && x.last); if (!rows.length) continue;
+      out.push(h("small", { class: "sw-enghead" }, name));
+      for (const x of rows) {
+        const l = x.last, st = x.blocked ? "idle" : l ? l.outcome : "idle", txt = x.blocked || (l ? `${l.at} ${l.outcome}: ${l.detail}` : "not run yet"),
+          row = h("div", { class: "sw-engrow", "data-st": st, title: `${x.label}: ${txt}` }, h("i"), h("b", {}, x.label), h("span", {}, txt), h("small", {}, x.runs ? String(x.runs) : ""));
+        if (!first && l && seen[x.kind] !== undefined && seen[x.kind] !== l.at) { row.classList.add("flash"); if (l.outcome === "ok") { const at = nodes.filter((n) => n.label && n.label.length > 3 && l.detail.toLowerCase().includes(n.label.slice(0, 40).toLowerCase())).sort((a, b) => b.label.length - a.label.length)[0];
+          eyeTask = { kind: x.kind, until: tick + 260, n: at, sys: x.system }; if (at) { at.flash = 70; sparks.push({ n: at, t: 0 }); } if (growTo) { const a = agentOf(x.kind); a.n = at || pickNode(x.kind); a.work = 260; } } }
+        sysOf[x.kind] = x.system; // its eyes act out what just ran
+        seen[x.kind] = l ? l.at : ""; out.push(row);
+      }
+    }
+    steps.replaceChildren(...out);
+  }
+  let polls = 0; const engPoll = setInterval(() => { if (!root.isConnected) return clearInterval(engPoll); engines(); if (++polls % 3 === 0) refresh(); }, 4000); // refresh too, so waking up, the halo and a detached model show without you doing anything
+  async function refresh() {
+    watch(); meshLoad();
+    let d; try { d = await api("/char/wiring"); } catch { return; }
+    if (d.who !== formOf) { formOf = d.who; form = null; cb = 0; api("/char/chibi").then((c) => { if (formOf === d.who) form = c; }).catch(() => {}); } // a new persona: Dot starts as a sphere and morphs once its reference is in
+    who.textContent = d.who; vars = d.signals.map((s) => ({ name: s.name, value: Math.round(s.value * 100) / 100 }));
+    lamps.querySelectorAll("span").forEach((l) => l.classList.toggle("off", !d.systems.find((s) => s.id === +l.dataset.s)?.on));
+    modes.replaceChildren(...[["quiet", "Quiet", "Never learns by itself"], ["curious", "Curious", "Learns while idle"], ["proactive", "Proactive", "Learns, and tells you what it found"]].map(([m, t, tip]) =>
+      h("button", { type: "button", role: "radio", "aria-checked": String(d.mode === m), title: tip, onclick: async () => { try { await api("/char/wiring", { method: "POST", body: JSON.stringify({ mode: m }) }); } catch { return; } refresh(); } }, t)));
+    root.dataset.mode = d.mode; const T = d.tracker || {}; learning = !!T.asleep; modeChip.textContent = T.asleep ? "learning" : T.asking ? "asking" : d.mode;
+    modeChip.style.setProperty("--p", String(Math.min(1, (T.momentum || 0) / (T.sleep_at || 3)))); modeChip.dataset.halo = T.asleep ? "asleep" : T.asking ? "asking" : "";
+    modeChip.title = `Momentum ${T.momentum ?? 0} of ${T.sleep_at ?? 3}: ${T.ups ?? 0} ups said; every ${T.every ?? 10} add 1. ${T.asleep ? "Asleep, learning the way you told it to grow; it wakes when the push is spent." : "At the threshold it asks which way to grow, then sleeps to learn it."}`;
+    paintTrack(T); if (ear) ear.placeholder = `Talk to ${d.who.split(" ")[0]}…`;
+    engines();
+    const braked = d.wires[0]?.holding; // one line that says what you can do right now
+    const q = d.review?.open; asking = q || null; // the correction loop, as talk: it says what went wrong, and your next message is the answer
+    hint.replaceChildren(detached ? "The model is detached: the harness lies flat until it is back." : q?.kind === "direction" ? h("span", {}, "It asks which way to grow. Your next message sets it. ", h("button", { type: "button", class: "sw-skip", onclick: skipAsk }, "Skip"))
+      : T.asleep ? "Asleep: it is learning the way you told it to grow, and wakes when the push is spent."
+      : q ? h("span", {}, "Your next message teaches it what to do instead. ", h("button", { type: "button", class: "sw-skip", onclick: skipAsk }, "Skip")) : d.mode === "quiet" ? "Quiet mode: it only answers. Start typing to talk to it."
+      : braked ? "It has nothing new to chase. Tell it about something and its curiosity wakes up."
+      : "It is learning by itself. Watch, or just start typing to talk to it.");
+    if (q && ear) ear.placeholder = q.kind === "direction" ? "Which way should it grow?" : "Tell it what to do instead…";
+    if (q && asked !== q.id) { asked = q.id; if (q.kind === "direction") return; /* its reply already asked */ const why = q.why.charAt(0).toUpperCase() + q.why.slice(1); say({ text: `You asked “${q.asked.slice(0, 90)}” and I said “${q.said.slice(0, 120)}”. ${why}. What should I do instead?` }); }
+  }
+  let asking = null, asked = null;
+  async function skipAsk() { try { await api("/char/correction", { method: "DELETE" }); } catch { /* the next poll shows it again */ } asking = null; refresh(); }
+
+  function openNote(n) { // a click on a node: what it is, the Verifier's word on it, and everything it is wired to
+    const close = h("button", { type: "button", class: "sw-x", "aria-label": "Close details", onclick: () => { note.hidden = true; cv.focus(); } }, "✕");
+    const i = nodes.indexOf(n), near = edges.filter((e) => e.includes(i)).map((e) => nodes[e[0] === i ? e[1] : e[0]]);
+    const STATE = { verified: "verified by the Verifier", rejected: "rejected by the Verifier", unchecked: "not checked yet", answered: "answered by a note", open: "not answered yet", dropped: "dropped", known: "read about", curious: "not read about yet: it is curious", ok: "reread by the Verifier: fine", mistake: "reread by the Verifier: a mistake" };
+    note.replaceChildren(close, h("small", {}, `${LY[n.layer].t}${n.kind && n.layer !== "name" ? ` · ${n.kind}` : ""}${n.state ? ` · ${STATE[n.state] || n.state}` : ""}`),
+      h("h3", {}, n.layer === "chat" ? (n.kind === "you" ? "You said" : "It said") : n.label), h("p", {}, n.body || (n.n ? `In ${n.n} note${n.n === 1 ? "" : "s"}.` : "")),
+      ...(near.length ? [h("small", {}, "Wired to"), h("ul", { class: "sw-wired" }, ...near.slice(0, 14).map((x) => h("li", {}, h("button", { type: "button", style: `--c:${colour(x)}`, onclick: () => { x.flash = 70; openNote(x); } }, h("small", {}, LY[x.layer].t), " ", x.label.slice(0, 70)))))] : []));
+    shut(); note.hidden = false; close.focus();
+  }
+  function palette(list, active = 0, pick) { // the commands, as Dot: it shrinks away and the list takes its place, with its eyes on top
+    if (!list) { if (!cmds.hidden) { cmds.hidden = true; if (bubble.hidden || bubble.classList.contains("out")) slab = null; } return; }
+    const tip = h("p", { class: "sw-cmd-tip", "aria-live": "polite" }, list[active]?.does || "No command starts like that.");
+    cmds.replaceChildren(h("span", { class: "sw-cmd-eyes", "aria-hidden": "true" }, h("i", {}), h("i", {})),
+      ...list.map((c, i) => h("button", { type: "button", role: "option", "aria-selected": String(i === active), title: c.does,
+        onmouseenter: () => { tip.textContent = c.does; }, onmouseleave: () => { tip.textContent = list[active]?.does || ""; },
+        onmousedown: (e) => { e.preventDefault(); pick?.(c); } }, c.name)), tip);
+    cmds.hidden = false; bubble.classList.add("out"); slab = { w: 1, h: 1 };
+  }
+  // ---- things space.js tells it ----
+  function say(t) { // the reply IS Dot: it pours out of its sphere into liquid letters, and its eyes play along the words; then it gathers back
+    rings.push(0); happy = 0;
+    const n = t.text.length, words = t.text.split(/(\s+)/), p = h("p", { style: `font-size:${n <= 60 ? 32 : n <= 150 ? 25 : n <= 320 ? 20 : 17}px` });
+    words.forEach((w, i) => { if (/^\s+$/.test(w)) return p.append(w); const sp = h("span", {}, w); p.append(sp);
+      if (!still) sp.animate([{ opacity: 0, translate: "0 18px", scale: "1.3 .5" }, { opacity: 1, translate: "0 0", scale: "1 1" }], { duration: 560, delay: 260 + Math.min(i * 30, 3200), easing: "cubic-bezier(.2,1.5,.4,1)", fill: "backwards" }); });
+    ink.replaceChildren(p, drop);
+    chipsEl.replaceChildren(...(t.events || []).filter((e) => e.name).map((e) => h("span", { class: "rule" }, e.name)), ...(t.drew || []).slice(0, 4).map((x) => h("span", {}, x.title.replace(/^\w+: /, ""))));
+    bubble.hidden = false; bubble.classList.remove("out"); slab = { w: ink.offsetWidth, h: p.offsetHeight }; wet = 1; px = slab.w / 2; py = -20; talk = Math.min(60 + words.length * 3, 300);
+    clearTimeout(say.t); say.t = setTimeout(() => { bubble.classList.add("out"); slab = null; }, Math.max(11000, words.length * 400));
+    refresh();
+    return new Promise((r) => setTimeout(r, still ? 0 : Math.min(words.length * 30 + 900, 3600)));
+  }
+  function heard(text) { bubble.classList.add("out"); slab = null; clearTimeout(say.t); gulp.push({ text: text.length > 34 ? `${text.slice(0, 33)}…` : text, t: 0 }); } // your words rise from the box and Dot takes them in
+  function fire(names) { for (const nm of names || []) { const n = nodes.find((x) => x.label === nm); if (n) { n.flash = 70; sparks.push({ n, t: 0 }); } } } // what a reply drew on lights up and sends a spark in
+  function stepped(r) { busy = false; if (!r || r.done) return; lit = r.system; litT = 260; rings.push(0);
+    const hit = nodes.filter((n) => n.kind !== "note" && `${r.topic} ${r.note}`.toLowerCase().includes(n.label.toLowerCase())).sort((a, b) => b.label.length - a.label.length).slice(0, 2);
+    hit.forEach((n) => { n.flash = 70; sparks.push({ n, t: 0 }); }); if (r.kind === "reflect" || r.kind === "check") happy = 70; refresh(); }
+
+  // ---- drawing ----
+  function dot(mood, asleep) {
+    morph += ((slab ? 1 : 0) - morph) * (still ? 1 : .08); const m = morph * morph * (3 - 2 * morph); // 1 = all of it has poured into the words
+    const quiet = asleep || root.dataset.mode === "quiet", t = tick * (quiet ? .018 : .045), bob = still ? 0 : Math.sin(t * .7) * 5 * K, y = cy + bob + m * 30 * K, R = 82 * K * (1 - m * .93) * (1 + grow * Math.max(0, (planes.chat || 260) / 82 - 1)), sq = 1 + Math.sin(t) * .03;
+    rings = rings.map((r) => r + 2.4).filter((r) => r < 80); for (const r of rings) { g.strokeStyle = tint; g.globalAlpha = (1 - r / 80) * (1 - m); g.lineWidth = 2; g.beginPath(); g.arc(cx, cy, 82 * K + r * K, 0, 6.283); g.stroke(); } g.globalAlpha = 1;
+    if (m > .97) return;
+    cb += ((form && !detached && grow < .3 ? 1 : 0) - cb) * (still ? 1 : .03); const c = cb * cb * (3 - 2 * cb), sy = y - R * .3 * c, sr = R * (1 - .38 * c); // sphere -> chibi: the sphere rises and shrinks into its head
+    g.strokeStyle = tint; g.globalAlpha = (.1 + .06 * Math.sin(t)) * (1 - m) * (1 - grow); g.lineWidth = 10 * K; g.beginPath(); g.arc(cx, y, R + 12 * K, 0, 6.283); g.stroke(); g.globalAlpha = 1;
+    if ((busy || mood === "think") && grow < .3) { g.strokeStyle = "#ffb347"; g.lineWidth = 2.5; g.lineCap = "round"; for (let i = 0; i < 3; i++) { const a = tick * .07 + i * 2.094; g.beginPath(); g.arc(cx, y, R + 24 * K, a, a + .9); g.stroke(); } } // looking something up, or thinking
+    const body = (asleep ? .6 : detached ? .38 : 1) * (1 - grow), gr = g.createRadialGradient(cx - sr * .34, sy - sr * .4, sr * .1, cx, sy, sr); gr.addColorStop(0, "#ffffff"); gr.addColorStop(.3, tint); gr.addColorStop(1, "#0d3a42"); g.fillStyle = gr; g.globalAlpha = body * (1 - c); g.beginPath();
+    for (let a = 0; a <= 6.3; a += .12) { const r = sr * (1 + (still ? 0 : .022 * Math.sin(3 * a + t * 1.3) + .016 * Math.sin(5 * a - t * 1.7))), qx = cx + Math.cos(a) * r * sq, qy = sy + Math.sin(a) * r / sq; a ? g.lineTo(qx, qy) : g.moveTo(qx, qy); }
+    g.closePath(); g.fill(); g.globalAlpha = 1;
+    const F = form && c > .01 ? drawChibi(g, cx, y, R, form, tint, c, t, body) : { x: cx, y, s: 1, ink: "#06222a" }; // where its eyes go: on the chibi's face once it has one
+    if (grow > .55) return; // dissolved into the net: its jobs walk it now
+    let tx = Math.sin(yaw * 1.3) * 9, ty = mood === "think" || busy ? -9 : pitch * -8; if (ptr && !busy) { tx = Math.max(-13, Math.min(13, (ptr[0] - cx) * .08)); ty = Math.max(-10, Math.min(10, (ptr[1] - F.y) * .08)); }
+    const task = eyeTask && tick < eyeTask.until && !still ? EYES[eyeTask.kind] : "", ph = tick - (eyeTask?.until ?? 0) + 260; let lid = 1;
+    if (task === "read") { tx = -12 + (ph % 70) / 70 * 24; ty = 2 + (Math.floor(ph / 70) % 3) * 3; } // line by line, left to right
+    else if (task === "search") { tx = Math.sin(ph * .09) * 13; ty = -9; } // up and scanning: out on the web
+    else if (task === "think") { tx = Math.sin(ph * .025) * 6; ty = -11; } // eyes up, turning it over
+    else if (task === "verify") { tx = Math.sin(ph * .04) * 4; lid = .42; } // a squint: checking its own work
+    else if (task === "fold") { lid = .18 + .12 * Math.sin(ph * .05); } // heavy-lidded: folding what it knows together
+    ex += (tx * K - ex) * .12; ey += (ty * K - ey) * .12; if (tick > blinkAt + 7) blinkAt = tick + 90 + Math.random() * 220;
+    const ez = (1 - m) * F.s, open = lid * (asleep ? .08 : quiet ? .45 : root.dataset.mode === "proactive" ? 1.12 : 1) * (tick > blinkAt ? .1 : 1), gap = 21 * K * ez; g.fillStyle = g.strokeStyle = F.ink;
+    if (detached || learning) { g.lineWidth = 4.5 * K * ez; g.lineCap = "round"; // detached: flat eyes, nothing behind them; learning: closed, dreaming, under a slow cyan orbit
+      if (learning && !detached) { g.save(); g.strokeStyle = "#6ff7ff"; g.globalAlpha = .7; g.lineWidth = 2; g.setLineDash([3, 10]); g.lineDashOffset = still ? 0 : -tick * .4; g.beginPath(); g.arc(cx, y, R + 20 * K, 0, 6.283); g.stroke(); g.restore(); g.strokeStyle = F.ink; }
+      for (const o of [-gap, gap]) { g.beginPath(); detached ? (g.moveTo(F.x + o - 9 * K * ez, F.y), g.lineTo(F.x + o + 9 * K * ez, F.y)) : g.arc(F.x + o, F.y - 2 * K * ez, 10 * K * ez, .35, 2.79); g.stroke(); }
+      return; }
+    if ((happy > 0 || mood === "happy") && !asleep) { happy--; g.lineWidth = 7 * K * ez; g.lineCap = "round"; for (const o of [-gap, gap]) { g.beginPath(); g.arc(F.x + o + ex * ez, F.y + (6 * K + ey) * ez, 11 * K * ez, 3.5, 5.93); g.stroke(); } return; }
+    for (const o of [-gap, gap]) { g.fillStyle = F.ink; g.beginPath(); g.ellipse(F.x + o + ex * ez, F.y + ey * ez, 9 * K * ez, Math.max(1, 23 * K * ez * open * (mood === "sad" ? .7 : 1)), 0, 0, 6.283); g.fill();
+      if (open > .5 && ez > .3) { g.fillStyle = "#fff"; g.beginPath(); g.arc(F.x + o + ex * ez - 2.5 * K * ez, F.y + ey * ez - 10 * K * ez, 2.6 * K * ez, 0, 6.283); g.fill(); } }
+  }
+  function liquid() { // while it speaks: the letters firm up out of a blob, and a droplet with its eyes roams the words, hopping and peeking at your pointer
+    wet += ((slab ? 0 : 1) - wet) * .045; fx.querySelector("#sw-fat").setAttribute("radius", (.5 + wet * 7).toFixed(2)); fx.querySelector("#sw-soft").setAttribute("stdDeviation", (1.3 + wet * 9).toFixed(2));
+    fx.querySelector("#sw-tint").setAttribute("flood-color", tint); ink.style.filter = wet < .08 ? "none" : ""; // once the letters have set, drop the liquid so they read crisp
+    if (!slab) return;
+    const a = tick * .011, tx = slab.w * (.5 + .46 * Math.sin(a)), ty = slab.h * (.5 + .62 * Math.sin(a * 2.3 + 1)) + Math.abs(Math.sin(tick * .09)) * -10; // a slow wander with a little hop
+    px += (tx - px) * .05; py += (ty - py) * .05; const b = bubble.getBoundingClientRect(), r = root.getBoundingClientRect();
+    const lx = ptr ? Math.max(-4, Math.min(4, (ptr[0] - (b.left - r.left + px)) * .03)) : Math.sin(tick * .03) * 3, ly = ptr ? Math.max(-4, Math.min(4, (ptr[1] - (b.top - r.top + py)) * .03)) : Math.cos(tick * .04) * 2;
+    drop.style.translate = `${px - 24}px ${py - 24}px`; peek.style.translate = `${px - 24}px ${py - 24}px`; peek.style.setProperty("--lx", `${lx}px`); peek.style.setProperty("--ly", `${ly}px`);
+    peek.classList.toggle("blink", tick % 190 > 183);
+  }
+  function frame() {
+    if (!root.isConnected) return; requestAnimationFrame(frame);
+    if (root.querySelector(".sp-steer-modal")) return; // a dialog is open over it: rest
+    tick++; if (talk > 0) talk--; if (litT > 0 && !--litT) lit = -1;
+    const asleep = root.classList.contains("asleep"), mood = root.dataset.mood || "", quiet = asleep || root.dataset.mode === "quiet";
+    if (!drag && !still) yaw += quiet ? .0008 : .0026;
+    if (tick % 20 === 0) { const r = root.querySelector(".sp-rest"); if (r && !r.hidden && r.textContent) status.textContent = r.textContent; // the job line space.js writes
+      const rv = getComputedStyle(root).getPropertyValue("--dot").trim(); if (rv && rv !== tint) { tint = rv; markTint(); }
+      lamps.querySelectorAll("span").forEach((l) => l.classList.toggle("on", busy ? (tick / 20 | 0) % 4 === [2, 1, 0, 3].indexOf(+l.dataset.s) : +l.dataset.s === lit)); }
+    grow += (growTo - grow) * (still ? 1 : .05); lift += ((detached ? .04 : 1) - lift) * (still ? 1 : .04); liquid(); g.clearRect(0, 0, W, H);
+    proj = nodes.map((n) => P(n.x, n.y, n.z)); const items = [], show = (n) => !hide.has(n.layer);
+    for (const [k, R] of Object.entries(planes)) { if (hide.has(k)) continue; g.strokeStyle = "#8b93a7"; g.globalAlpha = .14; g.lineWidth = 1; g.setLineDash([2, 7]); g.beginPath(); // each layer's plane
+      for (let a = 0; a <= 6.4; a += .15) { const q = P(R * Math.cos(a), bandY[k], R * Math.sin(a)); a ? g.lineTo(q.x, q.y) : g.moveTo(q.x, q.y); } g.stroke(); g.setLineDash([]);
+      const q = P(-R - 18, bandY[k], 0); g.globalAlpha = .7; g.fillStyle = "#8b93a7"; g.font = "11px ui-monospace, monospace"; g.textAlign = "right"; g.fillText(LY[k].t, q.x, q.y + 4); g.globalAlpha = 1; }
+    edges.forEach((e, i) => { if (show(nodes[e[0]]) && show(nodes[e[1]])) items.push({ z: (proj[e[0]].z + proj[e[1]].z) / 2, t: "e", a: proj[e[0]], b: proj[e[1]], i }); });
+    nodes.forEach((n, i) => { if (!show(n)) return; items.push({ z: proj[i].z, t: "n", n, q: proj[i] }); });
+    if (!quiet && edges.length) for (let k = 0; k < Math.min(7, edges.length); k++) { const e = edges[(k * 7 + (tick / 140 | 0)) % edges.length], a = nodes[e[0]], b = nodes[e[1]], u = ((tick + k * 37) % 140) / 140; if (!show(a) || !show(b)) continue;
+      items.push({ z: 0, t: "p", q: P(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u, a.z + (b.z - a.z) * u) }); items.at(-1).z = items.at(-1).q.z; } // sparks along what it has linked
+    sparks = sparks.filter((s) => (s.t += .028) < 1); for (const s of sparks) { const q = P(s.n.x * (1 - s.t), s.n.y * (1 - s.t), s.n.z * (1 - s.t)); items.push({ z: q.z, t: "p", q, big: 1 }); if (s.t > .96) rings.push(0); }
+    if (!hide.has("var")) vars.forEach((v, i) => { const a = tick * (quiet ? .004 : .011) + i * 6.283 / vars.length, r = 135, q = P(r * Math.cos(a), r * Math.sin(a) * .35, r * Math.sin(a)); items.push({ z: q.z, t: "v", q, v }); });
+    items.push({ z: 0, t: "dot" }); items.sort((a, b) => b.z - a.z);
+    for (const it of items) { const near = it.z < 0, al = Math.max(.14, Math.min(1, .62 - it.z / 440)) * (it.t === "dot" ? 1 : 1 - morph * .7); // the web steps back while it speaks
+      if (it.t === "dot") { const T = eyeTask && tick < eyeTask.until && eyeTask.n && proj[nodes.indexOf(eyeTask.n)];
+        if (T && !hide.has(eyeTask.n.layer) && !agents.length) { const c = SYSC[eyeTask.sys] || tint, f = Math.min(1, (eyeTask.until - tick) / 40); // where the work is: a beam from Dot to the node it is on, with what it is doing
+          g.save(); g.strokeStyle = g.fillStyle = c; g.globalAlpha = .75 * f; g.lineWidth = 1.6; g.setLineDash([6, 6]); g.lineDashOffset = still ? 0 : -tick * .8; g.beginPath(); g.moveTo(cx, cy); g.lineTo(T.x, T.y); g.stroke(); g.setLineDash([]);
+          const tag = VERB_OF[EYES[eyeTask.kind]] || eyeTask.kind; g.font = "600 11px ui-monospace, monospace"; const w = g.measureText(tag).width + 14; g.globalAlpha = .92 * f; g.fillStyle = "#0b0f17"; g.beginPath(); g.roundRect(T.x - w / 2, T.y - 30, w, 18, 9); g.fill(); g.strokeStyle = c; g.stroke(); g.fillStyle = c; g.textAlign = "center"; g.fillText(tag, T.x, T.y - 17); g.restore(); }
+        dot(mood, asleep); continue; }
+      if (it.t === "e" || it.t === "s") { g.strokeStyle = tint; g.globalAlpha = al * (it.t === "s" ? .1 : .3); g.lineWidth = near ? 1.1 : .7; g.beginPath(); g.moveTo(it.t === "s" ? cx : it.a.x, it.t === "s" ? cy : it.a.y); g.lineTo((it.b || it.q).x, (it.b || it.q).y); g.stroke(); }
+      else if (it.t === "n") { const n = it.n, q = it.q, c = colour(n); if (n.born < 1) n.born = Math.min(1, n.born + .03);
+        const r = (n.layer === "trait" ? 10 : n.layer === "note" ? 7 : n.layer === "chat" ? 4.5 : n.layer === "name" ? 3.6 + Math.min(n.n || 1, 6) * .9 : 5.5) * q.s * n.born; g.fillStyle = g.strokeStyle = c;
+        if (n.flash > 0) { n.flash--; g.globalAlpha = n.flash / 70; g.lineWidth = 1.6; g.beginPath(); g.arc(q.x, q.y, r + (70 - n.flash) * .5, 0, 6.283); g.stroke(); }
+        g.globalAlpha = n.layer === "trait" ? Math.max(al, .85) : al; g.beginPath(); if (n.layer === "trait") { // traits are hexagons: who it is, from its persona prompt; filled and haloed once you have grown them
+          for (let i = 0; i < 6; i++) { const a = i * 1.0472 + .5236; g.lineTo(q.x + Math.cos(a) * r, q.y + Math.sin(a) * r); } g.closePath(); g.lineWidth = 2;
+          if (n.state === "grown") { g.fill(); g.globalAlpha = al * (.35 + .25 * Math.sin(tick * .05)); g.beginPath(); g.arc(q.x, q.y, r + 6, 0, 6.283); g.stroke(); } else { g.fillStyle = "#1a0d16"; g.fill(); g.stroke(); }
+          g.globalAlpha = Math.max(al, .75); g.font = `600 ${Math.round(10 + 2 * q.s)}px ui-monospace, monospace`; g.textAlign = "center"; g.fillStyle = c;
+          if (near || n.state === "grown" || hoverAt(q)) g.fillText(n.label.length > 34 ? `${n.label.slice(0, 33)}…` : n.label, q.x, q.y - r - 9); continue; }
+        if (n.kind === "summary" || n.layer === "plan") g.rect(q.x - r, q.y - r * .7, r * 2, r * 1.4); else if (n.layer === "question") { g.moveTo(q.x, q.y - r); g.lineTo(q.x + r, q.y); g.lineTo(q.x, q.y + r); g.lineTo(q.x - r, q.y); } else g.arc(q.x, q.y, r, 0, 6.283); g.fill(); // plans are blocks, questions diamonds, the rest dots
+        if (n.state === "verified" || n.state === "ok") { g.lineWidth = 1.2; g.globalAlpha = al * .8; g.beginPath(); g.arc(q.x, q.y, r + 3.5, 0, 6.283); g.stroke(); } // the Verifier's ring
+        const hover = ptr && Math.hypot(q.x - ptr[0], q.y - ptr[1]) < 30;
+        if (near && (hover || n.layer === "plan" || n.layer === "question" || (n.layer === "name" && n.state === "known"))) { g.font = `${n.kind === "idea" ? "italic " : ""}${Math.round(10 + 3 * q.s)}px ui-monospace, monospace`; g.textAlign = "center"; g.fillStyle = c; g.fillText(n.label.length > 30 ? `${n.label.slice(0, 29)}…` : n.label, q.x, q.y + r + 14); } }
+      else if (it.t === "p") { g.globalAlpha = al; g.fillStyle = "#fff6b0"; g.beginPath(); g.arc(it.q.x, it.q.y, (it.big ? 4.5 : 2.4) * it.q.s, 0, 6.283); g.fill(); }
+      else { const q = it.q; g.globalAlpha = al; g.strokeStyle = g.fillStyle = "#ffb347"; g.lineWidth = 2; g.beginPath(); g.arc(q.x, q.y, 8 * q.s, 0, 6.283); g.stroke(); if (near) { g.font = "12px ui-monospace, monospace"; g.textAlign = "left"; g.fillText(`${it.v.name} ${it.v.value}`, q.x + 13, q.y + 4); } }
+      g.globalAlpha = 1; }
+    walk();
+    gulp = gulp.filter((u) => (u.t += .03) < 1); for (const u of gulp) { const e = u.t * u.t; g.globalAlpha = 1 - e; g.fillStyle = "#e8ecf4"; g.font = `${Math.round(15 * (1 - e * .6))}px ui-sans-serif, system-ui, sans-serif`; g.textAlign = "center"; g.fillText(u.text, cx, H - 90 + (cy - (H - 90)) * e); if (u.t > .93) rings.push(0); } g.globalAlpha = 1;
+  }
+  const at = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  cv.addEventListener("pointerdown", (e) => { drag = [e.clientX, e.clientY, yaw, pitch]; moved = 0; cv.setPointerCapture(e.pointerId); cv.classList.add("grab"); });
+  cv.addEventListener("pointermove", (e) => { ptr = at(e); if (!drag) return; moved += Math.abs(e.movementX) + Math.abs(e.movementY); yaw = drag[2] + (e.clientX - drag[0]) * .008; pitch = Math.max(-1.2, Math.min(1.2, drag[3] + (e.clientY - drag[1]) * .008)); });
+  cv.addEventListener("pointerleave", () => { ptr = null; });
+  cv.addEventListener("pointerup", (e) => { cv.classList.remove("grab"); if (drag && moved < 6) { const p = at(e); let best = null, bd = 24;
+      nodes.forEach((n, i) => { if (hide.has(n.layer) || proj[i].z >= 0) return; const d = Math.hypot(proj[i].x - p[0], proj[i].y - p[1]); if (d < bd) { bd = d; best = n; } });
+      if (best) { best.flash = 70; openNote(best); } } drag = null; });
+  cv.addEventListener("keydown", (e) => { const k = { ArrowLeft: [-.15, 0], ArrowRight: [.15, 0], ArrowUp: [0, -.12], ArrowDown: [0, .12] }[e.key]; if (e.key === "Escape") note.hidden = true; if (!k) return; e.preventDefault(); yaw += k[0]; pitch = Math.max(-1.2, Math.min(1.2, pitch + k[1])); });
+  new MutationObserver(() => { status.title = status.textContent; }).observe(status, { childList: true, characterData: true, subtree: true }); // clamped to 2 lines: the full text is the tooltip
+
+  // ---- report mode: a plain readout of the experiment, the harness as sub-engines (/report-mode, /scene, or the menu) ----
+  const panel = h("section", { class: "sw-report", "aria-label": "Experiment report", hidden: "" });
+  root.append(panel);
+  const openSt = new Set(); let reporting = false, rTimer = 0, rData = null, rSeen = null, rFresh = new Set(), tFilter = "ok", tEngine = ""; // opens on what it did; the skips are one click away
+  const esc = (v) => String(v ?? ""), n0 = (v) => (typeof v === "number" ? v : 0), r2 = (v) => (typeof v === "number" ? Math.round(v * 100) / 100 : "–");
+  const local = (t) => { if (!t) return ""; const d = new Date(t.replace(" ", "T") + "Z"); return isNaN(d) ? t : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }; // the server writes UTC
+  const STAGE = { 2: ["Plan", "decides what to learn next"], 1: ["Goals", "turns the plan into questions"], 0: ["Execute", "looks things up and writes notes"], 3: ["Verifier", "checks notes and rereads replies"] };
+  const stageOf = (s) => { // one stage of the loop, in words: is it doing anything, and if not, why
+    const e = s.engines || [], ok = e.reduce((a, x) => a + n0(x.ok), 0), runs = e.reduce((a, x) => a + n0(x.ok) + n0(x.skipped) + n0(x.failed), 0), failed = e.reduce((a, x) => a + n0(x.failed), 0);
+    const last = e.filter((x) => x.last).sort((a, b) => (b.last.at > a.last.at ? 1 : -1))[0]?.last, blocked = e.length && e.every((x) => x.blocked) ? e[0].blocked : "";
+    const state = s.on === false ? ["off", "switched off"] : blocked ? ["blocked", blocked] : failed && last?.outcome === "failed" ? ["failed", last.detail] : ok && last?.outcome === "ok" ? ["working", last.detail] : last ? ["waiting", last.detail] : ["idle", "has not run yet"];
+    return { ok, runs, state }; };
+  const lineChart = (series) => { // curiosity, maturity and the frontier term on one chart, so you can see them move against each other
+    const pick = series.filter((x) => ["curiosity", "maturity", "frontier"].includes(x.name) && (x.points || []).length > 1), all = pick.flatMap((x) => x.points), hi = Math.max(1, ...all), N = Math.max(...pick.map((x) => x.points.length)) - 1 || 1;
+    const C = { curiosity: "#ffb347", maturity: "#7dffa8", frontier: "#6ff7ff" }, svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 600 140"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "Curiosity, maturity and frontier over the last steps");
+    svg.innerHTML = `<line x1="40" x2="600" y1="10" y2="10" class="g"/><line x1="40" x2="600" y1="120" y2="120" class="g"/><text x="34" y="14" text-anchor="end">${r2(hi)}</text><text x="34" y="124" text-anchor="end">0</text><text x="40" y="138">${N + 1} steps ago</text><text x="600" y="138" text-anchor="end">now</text>`
+      + pick.map((x) => `<polyline fill="none" stroke="${C[x.name]}" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" points="${x.points.map((v, k) => `${(40 + k / N * 560).toFixed(1)},${(120 - v / hi * 110).toFixed(1)}`).join(" ")}"/>`).join("");
+    return h("figure", { class: "sw-rc" }, svg, h("figcaption", {}, ...pick.map((x) => h("span", { style: `--c:${C[x.name]}` }, x.name)))); };
+  let rTab = "steps", rSel = null, rSys = null; const noteCache = new Map();
+  const sysTag = (n) => (n == null ? "" : n === 3 ? "V" : `S${n}`), pct = (v) => (typeof v === "number" ? `${Math.round(v * 100)}%` : "–");
+  const VERD = { keep: ["kept by the Verifier", "ok"], drop: ["dropped by the Verifier", "bad"], unchecked: ["not checked yet", "wait"] };
+  function pick(sel) { rSel = sel; paintReport(); }
+  async function noteDetail(id, verdict) { // fetched once per verdict, so a note the Verifier just judged is read again
+    const c = noteCache.get(id); if (c && (c.loading || c.verdict === verdict || c.error)) return c;
+    noteCache.set(id, { loading: true, verdict }); try { noteCache.set(id, await api(`/char/note/${id}`)); } catch { noteCache.set(id, { error: true, verdict }); } paintReport(); return noteCache.get(id); }
+  const ICONS = { yes: '<path d="M3.5 8.5l3 3 6-7"/>', no: '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>', wait: '<circle cx="8" cy="8" r="2.2"/>' };
+  const ic = (k) => { const s = document.createElement("span"); s.className = "sw-ic"; s.dataset.k = k; s.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${ICONS[k]}</svg>`; return s; };
+  const SC = { 2: "#c79bff", 1: "#ffb347", 0: "#6ff7ff", 3: "#7dffa8" }; // the system colours the lamps in the header use
+  const journey = (n) => { // one note's life, top to bottom: what it guessed, what it read, what it wrote, who let it in
+    if (!n || n.loading) return h("p", { class: "sw-dmut" }, "Loading the note…"); if (n.error) return h("p", { class: "sw-dmut" }, "Could not load this note.");
+    const src = n.sources, g = n.gate, st = (state, title, ...body) => h("li", { "data-k": state }, ic(state), h("div", {}, h("b", {}, title), ...body));
+    return h("article", { class: "sw-jn" }, h("h3", {}, esc(n.topic)), h("p", { class: "sw-dmut" }, `Note ${n.id}, written ${local(n.at)}`),
+      h("ol", { class: "sw-jl" },
+        st(n.question ? "yes" : "wait", "Asked", h("p", {}, n.plan ? `From the plan line “${esc(n.plan)}”.` : n.question ? "From a name it met, not from a plan line." : "Read straight from a name, never asked as a question.")),
+        n.guess ? st("wait", "Guessed before looking", h("blockquote", {}, esc(n.guess)), h("small", {}, `${pct(n.surprise)} of the guess was not in what it found (target 10% or less).`)) : "",
+        st(src == null ? "wait" : src.length ? "yes" : "no", src == null ? "Read (sources not kept for this older note)" : `Read ${src.length} source${src.length === 1 ? "" : "s"}`,
+          src?.length ? h("ul", { class: "sw-jsrc" }, ...src.map((s) => h("li", {}, s.url ? h("a", { href: s.url, target: "_blank", rel: "noopener noreferrer" }, esc(s.title) || esc(s.url)) : h("span", {}, esc(s.title)), h("small", {}, esc(s.snippet))))) : ""),
+        st("yes", "Wrote", h("blockquote", { class: "sw-jtext" }, esc(n.text)), n.ground != null ? h("small", {}, `${pct(n.ground)} of the names it used appear in its sources.`) : ""),
+        g ? st(g[0] === "admit" ? "yes" : "no", g[0] === "admit" ? "Let in at the gate" : "Turned away at the gate", h("p", {}, esc(g[1])))
+          : st(n.verdict === "keep" ? "yes" : n.verdict === "drop" ? "no" : "wait", n.verdict === "keep" ? "Kept by the Verifier, after it was saved" : n.verdict === "drop" ? "Dropped by the Verifier, after it was saved" : "Not judged yet", h("p", {}, "Written before the intake gate existed.")),
+        st((n.names || []).length ? "yes" : "wait", "Joined the mesh", h("p", {}, (n.names || []).length ? n.names.map(esc).join(", ") : "No names taken from it yet.")))); };
+  const TABS = [["story", "Story"], ["chat", "Chat"], ["journal", "Journal"], ["notes", "Notes"], ["activity", "Activity"], ["engines", "Engines"], ["controls", "Controls"]];
+  const MODE_DOES = { quiet: "Only answers you. Never learns by itself.", curious: "Learns by itself while you are away.", proactive: "Learns, then tells you what it found.", planner: "Idle time runs harness cycles: planner, controller, executor, Verifier." };
+  const ctl = { budget: 4, roles: null, busy: "", last: null, swap: null }; let rCyc = null, jPages = null, cnet = null, cMesh = null, cTurns = null; // its study journal, pulled while that tab is open
+  try { rTab = localStorage.getItem("sw-rtab") || "story"; } catch { rTab = "story"; }
+  if (!TABS.some(([k]) => k === rTab)) rTab = "story";
+  const go = (k) => { rTab = k; try { localStorage.setItem("sw-rtab", k); } catch { /* not remembered */ } if (k === "controls") loadRoles(); paintReport(); };
+  async function loadRoles() { if (ctl.roles) return; try { const s = await api("/settings"); ctl.roles = { planner_model: s.planner_model || "", chat_model: s.chat_model || "", judge_model: s.judge_model || "" }; } catch { ctl.roles = { error: true }; } paintReport(); }
+  async function act(label, fn) { ctl.busy = label; paintReport(); try { ctl.last = { label, ok: true, out: await fn() }; } catch (e) { ctl.last = { label, ok: false, out: String(e?.message || e) }; } ctl.busy = ""; await pullReport(true); }
+  const flow = (d, loop) => { // the story in one picture: what it planned, asked, wrote, let in, and linked; band width is how much got through
+    const L = d.learned || {}, st = (n) => { const s = loop.find((x) => x.system === n); return s ? stageOf(s).state : ["idle", ""]; };
+    const gate = (d.trace || []).find((t) => t.kind === "evaluate");
+    const S = [{ n: L.plans, k: "plan lines", c: SC[2], s: st(2), to: () => { rSys = 2; go("activity"); } }, { n: L.questions, k: "questions", c: SC[1], s: st(1), sub: `${n0(L.answered)} answered`, to: () => { rSys = 1; go("activity"); } },
+      { n: L.notes, k: "notes written", c: SC[0], s: st(0), to: () => go("notes") }, { n: L.verified, k: "let in", c: SC[3], s: gate ? [gate.outcome === "ok" ? "working" : gate.outcome, gate.detail] : st(3), sub: `${n0(L.rejected)} turned away`, gate: true, to: () => go("notes") },
+      { n: L.names, k: "names in the mesh", c: SC[0], s: ["", "people, places and things it can link"], to: () => { tEngine = "extract"; rSys = null; go("activity"); } }];
+    const hi = Math.max(1, ...S.map((x) => n0(x.n))), w = (v) => 3 + (n0(v) / hi) * 26, svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 1000 40"); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("aria-hidden", "true");
+    svg.innerHTML = `<defs>${S.slice(0, -1).map((x, i) => `<linearGradient id="swf${i}"><stop offset="0" stop-color="${x.c}"/><stop offset="1" stop-color="${S[i + 1].c}"/></linearGradient>`).join("")}</defs>`
+      + S.slice(0, -1).map((x, i) => { const x0 = 100 + i * 200, x1 = x0 + 200, a = w(Math.min(n0(x.n), n0(S[i + 1].n)) || 0), b = w(n0(S[i + 1].n));
+        return `<path d="M${x0} ${20 - a / 2} C${x0 + 100} ${20 - a / 2} ${x1 - 100} ${20 - b / 2} ${x1} ${20 - b / 2} L${x1} ${20 + b / 2} C${x1 - 100} ${20 + b / 2} ${x0 + 100} ${20 + a / 2} ${x0} ${20 + a / 2}Z" fill="url(#swf${i})" opacity=".28"/>`; }).join("")
+      + S.map((x, i) => `<circle cx="${100 + i * 200}" cy="20" r="6" fill="${x.c}"/><circle cx="${100 + i * 200}" cy="20" r="12" fill="none" stroke="${x.c}" opacity=".25"/>`).join("");
+    return h("figure", { class: "sw-flow" }, h("div", { class: "sw-flow-art" }, svg),
+      h("ol", {}, ...S.map((x) => h("li", { style: `--c:${x.c}` }, h("button", { type: "button", onclick: x.to, title: "Open the details" },
+        h("strong", {}, String(n0(x.n))), h("i", { class: "sw-flow-gap" }), h("b", {}, x.k), x.sub ? h("small", { class: x.gate ? "sw-out" : "" }, x.sub) : "",
+        x.s[1] ? h("p", { "data-s": x.s[0] }, esc(x.s[0] && x.s[0] !== "working" ? `${x.s[0]}: ${x.s[1]}` : x.s[1])) : "")))),
+      h("figcaption", {}, "Everything it learns flows left to right. The gate decides what gets in; what it turns away never reaches its memory.")); };
+  const VERB = { reflect: "wrote a note on", evaluate: "judged at the gate", check: "verified", extract: "took names from", plan: "planned", ask: "asked", goal: "set goals from", wonder: "wondered about", bake: "consolidated", review: "reread a reply", fold: "folded", sort: "sorted", cycle: "ran", model: "swapped models" };
+  function paintReport() {
+    const d = rData; if (!d) return; const T = d.totals || {}, C = d.corrections || {}, L = d.learned || {}, D = d.disposition || {}, F = D.frontier || {}, HL = d.harness_loop || {};
+    const trace = d.trace || [], notes = d.notes || [], cycles = d.cycles || [], skips = trace.filter((t) => t.outcome === "skipped"), why = Object.entries(skips.reduce((a, t) => ((a[t.detail] = (a[t.detail] || 0) + 1), a), {})).sort((a, b) => b[1] - a[1])[0];
+    const who = esc(d.who).split(" ")[0];
+    const head = !d.model?.up ? `${who} cannot learn: the model is not running.` : !n0(T.steps) ? `${who} has not taken a step yet.` : !n0(T.ok) ? `${who} is stuck: ${T.steps} steps, none did anything.` : `${who} has learned ${n0(L.verified)} thing${n0(L.verified) === 1 ? "" : "s"} it trusts, and turned away ${n0(L.rejected)}.`;
+    if (!rSel && notes[0]) rSel = { note: notes[0].id };
+    const loop = [2, 1, 0, 3].map((n) => (d.harness || []).find((s) => s.system === n)).filter(Boolean);
+    const nRow = rSel?.note ? notes.find((n) => n.id === rSel.note) : null, step = rSel?.step ? trace.find((t) => tkey(t) === rSel.step) : null;
+    const nd = nRow ? (noteCache.get(nRow.id)?.verdict === nRow.verdict || noteCache.get(nRow.id)?.loading ? noteCache.get(nRow.id) : (noteDetail(nRow.id, nRow.verdict), { loading: true })) : null;
+    const inspect = () => !step && !nd ? h("p", { class: "sw-dmut" }, "Pick a row to see its whole story.") : h("div", {},
+      step ? h("div", { class: "sw-dstep" }, h("h3", {}, `${sysTag(step.system)} ${step.kind} ${step.outcome === "ok" ? "did something" : step.outcome}`), h("p", { class: "sw-dmut" }, local(step.at)), h("p", {}, esc(step.detail) || "(no detail)")) : "",
+      nd ? journey(nd) : step ? h("p", { class: "sw-dmut" }, "This step is not about one note.") : "");
+    const noteRow = (n) => h("li", {}, h("button", { type: "button", "aria-current": String(rSel?.note === n.id && !rSel.step), onclick: () => { rSel = { note: n.id }; paintReport(); } },
+      ic(n.gate ? (n.gate[0] === "admit" ? "yes" : "no") : n.verdict === "keep" ? "yes" : n.verdict === "drop" ? "no" : "wait"), h("b", {}, esc(n.topic)), h("time", {}, local(n.at)), h("p", {}, esc(n.text))));
+    const split = (list, detail) => h("div", { class: "sw-dsplit" }, h("section", { class: "sw-dlist" }, ...list), h("section", { class: "sw-dsheet", "aria-label": "Detail" }, detail));
+    const body = {
+      chat: () => { cnet ||= makeChatNet(); if (cMesh) cnet.update(cMesh, cTurns); return cnet.el; }, // kept between repaints: the map keeps its layout and keeps moving
+      journal: () => { const pg = jPages; // a page it wrote itself, in its voice, with the facts it was written from underneath
+        const write = h("button", { type: "button", class: "sw-jwrite", disabled: !!ctl.busy, onclick: () => act("journal", () => api("/char/rest", { method: "POST", body: JSON.stringify({ char: true, only: "journal" }) }).then((r) => r.done ? (r.why || "nothing new to write about yet") : "wrote a page")) }, ctl.busy === "journal" ? "Writing…" : "Write a page now");
+        const said = ctl.last?.label === "journal" ? h("small", { class: "sw-jsaid" }, String(ctl.last.out)) : "";
+        if (!pg) return h("p", { class: "sw-dmut" }, "Opening its journal…");
+        return h("div", { class: "sw-journal" }, h("div", { class: "sw-jhead" }, h("p", { class: "sw-dmut" }, pg.length ? `${pg.length} page${pg.length === 1 ? "" : "s"}. It writes one by itself after every three new notes.` : "No pages yet. It writes one by itself after every three new notes."), write, said),
+          ...pg.map((p) => h("article", { class: "sw-jpage" }, h("header", {}, h("h3", {}, new Date(`${p.day}T12:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })), h("time", {}, local(p.at))),
+            h("p", { class: "sw-jbody" }, esc(p.text)),
+            h("dl", { class: "sw-jfacts" },
+              p.studied?.length ? [h("dt", {}, "Studied"), h("dd", {}, p.studied.map(esc).join(" · "))] : "",
+              p.surprised?.length ? [h("dt", {}, "Got wrong"), h("dd", {}, ...p.surprised.map((g) => h("span", {}, `“${esc(g.guess)}” for ${esc(g.q)}, ${pct(g.surprise)} off`)))] : "",
+              p.taught?.length ? [h("dt", {}, "You taught it"), h("dd", {}, p.taught.map(esc).join(" · "))] : "",
+              p.next?.length ? [h("dt", {}, "Wants to know"), h("dd", {}, p.next.map(esc).join(" · "))] : "",
+              h("dt", {}, "Talked with you"), h("dd", {}, `${p.chats} time${p.chats === 1 ? "" : "s"}`))))); },
+      story: () => { const done = trace.filter((t) => t.outcome === "ok").slice(0, 6), old = n0(D.curiosity) - n0(F.term);
+        return h("div", { class: "sw-story" }, flow(d, loop),
+          h("div", { class: "sw-story2" },
+            h("section", {}, h("h4", {}, "Just now"), done.length ? h("ol", { class: "sw-feed" }, ...done.map((t) => h("li", {}, h("button", { type: "button", onclick: () => { rSel = { step: tkey(t), note: t.ref }; go("activity"); } },
+              h("time", {}, local(t.at)), h("p", {}, h("b", { style: `color:${SC[t.system] || "#d4d4d8"}` }, `${who} ${VERB[t.kind] || t.kind}`), ` ${esc(t.detail.split(":")[0])}`)))))
+              : h("p", { class: "sw-dmut" }, "Nothing yet."), why ? h("p", { class: "sw-dmut sw-why" }, `When a step does nothing, it is most often because “${esc(why[0])}”.`) : ""),
+            h("section", {}, h("h4", {}, "Curiosity"), h("p", { class: "sw-big" }, h("strong", {}, r2(D.curiosity)), h("span", {}, `maturity ${r2(D.maturity)}`)),
+              h("p", { class: "sw-dmut" }, `${r2(old)} comes from names it has met but not looked up, ${r2(F.term)} from the mesh still left open (${Math.round(n0(F.F) * 100)}% open, ${n0(F.D)} layers deep).`), lineChart(d.series || [])))); },
+      notes: () => split([h("p", { class: "sw-dmut sw-lhead" }, `${notes.length} notes · ${n0(L.verified)} let in · ${n0(L.rejected)} turned away`), h("ol", { class: "sw-dl sw-dnotes" }, ...notes.map(noteRow))], inspect()),
+      activity: () => { const steps = trace.filter((t) => (tFilter === "all" || t.outcome === tFilter) && (!tEngine || t.kind === tEngine) && (rSys == null || t.system === rSys)), eng = [...new Set(trace.map((t) => t.kind))].sort();
+        const btn = (k, t) => h("button", { type: "button", "aria-pressed": String(tFilter === k), onclick: () => { tFilter = k; paintReport(); } }, t);
+        const sel = h("select", { "aria-label": "Engine", onchange: (e) => { tEngine = e.target.value; paintReport(); } }, h("option", { value: "" }, "every engine"), ...eng.map((k) => h("option", { value: k, selected: k === tEngine }, k)));
+        return split([h("div", { class: "sw-rtf" }, btn("all", "All"), btn("ok", "Did something"), btn("skipped", "Skipped"), btn("failed", "Failed"), sel, rSys != null ? h("button", { type: "button", "aria-pressed": "true", onclick: () => { rSys = null; paintReport(); } }, `only ${sysTag(rSys)}, clear`) : ""),
+          h("ol", { class: "sw-dl sw-dsteps" }, ...steps.slice(0, 300).map((t) => { const k = tkey(t); return h("li", { class: rFresh.has(k) ? "new" : "" }, h("button", { type: "button", "data-o": t.outcome, "aria-current": String(rSel?.step === k), onclick: () => { rSel = { step: k, note: t.ref }; paintReport(); } },
+            h("time", {}, local(t.at)), h("b", { style: `color:${SC[t.system] || "#d4d4d8"}` }, `${sysTag(t.system)} ${t.kind}`), h("span", {}, t.outcome === "ok" ? "did" : t.outcome), h("p", {}, esc(t.detail)))); }))], inspect()); },
+      engines: () => h("div", { class: "sw-eng2" },
+        h("div", { class: "sw-stages" }, ...loop.map((s) => { const st = stageOf(s), [name, role] = STAGE[s.system] || [s.name, s.does];
+          return h("section", { style: `--c:${SC[s.system]}` }, h("h4", {}, `${sysTag(s.system)} ${name}`), h("p", { class: "sw-dmut" }, `${role}. ${s.on === false ? "Switched off." : ""}`),
+            h("ul", {}, ...(s.engines || []).map((e) => { const n = n0(e.ok) + n0(e.skipped) + n0(e.failed);
+              return h("li", {}, h("button", { type: "button", title: "Show this engine's steps", onclick: () => { tEngine = e.kind; rSys = null; go("activity"); } },
+                h("span", {}, h("b", {}, e.kind), h("small", {}, n ? `${n0(e.ok)} of ${n} did something` : "never ran")),
+                n ? h("i", { class: "sw-bar" }, h("b", { style: `flex:${n0(e.ok)}` }), h("b", { class: "sk", style: `flex:${n0(e.skipped)}` }), h("b", { class: "fa", style: `flex:${n0(e.failed)}` })) : "",
+                e.blocked ? h("p", {}, `Blocked: ${esc(e.blocked)}`) : e.last && e.last.outcome !== "ok" ? h("p", {}, `Last time: ${esc(e.last.detail)}`) : "")); }))); })),
+        h("section", { class: "sw-cyc" }, h("h4", {}, "Harness cycles"), cycles.length ? h("p", { class: "sw-dmut" }, `${n0(HL.cycles_run)} cycles: the planner proposed ${n0(HL.proposed)} commands, the controller rejected ${n0(HL.rejected)}, ${n0(HL.executed)} ran and the Verifier kept ${n0(HL.kept)}. ${n0(HL.swaps)} model swaps took ${n0(HL.swap_seconds)} s.`) : "",
+          cycles.length ? h("ol", { class: "sw-dl sw-dnotes" }, ...cycles.slice(0, 8).map((c) => h("li", {}, h("button", { type: "button", "aria-current": String(rCyc === c.cycle), onclick: () => { rCyc = rCyc === c.cycle ? null : c.cycle; paintReport(); } },
+              ic((c.verdicts || []).some((v) => v.keep) ? "yes" : (c.executed || []).length ? "wait" : "no"), h("b", {}, `Cycle ${c.cycle}`), h("time", {}, `${(c.executed || []).length} ran`),
+              h("p", {}, rCyc === c.cycle ? [...(c.rejected || []).map((r) => `rejected ${r.cmd}: ${r.why}`), ...(c.executed || []).map((r) => `${r.cmd}: ${r.outcome} ${r.detail}`), ...(c.verdicts || []).map((v) => `${v.keep ? "kept" : "dropped"} ${v.cmd}: ${v.why}`)].join(" · ") : (c.proposed || []).join(" · "))))))
+            : h("p", { class: "sw-dmut" }, "No cycles yet. Run one from Controls, or switch to planner mode."))),
+      controls: () => { const R = ctl.roles, sw = ctl.swap;
+        return h("div", { class: "sw-ctl" },
+          h("section", {}, h("h4", {}, "How it learns"), h("div", { class: "sw-dseg", role: "radiogroup", "aria-label": "Learning mode" }, ...Object.keys(MODE_DOES).map((m) => h("button", { type: "button", role: "radio", "aria-checked": String(d.mode === m), disabled: !!ctl.busy, onclick: () => act(`mode ${m}`, () => api("/char/wiring", { method: "POST", body: JSON.stringify({ mode: m }) }).then(() => `now ${m}`)) }, m))),
+            h("p", { class: "sw-dmut" }, MODE_DOES[d.mode] || ""),
+            h("label", { class: "sw-cdial" }, h("span", {}, h("b", {}, "Curiosity dial"), h("output", {}, `×${n0(D.dial ?? 1)}`)),
+              h("input", { type: "range", min: 0, max: 3, step: 0.25, value: D.dial ?? 1, disabled: !!ctl.busy, "aria-label": "Curiosity dial", oninput: (e) => { e.target.previousSibling.lastChild.textContent = `×${e.target.value}`; },
+                onchange: (e) => act("curiosity dial", () => api("/char/dial", { method: "POST", body: JSON.stringify({ curiosity: +e.target.value }) }).then((r) => `dial ×${r.dial}, curiosity now ${r.disposition.curiosity}`)) }),
+              h("small", {}, "0 stops it reaching out and keeps replies to the point. 1 is the formula. Above 1 it learns harder and asks you back.")),
+            (() => { const K = d.tracker || {}, num = (k, label) => h("label", {}, label, h("input", { type: "number", min: 0.5, max: 50, step: 0.5, value: K[k] ?? 3, disabled: !!ctl.busy,
+                onchange: (e) => act(label, () => api("/char/tracker", { method: "POST", body: JSON.stringify({ [k]: +e.target.value }) }).then((r) => `sleeps at ${r.sleep_at}, max ${r.max}`)) }));
+              return h("div", { class: "sw-cpush" }, h("span", {}, h("b", {}, "Your push"), h("output", {}, `+${n0(K.momentum ?? 0)} of ${n0(K.sleep_at ?? 3)}`)),
+                h("i", { style: `--f:${Math.min(1, (K.momentum || 0) / (K.sleep_at || 3))}`, "data-asleep": String(!!K.asleep) }),
+                h("small", {}, K.asleep ? "Asleep: learning the way you told it to grow. It wakes when the push is spent." : K.asking ? "It is asking you which way to grow. Answer in the chat." : `Say “learn more”, “go explore”, “dig deeper” in the chat: ${(K.ups ?? 0) % (K.every || 10)} of ${K.every || 10} ups toward +1. At the threshold it asks which way to grow, then sleeps to learn it.`),
+                h("div", { class: "sw-cnums" }, num("sleep_at", "sleeps at"), num("max", "max"))); })(),
+            h("ul", { class: "sw-dsw" }, ...loop.map((s) => h("li", { style: `--c:${SC[s.system]}` }, h("span", {}, h("b", {}, `${sysTag(s.system)} ${STAGE[s.system]?.[0] || s.name}`), h("small", {}, STAGE[s.system]?.[1] || "")),
+              h("button", { type: "button", role: "switch", "aria-checked": String(s.on !== false), "aria-label": `${sysTag(s.system)} ${STAGE[s.system]?.[0] || ""}`, disabled: !!ctl.busy, onclick: () => act(`${sysTag(s.system)} ${s.on === false ? "on" : "off"}`, () => api("/char/systems", { method: "POST", body: JSON.stringify({ id: s.system, on: s.on === false }) }).then(() => `${sysTag(s.system)} ${s.on === false ? "on" : "off"}`)) }, h("i", {})))))),
+          h("section", {}, h("h4", {}, "Run it now"), h("div", { class: "sw-dbtns" },
+              h("button", { type: "button", class: "sw-dprim", disabled: !!ctl.busy, onclick: () => act("one step", async () => { await step(); return "one step ran"; }) }, "Run one step"),
+              h("button", { type: "button", disabled: !!ctl.busy || !d.model?.up, onclick: () => act("one cycle", async () => { const c = await api("/char/cycle", { method: "POST", body: JSON.stringify({ budget: ctl.budget }) }); return `cycle ${c.cycle}: ${(c.executed || []).length} ran, ${(c.rejected || []).length} rejected`; }) }, "Run one harness cycle"),
+              h("label", {}, "commands", h("input", { type: "number", min: 1, max: 12, value: ctl.budget, oninput: (e) => { ctl.budget = Math.max(1, Math.min(12, +e.target.value || 4)); } }))),
+            h("p", { class: "sw-dstat", "data-ok": ctl.busy ? "busy" : String(ctl.last?.ok ?? "") }, ctl.busy ? `Running ${ctl.busy}. A cycle calls the model several times and can take minutes.` : ctl.last ? `${ctl.last.label}: ${typeof ctl.last.out === "string" ? ctl.last.out : "done"}` : "Nothing run from here yet."),
+            h("div", { class: "sw-dbtns" }, h("button", { type: "button", onclick: () => mind() }, "Open memory"), h("button", { type: "button", onclick: () => wiring() }, "Wiring and rules"), h("button", { type: "button", onclick: () => report(false) }, "Back to the scene"))),
+          h("section", {}, h("h4", {}, "Which model thinks"), h("p", { class: "sw-dmut" }, h("i", { class: "sw-lamp", "data-up": String(!!d.model?.up) }), ` Loaded now: ${esc(d.model?.label)}`),
+            sw?.busy ? h("div", { class: "sw-dswap" }, h("p", {}, `Swapping ${esc(sw.from) || "none"} for ${esc(sw.to)}, ${esc(sw.phase)}`), h("i", { style: `--f:${n0(sw.fraction)}` })) : "",
+            !R ? h("p", { class: "sw-dmut" }, "Loading…") : R.error ? h("p", { class: "sw-dmut" }, "Could not read settings.") : h("form", { class: "sw-droles", onsubmit: (e) => { e.preventDefault(); act("save models", () => api("/settings", { method: "PATCH", body: JSON.stringify(R) }).then(() => "models saved")); } },
+              ...[["planner_model", "Planner"], ["chat_model", "Executor and replies"], ["judge_model", "Verifier and gate"]].map(([k, t]) => h("label", {}, t, h("input", { value: R[k], placeholder: "use the loaded model", oninput: (e) => { R[k] = e.target.value.trim(); } }))),
+              h("small", { class: "sw-dmut" }, "Use the exact id Unsloth reports. Empty means no swap."), h("button", { type: "submit", disabled: !!ctl.busy }, "Save models")))); },
+    };
+    const keep = [...panel.querySelectorAll(".sw-dlist, .sw-dsheet, .sw-dbody")].map((x) => x.scrollTop);
+    panel.replaceChildren(h("div", { class: "sw-db" },
+      h("header", { class: "sw-dtop" }, h("h2", {}, head), h("p", {}, h("i", { class: "sw-lamp", "data-up": String(!!d.model?.up) }), ` ${esc(d.model?.label)} · since ${local(d.since)} · ${esc(d.mode)} mode · ${n0(T.ok)} of ${n0(T.steps)} steps did something`),
+        h("nav", { class: "sw-dtabs", role: "tablist", "aria-label": "Report sections" }, ...TABS.map(([k, t]) => h("button", { type: "button", role: "tab", "aria-selected": String(rTab === k), onclick: () => go(k) }, t)))),
+      h("div", { class: "sw-dbody" }, body[rTab]())));
+    panel.querySelectorAll(".sw-dlist, .sw-dsheet, .sw-dbody").forEach((x, i) => { x.scrollTop = keep[i] || 0; });
+  }
+  const tkey = (t) => `${t.at}|${t.kind}|${t.outcome}|${t.detail}`;
+  async function pullReport(force) {
+    if (!reporting || !root.isConnected) { clearInterval(rTimer); rTimer = 0; return; }
+    const typing = panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+    if (rTab === "controls") { loadRoles(); try { ctl.swap = await api("/model/swap"); } catch { ctl.swap = null; } }
+    if (rTab === "journal") { try { jPages = (await api("/char/journal")).pages; } catch { jPages = jPages || []; } }
+    if (rTab === "chat") { try { const [m, c] = await Promise.all([api("/char/mesh"), api("/char")]); cMesh = m; cTurns = c.turns; cnet?.update(cMesh, cTurns); } catch { /* the next pull tries again */ } }
+    try { rData = await api("/char/report"); const ks = new Set((rData.trace || []).map(tkey)); rFresh = rSeen ? new Set([...ks].filter((k) => !rSeen.has(k))) : new Set(); rSeen = ks; if (force === true || !typing) paintReport(); }
+    catch { if (!rData) panel.replaceChildren(h("p", { class: "sw-rh" }, "Report unavailable (the server may need a restart)")); else panel.prepend(h("p", { class: "sw-rh" }, "Report unavailable (the server may need a restart)")); }
+  }
+  document.addEventListener("submit", () => { if (reporting && rTab === "chat") for (const ms of [800, 4000, 10000, 20000]) setTimeout(() => pullReport(), ms); }, true);
+  function report(on = !reporting) {
+    reporting = on; root.classList.toggle("sw-reporting", on); panel.hidden = !on; reportBtn.textContent = on ? "← Mesh" : "Report"; reportBtn.setAttribute("aria-pressed", String(on));
+    clearInterval(rTimer); rTimer = 0; rSeen = null; if (on) { pullReport(); rTimer = setInterval(pullReport, 5000); }
+  }
+  menu.append(h("small", {}, "View"), h("span", {}, h("button", { type: "button", onclick: () => { shut(); report(); } }, "Report")));
+  // the page always opens on the mesh, so you see it grow; the report is one click away
+  markTint(); refresh(); frame();
+  function expand(on = !growTo) { growTo = on ? 1 : 0; if (on) Object.keys(seen).filter((k) => HOME[k]).forEach(agentOf); rings.push(0); status.textContent = on ? "Dot holds the whole net now. /expand-to-net again to gather it back." : "Dot gathers back to its centre."; }
+  return { expand, report, palette, data, say, heard, fire, stepped, refresh, busy: () => { busy = true; } };
+}

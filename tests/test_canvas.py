@@ -314,7 +314,8 @@ def test_the_selected_part_goes_with_the_question(monkeypatch) -> None:
     _ask(c, pid, question="simplify this term by term", quote="F1(f, D) := 2TP / (P + PP)")
     r = _ask(c, pid, question="again", quote="x")
     assert "The part I selected on page 1" in prompts[0] and "2TP / (P + PP)" in prompts[0]
-    assert r["trace"][0] == "your selection, 1 characters" and any(t.startswith("read pages 1") for t in r["trace"])
+    assert r["trace"][0] == "your selection, 1 characters" and any(t.endswith("round your selection") for t in r["trace"])
+    assert "About the part I selected only" in prompts[0]  # a selection stays the subject, not the whole paper
 
 
 def test_a_follow_up_that_repeats_the_answer_is_asked_again(monkeypatch) -> None:
@@ -377,3 +378,15 @@ def test_a_looping_answer_is_cut_where_it_goes_round() -> None:
     from workbench import llm
     text = "Intro.\n- a — one\n- b — two\n- a — one\n- b — two\n- c — three"
     assert llm._no_loops(text) == "Intro.\n- a — one\n- b — two"
+
+
+def test_a_selection_reads_its_paragraphs_and_one_either_side() -> None:
+    paras = [(f"p1-b{i}", 1, [0, 0, 1, 1], t) for i, t in enumerate([
+        "Abstract about fairness variance overall.", "Background on bias mitigation algorithms.",
+        "The standard solution executes many training runs with different randomness, costing huge compute budgets.",
+        "Our paper answers this critical unsolved question about efficient alternatives measuring variance cheaply.",
+        "Keywords: training randomness.", "References list."])]
+    quote = ("The standard solution executes many training runs with different randomness, costing huge compute budgets. "
+             "Our paper answers this critical unsolved question about efficient alternatives measuring variance cheaply.")
+    assert [p[0] for p in canvas._around(paras, quote)] == ["p1-b1", "p1-b2", "p1-b3", "p1-b4"]
+    assert canvas._around(paras, "nothing alike") == paras

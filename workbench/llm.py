@@ -1,6 +1,7 @@
 """Talk to the Unsloth (llama-server) OpenAI-compatible endpoint."""
 import json
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -29,11 +30,24 @@ def model_status(s: Settings) -> dict[str, Any]:
     return {"status": "ready", "label": "Model ready", "models": models}
 
 
+_picked: dict[str, tuple[str, float]] = {}  # base_url -> (model, when), so each call does not list the models again
+
+
 def pick_model(s: Settings) -> str:
+    """The model setting, else a chat model the server lists: one already loaded first, never an embedding model."""
     if s.model_name:
         return s.model_name
-    models = model_status(s)["models"]
-    return models[0] if models else ""
+    got = _picked.get(s.base_url)
+    if got and time.time() - got[1] < 30:
+        return got[0]
+    try:
+        listed = list(client(s, timeout=5).models.list())
+    except APIError:
+        return ""
+    chat = [m for m in listed if "embed" not in m.id.lower()] or listed
+    best = next((m.id for m in chat if getattr(m, "loaded", False)), chat[0].id if chat else "")
+    _picked[s.base_url] = (best, time.time())
+    return best
 
 
 def test_connection(s: Settings) -> dict[str, Any]:
@@ -52,6 +66,67 @@ def test_connection(s: Settings) -> dict[str, Any]:
         return {"ok": False, "error": e.message}
     return {"ok": True, "model": r.model, "reply": (r.choices[0].message.content or "").strip(),
             "seconds": round(time.perf_counter() - start, 2)}
+
+
+SWAP: dict[str, Any] = {"busy": False, "from": "", "to": "", "phase": "", "fraction": 0.0, "started": ""}  # the live model swap, for GET /model/swap
+_swap_lock = threading.Lock()  # one model at a time, process wide
+
+
+def _api(s: Settings, method: str, path: str, body: dict[str, Any] | None = None, timeout: float = 10) -> Any:
+    """One call to the Unsloth inference API at the server root (not /v1). Tests replace this. Raises on HTTP or network errors."""
+    req = urllib.request.Request(f"{s.base_url.removesuffix('/v1').rstrip('/')}/api/inference/{path}", method=method,
+                                 data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {s.api_key}"} if s.api_key else {})})
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 — the URL is the user's own server
+        raw = r.read().decode()
+    try:
+        return json.loads(raw or "null")
+    except json.JSONDecodeError:  # load/unload answer padded streams; only status and progress need a body
+        return raw
+
+
+def ensure(s: Settings, model: str, timeout: float = 600, poll: float = 1.0) -> dict[str, Any] | None:
+    """Make `model` the loaded one: unload the current, load it, poll until it is active. None when nothing had to change.
+    Every swap (and every skip) is a "model" engine row: from, to, seconds, ok/failed."""
+    from . import char  # char imports llm
+    if not model:
+        return None
+    with _swap_lock:
+        try:
+            st = _api(s, "GET", "status")
+        except Exception as e:
+            char._engine("model", "skipped", f"status unreachable: {e}")
+            return None
+        if not isinstance(st, dict) or "active_model" not in st or not isinstance(st.get("loaded"), list):
+            char._engine("model", "skipped", "unknown status shape")
+            return None
+        cur = st.get("active_model") or ""
+        if cur == model:
+            return None
+        t0 = time.time()
+        SWAP.update(busy=True, **{"from": cur}, to=model, phase="unloading" if cur else "loading", fraction=0.0, started=time.strftime("%H:%M:%S"))
+        ok, why = False, "timed out"
+        try:
+            if cur:
+                _api(s, "POST", "unload", {"model_path": cur}, timeout=timeout)
+            SWAP["phase"] = "loading"
+            _api(s, "POST", "load", {"model_path": model}, timeout=timeout)
+            while time.time() - t0 < timeout:
+                st = _api(s, "GET", "status")
+                if isinstance(st, dict) and st.get("active_model") == model and model not in (st.get("loading") or []):
+                    ok = True
+                    break
+                p = _api(s, "GET", "load-progress")
+                if isinstance(p, dict):
+                    SWAP.update(phase=p.get("phase") or "loading", fraction=float(p.get("fraction") or 0))
+                time.sleep(poll)
+        except Exception as e:
+            why = str(e)[:120]
+        secs = round(time.time() - t0, 1)
+        SWAP.update(busy=False, phase="ready" if ok else "failed", fraction=1.0 if ok else SWAP["fraction"])
+        _picked.clear()  # the cached pick may name the model that just left
+        char._engine("model", "ok" if ok else "failed", f"{cur or 'nothing'} → {model} in {secs:.0f}s" + ("" if ok else f" ({why})"))
+        return {"from": cur, "to": model, "seconds": secs, "ok": ok}
 
 
 # The loaded window first. n_ctx_train is how big the model can be, not how it was started.
@@ -188,19 +263,117 @@ def _strip_thinking(text: str) -> str | None:
     return None if "<think>" in text else text.strip()
 
 
-_WINDOW = re.compile(r"exceeds the (\d+)-token context window")
+_WINDOW = re.compile(r"(?:(\d+) tokens )?exceeds the (\d+)-token context window")
+ROOM = "The model ran out of room before it answered. Raise Max output tokens in Settings."
 
 
-def paper_text(s: Settings, pages: list[str], page: int, overhead: str, limit: int | None = None) -> tuple[str, list[int]]:
+class ModelError(RuntimeError):
+    """A message the user can act on. `status` is the server's HTTP status when it refused the request."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+# (base_url, model setting) -> (tokens, when, characters a token): the loaded window, when the server said it is
+# smaller than the setting, and how densely it counted our text.
+# shortcut: forgotten after 10 minutes in case the model was reloaded bigger; ask /props for n_ctx if servers start reporting it.
+_windows: dict[tuple[str, str], tuple[int, float, float]] = {}
+
+
+def window(s: Settings) -> int:
+    """Tokens one request may hold: the setting, or the smaller window the server last said it has."""
+    got = _windows.get((s.base_url, s.model_name))
+    return min(s.max_context_tokens, got[0]) if got and time.time() - got[1] < 600 else s.max_context_tokens
+
+
+def reply_tokens(s: Settings, want: int | None = None) -> int:
+    """Room kept for the reply. A window smaller than the setting gives at most a quarter of itself to the reply."""
+    want = want or s.max_output_tokens
+    win = window(s)
+    return want if win >= s.max_context_tokens else min(want, max(64, win // 4))
+
+
+def _text(m: dict[str, Any]) -> str:
+    c = m.get("content")
+    return c if isinstance(c, str) else "".join(x.get("text", "") for x in c or [] if isinstance(x, dict))
+
+
+def _trim(messages: list[dict[str, Any]], keep: int, chars_per_token: float) -> list[dict[str, Any]]:
+    """Cut the middle out of the longest message so the request is about `keep` tokens. Its start (the
+    instruction) and its end (the question) stay."""
+    sizes = [len(_text(m)) for m in messages]
+    over = sum(sizes) - int(max(keep, 0) * chars_per_token)
+    if over <= 0 or not messages:
+        return messages
+    i = max(range(len(messages)), key=sizes.__getitem__)
+    t = _text(messages[i])
+    left = max(len(t) - over, 0)
+    cut = t[:left // 2] + "\n[... cut to fit the model ...]\n" + (t[len(t) - (left - left // 2):] if left - left // 2 else "")
+    c = messages[i]["content"]
+    new = cut if isinstance(c, str) else [{**x, "text": cut} if isinstance(x, dict) and x.get("type") == "text" else x for x in c]
+    return [*messages[:i], {**messages[i], "content": new}, *messages[i + 1:]]
+
+
+def _window_of(e: APIStatusError) -> tuple[int | None, int] | None:
+    """(tokens sent, window) from a "too long for the window" refusal: Unsloth's message or llama-server's n_ctx."""
+    if m := _WINDOW.search(e.message or ""):
+        return (int(m[1]) if m[1] else None), int(m[2])
+    body = getattr(e, "body", None)
+    err = body.get("error", body) if isinstance(body, dict) else None
+    if isinstance(err, dict) and isinstance(err.get("n_ctx"), int) and "context" in str(err.get("message", "")).lower():
+        return err.get("n_prompt_tokens"), err["n_ctx"]
+    return None
+
+
+def chat(s: Settings, messages: list[dict[str, Any]], *, max_tokens: int | None = None, temperature: float | None = None,
+         response_format: dict[str, Any] | None = None, trim: bool = True, _again: bool = False) -> str:
+    """One reply from the local model with thinking removed. Every model call in the app goes through here.
+
+    A request longer than the window is cut in its longest message first. When the server says its loaded
+    window is smaller than the setting, that window is remembered and (with `trim`) the request is cut and sent
+    once more. Raises ModelError."""
+    out = reply_tokens(s, max_tokens)
+    if trim:
+        learned = _windows.get((s.base_url, s.model_name))
+        messages = _trim(messages, window(s) - out - 64, min(context.CHARS_PER_TOKEN, learned[2] if learned else 99))
+    extra: dict[str, Any] = {"response_format": response_format} if response_format else {}
+    try:
+        r = client(s).chat.completions.create(
+            model=pick_model(s) or "default", messages=messages, max_tokens=out,  # type: ignore[arg-type]
+            temperature=s.temperature if temperature is None else temperature, extra_body=NO_THINK, **extra)
+    except AuthenticationError:
+        raise ModelError("Wrong API key. Check it in Settings.")
+    except APIConnectionError:
+        raise ModelError("Could not reach the model. Is Unsloth running?")
+    except APIStatusError as e:
+        found = _window_of(e)
+        if not found:
+            raise ModelError(e.message or "The model call failed.", e.status_code)
+        sent, size = found
+        ratio = 0.95 * (sum(len(_text(m)) for m in messages) / sent if sent else context.CHARS_PER_TOKEN * 0.8)
+        _windows[(s.base_url, s.model_name)] = (size, time.time(), ratio)
+        if trim and not _again:
+            return chat(s, _trim(messages, size - reply_tokens(s, max_tokens) - 64, ratio), max_tokens=max_tokens,
+                        temperature=temperature, response_format=response_format, _again=True)
+        raise ModelError(f"The loaded model holds only {size} tokens, less than the {s.max_context_tokens} set in Settings. "
+                         "Load it with a bigger context window, or lower Max context tokens in Settings.")
+    except APIError as e:
+        raise ModelError(e.message or "The model call failed.")
+    choice = r.choices[0]
+    text = _strip_thinking(choice.message.content or "")
+    cut_off = getattr(choice, "finish_reason", None) == "length"
+    if text is None or (cut_off and (not text or response_format)):  # half a JSON object is no use
+        raise ModelError(ROOM)
+    if not text:
+        raise ModelError("The model gave an empty answer. Try again.")
+    return text
+
+
+def paper_text(s: Settings, pages: list[str], page: int, overhead: str) -> tuple[str, list[int]]:
     """The paper as page-labelled text: every page if it fits the context budget, else the pages
-    nearest `page` (0-based). `limit` is the window the server just said it actually has.
-    Returns the text and the page indexes used."""
-    if limit is None:
-        budget = (s.max_context_tokens - s.max_output_tokens
-                  - context.tokens(overhead) - 64 * len(pages) - 200)
-    else:
-        out = min(s.max_output_tokens, max(64, limit // 4))
-        budget = limit - out - context.tokens(overhead) - 64
+    nearest `page` (0-based). Returns the text and the page indexes used."""
+    budget = window(s) - reply_tokens(s) - context.tokens(overhead) - 6 * len(pages) - 100
     keep = context.fit_pages(pages, budget, page) if pages else []
     room = int(budget * context.CHARS_PER_TOKEN)
     return "\n\n".join(f"--- Page {i + 1} ---\n{pages[i].strip()}" for i in keep)[:max(room, 0)], keep
@@ -240,22 +413,8 @@ def _short_idea(line: str) -> str:
 def key_ideas(s: Settings, title: str, pages: list[str]) -> list[str]:
     """Five short key ideas from the whole paper. Raises RuntimeError with a message for the user."""
     paper, _ = paper_text(s, pages, 0, IDEAS_SYSTEM + title)
-    try:
-        r = client(s).chat.completions.create(
-            model=pick_model(s) or "default",
-            messages=[{"role": "system", "content": IDEAS_SYSTEM},
-                      {"role": "user", "content": f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\nThe 5 key ideas:"}],
-            max_tokens=s.max_output_tokens, temperature=s.temperature, extra_body=NO_THINK,
-        )
-    except AuthenticationError:
-        raise RuntimeError("Wrong API key. Check it in Settings.")
-    except APIConnectionError:
-        raise RuntimeError("Could not reach the model. Is Unsloth running?")
-    except APIError as e:
-        raise RuntimeError(e.message)
-    text = _strip_thinking(r.choices[0].message.content or "")
-    if text is None:
-        raise RuntimeError("The model ran out of room before it answered. Raise Max output tokens in Settings.")
+    text = chat(s, [{"role": "system", "content": IDEAS_SYSTEM},
+                    {"role": "user", "content": f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\nThe 5 key ideas:"}])
     ideas: list[str] = []
     for line in text.splitlines():
         line = _short_idea(re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip().strip("*\"'.:").strip())
@@ -272,38 +431,24 @@ ASK_SYSTEM = (
 
 
 def _answer(s: Settings, system: str, question: str, title: str, pages: list[str], page: int,
-            image: str | None = None, limit: int | None = None) -> dict[str, Any]:
+            image: str | None = None, _again: bool = False) -> dict[str, Any]:
     """One question to the local model with the paper (or what fits) as context. `page` is 0-based.
     `image` is a data: URL sent with the question; if the server will not take images, it asks again without.
-    `limit` is the context window from a "message too long" reply, used for one shorter try."""
+    A window smaller than the setting is remembered and the pages nearest `page` are picked again to fit it."""
     page = min(max(page, 0), max(len(pages) - 1, 0))
-    paper, keep = paper_text(s, pages, page, system + question + title, limit)
+    paper, keep = paper_text(s, pages, page, system + question + title)
     start = time.perf_counter()
     prompt = f"Paper: {title}\n\n<paper>\n{paper}\n</paper>\n\n{question}"
     content: Any = [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": image}}] if image else prompt
+    before = window(s)
     try:
-        try:
-            r = client(s).chat.completions.create(
-                model=pick_model(s) or "default",
-                messages=[{"role": "system", "content": system + persona(s)}, {"role": "user", "content": content}],
-                max_tokens=s.max_output_tokens, temperature=s.temperature, extra_body=NO_THINK,
-            )
-        except APIStatusError as e:
-            found = _WINDOW.search(e.message or "")
-            if found and limit is None:  # the loaded window is smaller than the setting; ask again with less of the paper
-                return _answer(s, system, question, title, pages, page, image, limit=int(found.group(1)))
-            if not image or e.status_code not in (400, 415, 422, 500, 501):
-                raise
-            return _answer(s, system, question, title, pages, page, limit=limit)  # a text-only model: ask without the picture
-    except AuthenticationError:
-        return {"ok": False, "error": "Wrong API key. Check it in Settings."}
-    except APIConnectionError:
-        return {"ok": False, "error": "Could not reach the model. Is Unsloth running?"}
-    except APIError as e:
-        return {"ok": False, "error": e.message}
-    text = _strip_thinking(r.choices[0].message.content or "")
-    if not text:
-        return {"ok": False, "error": "The model ran out of room before it answered. Raise Max output tokens in Settings."}
+        text = chat(s, [{"role": "system", "content": system + persona(s)}, {"role": "user", "content": content}], trim=_again)
+    except ModelError as e:
+        if window(s) < before:  # the loaded window is smaller than the setting: ask again with the pages that fit it
+            return _answer(s, system, question, title, pages, page, image, _again=True)  # cut to fit if still too long
+        if image and e.status in (400, 415, 422, 500, 501):  # a text-only model: ask without the picture
+            return _answer(s, system, question, title, pages, page, _again=_again)
+        return {"ok": False, "error": str(e)}
     return {"ok": True, "text": text, "pages": [keep[0] + 1, keep[-1] + 1] if keep else [],
             "whole": len(keep) == len(pages), "total": len(pages), "seconds": round(time.perf_counter() - start, 1)}
 
@@ -486,7 +631,7 @@ def _dedupe(src: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _fit(s: Settings, paras: list[tuple[str, int, list[float], str]], overhead: str) -> list[tuple[str, int, list[float], str]]:
     """The paragraphs that fit the context budget, taken in the order given (best pages first), then in page order."""
-    room = int((s.max_context_tokens - s.max_output_tokens - context.tokens(overhead) - 300) * context.CHARS_PER_TOKEN)
+    room = int((window(s) - reply_tokens(s) - context.tokens(overhead) - 300) * context.CHARS_PER_TOKEN)
     out, used = [], 0
     for p in paras:
         used += len(p[3][:1500]) + 24

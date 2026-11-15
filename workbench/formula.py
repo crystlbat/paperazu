@@ -9,7 +9,6 @@ import json
 import re
 from typing import Any
 
-from openai import APIConnectionError, APIError, APIStatusError, AuthenticationError
 
 from . import llm, marks
 
@@ -68,24 +67,12 @@ def _chat(s: Any, system: str, text: str, image: str | None = None, tokens: int 
     """One short reply. With `image`, a text-only server is asked again without it. Raises RuntimeError for the user."""
     content: Any = [{"type": "text", "text": text}, {"type": "image_url", "image_url": {"url": image}}] if image else text
     try:
-        try:
-            r = llm.client(s).chat.completions.create(
-                model=llm.pick_model(s) or "default",
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": content}],
-                max_tokens=min(tokens, s.max_output_tokens), temperature=min(s.temperature, 0.3), extra_body=llm.NO_THINK)
-        except APIStatusError as e:
-            if image and e.status_code in (400, 415, 422, 500, 501):
-                return _chat(s, system, text, None, tokens)
-            raise
-    except AuthenticationError:
-        raise RuntimeError("Wrong API key. Check it in Settings.")
-    except APIConnectionError:
-        raise RuntimeError("Could not reach the model. Is Unsloth running?")
-    except APIError as e:
-        raise RuntimeError(e.message)
-    out = llm._strip_thinking(r.choices[0].message.content or "")
-    if not out:
-        raise RuntimeError("The model ran out of room before it answered. Raise Max output tokens in Settings.")
+        out = llm.chat(s, [{"role": "system", "content": system}, {"role": "user", "content": content}],
+                       max_tokens=min(tokens, s.max_output_tokens), temperature=min(s.temperature, 0.3))
+    except llm.ModelError as e:
+        if image and e.status in (400, 415, 422, 500, 501):
+            return _chat(s, system, text, None, tokens)
+        raise
     return _plain(out)
 
 

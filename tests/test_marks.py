@@ -194,3 +194,14 @@ def test_find_falls_back_to_first_and_last_words() -> None:
     words = [(w, [pymupdf.Rect(i * 10, 0, i * 10 + 8, 10)]) for i, w in enumerate("we show that seeds change fairness a great deal".split())]
     assert len(marks._find(words, "we show that seeds really change fairness a great deal")) == 9  # one word made up mid-way
     assert marks._find(words, "nothing like this at all") == []
+
+
+def test_a_scrap_of_a_quote_grows_to_its_sentence() -> None:
+    text = ("Is there a dominant source of randomness? We show that the fairness variance observed in the litera-\n"
+            "ture is dominated by data reshuffling. Other forms matter less.")
+    assert marks._whole(text, "fairness variance observed") == \
+        "We show that the fairness variance observed in the literature is dominated by data reshuffling."
+    assert marks._whole(text, "dominant source of randomness") == "Is there a dominant source of randomness?"
+    long = "We show that the fairness variance observed in the literature"
+    assert marks._whole(text, long) == long  # a real quote is kept as the model gave it
+    assert marks._whole(text, "words not in the text") == "words not in the text"

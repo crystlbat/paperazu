@@ -137,7 +137,40 @@ async function renderReader(paperId, startPage) {
     if (drawers.notes.isOpen()) return drawers.closeAll();
     openNote();
   }
-  pdf.hooks.onAsk = (s, at) => canvas.ask(s, at);
+  // with the canvas shut and room beside the page, Dot answers in the margin; otherwise on the canvas as before
+  pdf.hooks.onAsk = (s, at) => (canvas.isOpen() || !pdf.sideRoom() ? canvas.ask(s, at) : askBeside(s, at));
+  async function askBeside(s, at) {
+    const q = await buddy.prompt({ x: at.x, y: at.y, placeholder: s?.text ? "Ask about this part..." : "Ask about this page..." });
+    if (q && !(await pdf.command?.(q))) sideAnswer({ question: q, page: s?.page ?? pdf.page(), rect: s?.rect, quote: s?.text || "" });
+  }
+  // The answer is saved on the board too (as an answer card and its source cards), so the canvas has it later.
+  async function sideAnswer({ question, page, rect, quote, from = null }) {
+    const body = h("div", { class: "sn-body" }, h("p", { class: "sn-wait" }, quote ? "Reading your selection..." : `Reading page ${page}...`));
+    const el = h("aside", { class: "side-note", "aria-live": "polite", "aria-label": "Dot's answer" },
+      h("div", { class: "sn-top" }, h("span", { class: "gd-eyes", "aria-hidden": "true" }, h("i"), h("i")), h("b", { class: "sn-q" }, question),
+        h("button", { type: "button", class: "buddy-x", "aria-label": "Close this answer", onclick: () => remove() }, "\u00d7")),
+      body);
+    const remove = pdf.beside(page, rect, el);
+    const board = await api(`/papers/${paperId}/canvas`).catch(() => ({ cards: [] }));
+    const y = Math.max(40, ...(board.cards || []).map((c) => (c.y || 0) + 220)); // below what is on the board already
+    const r = await api(`/papers/${paperId}/canvas/ask`, { method: "POST", body: JSON.stringify({ question, page, from_card: from, at: [60, Math.round(y)], quote: quote.slice(0, 3000) }) })
+      .catch((e) => ({ ok: false, error: e.body?.detail?.errors?.[0]?.message ?? "I could not reach the app. Is it still running?" }));
+    if (!el.isConnected) return; // closed while Dot was thinking
+    if (!r.ok) { body.replaceChildren(h("p", { class: "sn-err" }, r.error || "That did not work. Try again.")); return; }
+    canvas.reload?.();
+    const text = r.answer.text.replace(/\n\nNo exact lines found\.$/, "");
+    body.replaceChildren(
+      h("div", { class: "sn-text" }, ...text.split(/\n+/).filter(Boolean).map((t) => h("p", {}, t))),
+      r.sources?.length ? h("ul", { class: "sn-src", "aria-label": "Where it says so" }, ...r.sources.map((c) =>
+        h("li", {}, h("button", { type: "button", onclick: () => pdf.reveal(c.page, c.rect) }, h("span", { class: "num" }, `p. ${c.page}`), c.text)))) : null,
+      h("div", { class: "sn-actions" },
+        h("button", { type: "button", class: "btn small-btn", onclick: async (e) => {
+          const b = e.currentTarget.getBoundingClientRect();
+          const q2 = await buddy.prompt({ x: b.left, y: b.bottom + 8, placeholder: "Ask more about this..." });
+          if (q2) sideAnswer({ question: q2, page, rect, quote: "", from: r.answer.id });
+        } }, "Ask more"),
+        h("button", { type: "button", class: "btn ghost small-btn", onclick: () => { remove(); canvas.open?.(); } }, "Open on canvas")));
+  }
   pdf.hooks.onCommand = (q) => canvas.command?.(q);
   const creatures = crWatch(paperId, pdf, canvas); // your creatures wake on what you do here
   notesChip.before(creatures.chip);
@@ -171,6 +204,7 @@ async function renderReader(paperId, startPage) {
       icon: ico('<circle cx="8.5" cy="11" r="1.8" class="fill"/><circle cx="15.5" cy="11" r="1.8" class="fill"/><path d="M8 16c2.4 1.6 5.6 1.6 8 0"/>'), pick: () => buddy.sleep(false) },
     { group: "Asleep", key: "collect", name: "Collect highlights", hint: "Gather your highlights into your note", color: "#f7b955",
       icon: ico('<path d="M5 6h9M5 10h7"/><path d="M4 15h16l-2 5H6z"/><path d="M17 4v7m-3-3 3 3 3-3"/>'), pick: collectHighlights },
+    { group: "Asleep", key: "size", name: "Size", hint: "Make me bigger or smaller", color: "#ffd166", icon: ico('<circle class="fill" cx="8" cy="15" r="3"/><circle cx="15" cy="10" r="6"/>'), pick: () => buddy.resize() },
     { group: "Asleep", key: "canvas", name: "Canvas", hint: "Your notes and cards", color: "#ff9e7a", icon: ico('<rect class="card a" x="3" y="6" width="11" height="13" rx="2"/><rect class="card b" x="10" y="4" width="11" height="13" rx="2"/>'),
       pick: () => (canvasHost.hidden ? buddy.say("The paper is closed for this step, so the canvas is too.") : canvas.toggle()) },
   ];
@@ -183,6 +217,7 @@ async function renderReader(paperId, startPage) {
       icon: ico('<rect class="eye fill" x="5" y="6" width="4" height="12" rx="2"/><rect class="eye fill" x="15" y="6" width="4" height="12" rx="2"/>'),
       pick: () => { pdf.watch(!pdf.watching()); dotTools(); } },
     ...(pdf.watching() ? [{ group: "With you", key: "clear", name: "Reset session", hint: "Start this session\u2019s count again", color: "#ff8a7e", icon: ico('<path d="M6 6l12 12M18 6 6 18"/>'), pick: () => pdf.clearTrail() }] : []),
+    { group: "With you", key: "size", name: "Size", hint: "Make me bigger or smaller", color: "#ffd166", icon: ico('<circle class="fill" cx="8" cy="15" r="3"/><circle cx="15" cy="10" r="6"/>'), pick: () => buddy.resize() },
     { group: "On the page", key: "lens", name: "Lens", hint: "Highlight words, I explain", color: "#5ec8d8", icon: ico('<circle cx="10" cy="10" r="5.5"/><path d="m14.2 14.2 5 5"/>'), pick: () => pdf.lens() },
     { group: "On the page", key: "guide", name: "Guide", hint: "I walk the paper with you", color: "#c6a0ff", icon: ico('<path class="route" d="M4 17c3 0 3-8 7-8s4 8 9 1"/><circle class="fill bug" cx="4" cy="17" r="2"/>'), pick: () => guide.start() },
     { group: "On the page", key: "collect", name: "Collect highlights", hint: "Gather your highlights into your note", color: "#f7b955",
@@ -324,6 +359,15 @@ function guidedReading(paperId, pdf, onStep, openNotes, save) {
     where.textContent = r.found ? `"${s.heading}".` : `Page ${s.page}.`;
     const parts = [...(r.subs || []), ...(r.more ? [`Runs on to page ${r.last}`] : [])];
     if (parts.length) look.append(h("li", { class: "gd-parts" }, h("b", {}, "Read through"), h("ol", {}, ...parts.map((t) => h("li", {}, t)))));
+    if (s.items?.length > 1) { // every figure and table: each one goes there and marks its caption
+      const go = (f) => async () => {
+        const at = await pdf.point(f.label, f.page);
+        if (on && my === live) buddy.lookAt(at.left + at.w / 2, at.top + at.h / 2, 3000);
+      };
+      look.append(h("li", { class: "gd-parts" }, h("b", {}, "Go to"), h("ol", { class: "gd-figs" },
+        ...s.items.map((f) => h("li", {}, h("button", { type: "button", class: "gd-fig", title: f.caption || f.label, onclick: go(f) },
+          f.label, h("span", { class: "num" }, ` p. ${f.page}`)))))));
+    }
     tuckT = setTimeout(() => { if (on && !ta.value.trim()) card.classList.add("tuck"); }, 4000);
     buddy.lookAt(r.left + r.w / 2, r.top + r.h / 2, 4000);
     buddy.say(`Stage ${i + 1} of ${stops.length}: ${s.title}.`, { mood: "happy", pop: false }); // the card says it; Dot's bubble would cover the text
@@ -363,6 +407,7 @@ function researchPage({ paperId, title, plain, pdf }) {
       const t = raw.trim();
       if (!t) { ul = null; continue; }
       let m;
+      if ((m = t.match(/^-{3,}\s*(.*?)\s*-*$/))) { if (m[1]) p.mine.push(h("p", { class: "rp-who" }, m[1])); ul = null; continue; } // "--- tessa ---": who wrote what follows
       if (inHl && (m = t.match(/^p\. (\d+)$/))) { page = +m[1]; continue; }
       if (inHl && (m = t.match(/^(?:- )?"(.*)"$/))) { p.quotes.push({ page, text: m[1] }); continue; }
       inHl = false;
@@ -445,27 +490,30 @@ function researchPage({ paperId, title, plain, pdf }) {
     const key = (t) => t.replace(/\s+/g, " ").trim().slice(0, 60);
     const have = new Set(hls.map((q) => key(q.text)));
     const quotes = [...hls, ...part.quotes.filter((q) => !have.has(key(q.text)))].sort((a, b) => a.page - b.page);
-    const pages = new Set([...cards.map((c) => c.page), ...quotes.map((q) => q.page)].filter(Boolean));
     const nAsk = cards.filter((c) => c.kind === "answer").length + part.asks.length;
     const counts = { notes: part.mine.length, asks: nAsk, passages: notes.length, quotes: quotes.length, stages: part.stages.length };
     const order = ["notes", "asks", "passages", "quotes", ...(part.stages.length ? ["stages"] : [])];
-    const toc = order.map((id) => h("button", { type: "button", class: `rp-${id}-tab`, onclick: () => el.querySelector(`#rp-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" }) },
+    let tab = "notes"; try { tab = localStorage.getItem("rp-tab") || "notes"; } catch { /* private window */ }
+    if (!order.includes(tab)) tab = "notes";
+    const pick = (id) => { tab = id; try { localStorage.setItem("rp-tab", id); } catch { /* ok */ } // one section at a time: the rest wait behind their tab
+      el.querySelectorAll(".rp-sec").forEach((x) => { x.hidden = x.id !== `rp-${id}`; });
+      el.querySelectorAll(".rp-toc button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.k === id)); };
+    const toc = order.map((id) => h("button", { type: "button", class: `rp-${id}-tab`, "data-k": id, "aria-pressed": String(id === tab), onclick: () => pick(id) },
       SECTIONS[id][0], id !== "notes" ? h("small", {}, String(counts[id])) : null));
-    const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
     const tools = text.trim() ? h("div", { class: "rp-tools" }, h("button", { type: "button", class: "rp-ghost", onclick: () => setEdit(true) }, "Edit whole note")) : null;
     secN = 0;
     el.replaceChildren(
       h("header", { class: "rp-head" },
         h("p", { class: "rp-kicker" }, h("span", { class: "gd-eyes", "aria-hidden": "true" }, h("i"), h("i")), "My research"),
-        h("h1", {}, title),
-        h("p", { class: "rp-meta" }, `${plural(nAsk, "question")} \u00b7 ${plural(notes.length, "passage note")} \u00b7 ${plural(quotes.length, "highlight")} \u00b7 ${plural(pages.size, "page")} touched`)),
+        h("h1", {}, title)),
       h("nav", { class: "rp-toc", "aria-label": "Sections" }, ...toc),
       section("notes", null, tools, composer(),
         ...(part.mine.length ? part.mine : [empty("Nothing written yet.")])),
       section("asks", nAsk, ...(nAsk ? [...asks.map((c) => thread(c, kids)), ...part.asks] : [empty("No questions yet. Select a passage and ask Dot.")])),
       section("passages", notes.length, ...(notes.length ? notes.map((c) => passage(c, kids)) : [empty("No passage notes yet.")])),
       section("quotes", quotes.length, ...(quotes.length ? quotes.map((q) => h("figure", { class: "rp-quote" }, h("blockquote", {}, q.text), h("figcaption", {}, chip(q.page, q.rect)))) : [empty("No highlights yet.")])),
-      part.stages.length ? section("stages", part.stages.length, ...part.stages) : null);
+      ...(part.stages.length ? [section("stages", part.stages.length, ...part.stages)] : [])); // a null child would print "null"
+    pick(tab);
   }
   // writing: the note's own editor takes the place of "My notes"; Done puts the page back
   function setEdit(on) {
@@ -987,6 +1035,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   const hlLayer = h("div", { class: "hl-layer", "aria-hidden": "true" }); // saved highlights, under the text
   const selLayer = h("div", { class: "sel-layer", "aria-hidden": "true" }); // the paragraph outline and the chosen box
   const trackLayer = h("div", { class: "track-layer" }); // Proactive: where you are reading, and what you have read
+  const sideLayer = h("div", { class: "side-notes" }); // Dot's answers in the empty space beside the page, when the canvas is shut
   const stage = h("div", { class: "pdf-stage" }, sheet);
   const closed = h("div", { class: "pdf-closed", hidden: true },
     h("div", { class: "closed-card" },
@@ -1045,10 +1094,10 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     pdfjsLib.renderTextLayer({ textContentSource: await page.getTextContent(), container: layer, viewport: vp });
     if (seq !== v.seq) return;
     textLayer = layer;
-    pageBox.replaceChildren(canvas, hlLayer, hits, guideMark, guideLine, textLayer, marksLayer, selLayer, trackLayer, ink);
+    pageBox.replaceChildren(canvas, hlLayer, hits, guideMark, guideLine, textLayer, marksLayer, selLayer, trackLayer, ink, sideLayer);
     drawTrack();
     guideMark.hidden = true; guideLine.hidden = true;
-    drawMarks(); loadBlocks(v.page).then(regGuide); drawHl();
+    drawMarks(); loadBlocks(v.page).then(regGuide); drawHl(); drawSide();
     if (sel && sel.page !== v.page && !job) clearSel(); else drawSel();
     sheet.replaceChildren(pageBox);
     search.paint();
@@ -1236,6 +1285,32 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       <rect class="mk-dots" x="2" y="2" width="${w - 4}" height="${ht - 4}" rx="10" fill="none" pathLength="${Math.round((w + ht) * 2 / 9)}" stroke-dasharray="0 1" stroke-linecap="round" mask="url(#${id})"/></svg>`;
     return el;
   }
+  // ----- side notes: an answer sits in the margin beside the part it is about, and scrolls with the page -----
+  let sides = []; // { page, top (PDF points), el }
+  const sideWidth = () => Math.min(340, (stage.clientWidth - pageBox.offsetWidth) / 2 - 64); // the gutter, less the page gap and the Canvas tab
+  const sideRoom = () => !v.hidden && sideWidth() >= 200;
+  function drawSide() {
+    sideLayer.hidden = !sideRoom();
+    sideLayer.style.width = `${Math.round(sideWidth())}px`;
+    const here = sides.filter((n) => n.page === v.page).sort((a, b) => a.top - b.top);
+    for (const c of [...sideLayer.children]) if (!here.some((n) => n.el === c)) c.remove();
+    for (const n of here) if (n.el.parentNode !== sideLayer) sideLayer.append(n.el); // moving a note again would restart its pop-in
+    let below = 0; // notes on one page stack downward instead of covering each other
+    for (const n of here) {
+      const top = Math.max(n.top * (v.vp?.scale || 1), below);
+      n.el.style.top = `${top}px`;
+      below = top + n.el.offsetHeight + 12;
+    }
+  }
+  /** beside(page, rect, el): show el in the margin level with rect (PDF points); returns remove() */
+  function beside(page, rect, el) {
+    const n = { page, top: rect ? rect[1] : 40, el };
+    sides.push(n);
+    if (v.page !== page) go(page); else drawSide();
+    new ResizeObserver(() => { if (n.el.isConnected) drawSide(); }).observe(el); // a note that grows pushes the next one down
+    return () => { sides = sides.filter((x) => x !== n); el.remove(); drawSide(); };
+  }
+
   function drawMarks() {
     marksLayer.replaceChildren(...marks.filter((m) => m.page === v.page).flatMap((m) => [outline(m), pin(m)]));
   }
@@ -1546,8 +1621,8 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   };
   // the paragraph is free to click: not while Lens, the pen, the Map, a note or another job has Dot
   const clickable = () => along && !v.hidden && !!v.vp && !job && !search.penning() && !search.isOpen() && !openMark
-    && !document.querySelector(".guide-card:not([hidden]), .dot-win, .mk-card, .hl-chip, .buddy.pen, .buddy.penning, .buddy.dragging, .buddy-opts, .buddy-pill");
-  const NOT_PAGE = ".mk-pin, .mk-card, .hl-chip, .buddy-opts, .guide-card, .pen-hint, .track-here";
+    && !document.querySelector(".dot-win, .mk-card, .hl-chip, .buddy.pen, .buddy.penning, .buddy.dragging, .buddy-opts, .buddy-pill");
+  const NOT_PAGE = ".mk-pin, .mk-card, .hl-chip, .buddy-opts, .guide-card, .pen-hint, .track-here, .side-note";
 
   pageBox.addEventListener("pointermove", (e) => {
     if (!clickable() || e.target.closest?.(NOT_PAGE)) { near.hidden = true; return; }
@@ -1838,6 +1913,8 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       }
     });
     drawHl();
+    // creatures that wake on a highlight see Dot's marks too, once for the batch
+    hooks.onHighlight?.({ page: s.page, kind: "dot", text: r.highlights.map((q) => q.text).join("\n") });
     return `I marked ${r.highlights.length} ${r.highlights.length === 1 ? "spot" : "spots"} in blue.`;
   }
   async function inkLine(hl, rect) {
@@ -1944,7 +2021,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   };
   document.addEventListener("keydown", onKey);
   let resizing = null;
-  const ro = new ResizeObserver(() => { if (v.fit) { clearTimeout(resizing); resizing = setTimeout(draw, 80); } });
+  const ro = new ResizeObserver(() => { if (v.fit) { clearTimeout(resizing); resizing = setTimeout(draw, 80); } else drawSide(); });
   ro.observe(stage);
 
   if (!window.pdfjsLib) msg("The PDF viewer could not load. Check your internet connection, then reload the page.");
@@ -1973,7 +2050,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
       const b = pageBox.getBoundingClientRect(), s = stage.getBoundingClientRect();
       stage.scrollTop += b.top + px(r)[1] - s.top - stage.clientHeight * 0.3;
       const off = glow(r); setTimeout(off, 1800);
-    }, hidden: () => v.hidden, page: () => v.page, highlights: () => hls,
+    }, hidden: () => v.hidden, page: () => v.page, highlights: () => hls, beside, sideRoom,
     reloadHighlights: () => api(`/papers/${paperId}/highlights`).then((r) => { hls = r.highlights; drawHl(); }).catch(() => {}), command, go, point, unmark, lens: lensFromMenu, watch, watching: () => watchOn, clearTrail,
     // Self-test closes the paper when it opens; leaving it opens the paper again unless you closed it yourself.
     autoHide(on) { if (on) setHidden(true, true); else if (v.auto) setHidden(false); },

@@ -80,3 +80,10 @@ def test_stages_fall_back_to_the_headings_when_the_model_fails(monkeypatch) -> N
     monkeypatch.setattr(primer, "_complete", lambda *a, **k: "not json")
     out = guide.stages(_paper(), object())
     assert out["source"] == "headings" and out["note"]
+
+
+def test_every_figure_and_table_once_with_captions_over_mentions() -> None:
+    pages = ["Intro.\nFig. 2. We plot the gap here.\nmore", "Figure 1: Accuracy by group", "Table 1: Results\nFigure 2: The gap",
+             "Fig. 2 again in text", "Table 1. Here we measure it."]
+    assert [(f["label"], f["page"], f["caption"]) for f in guide.figures(pages)] == [
+        ("Figure 1", 2, "Accuracy by group"), ("Table 1", 3, "Results"), ("Figure 2", 3, "The gap")]

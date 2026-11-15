@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600&family=Instrument+Serif&family=Doto:wght@800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1440px;height:900px;overflow:hidden;background:#17181b;color:#e8e8e8;font:16px/1.35 Geist,sans-serif}
+header{height:56px;display:flex;align-items:center;gap:28px;padding:0 28px;border-bottom:1px solid #2b2c30}
+.brand{font:400 22px/1 "Instrument Serif",serif}
+nav{display:flex;gap:18px;color:#a8a9ae}
+nav b{background:#ffe347;color:#1f2023;padding:3px 8px;font-weight:600}
+.chip{margin-left:auto;color:#a8a9ae;font-size:13px}
+.band{padding:18px 32px 20px}
+.rule{height:3px;background:#ffe347}
+h2{font:800 13px/1 Doto,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#a8a9ae;margin-bottom:12px}
+.chorus{display:flex;gap:28px;align-items:center}
+.who{display:grid;justify-items:center;gap:6px;width:110px;font:800 13px/1 Doto,sans-serif;color:#a8a9ae}
+.who.on{color:#ffe347}
+.dot{width:48px;height:48px;border-radius:50%;background:var(--c)}
+.who.on .dot{box-shadow:0 0 0 4px #17181b,0 0 0 7px #ffe347}
+.mid{display:grid;grid-template-columns:160px 1fr;gap:28px;align-items:center;min-height:340px}
+.face{width:120px;height:120px;border-radius:50%;background:#f0c25e;display:flex;justify-content:center;align-items:center;gap:14px}
+.face i{width:12px;height:18px;border-radius:99px;background:#1f2023;display:block}
+.step{font:400 42px/1.15 "Instrument Serif",serif;max-width:920px}
+.pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.pills span{border:1px solid #45464c;border-radius:99px;padding:6px 12px}
+.pills .on{background:#ffe347;color:#1f2023;border-color:#ffe347;font-weight:600}
+.low{display:grid;grid-template-columns:1fr 280px;gap:24px;align-items:start}
+.tiles{display:flex;flex-wrap:wrap;gap:10px}
+.tile{border:1px solid #45464c;border-radius:14px;padding:16px 14px;min-width:140px;color:#a8a9ae}
+.tile.on{background:#ffe347;color:#1f2023;border-color:#ffe347;font-weight:600}
+.talk{background:#222326;border-radius:16px;padding:16px}
+.btn{display:inline-block;margin-top:12px;margin-right:8px;border:1px solid #45464c;border-radius:99px;padding:8px 14px}
+.btn.go{background:#ffe347;color:#1f2023;border-color:#ffe347;font-weight:600}
+.name{font:800 28px/1 Doto,sans-serif;color:#ffe347;margin-bottom:8px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Paper Workbench</div>
+  <nav><span>Library</span><span>Graph</span><b>Creatures</b><span>Settings</span></nav>
+  <div class="chip">Stand-in · 1 using the model</div>
+</header>
+<section class="band">
+  <h2>Creatures</h2>
+  <div class="chorus">
+    <div class="who on"><i class="dot" style="--c:#f0c25e"></i>Quiz me</div>
+    <div class="who"><i class="dot" style="--c:#7cb4ff"></i>Detailed outline</div>
+    <div class="who"><i class="dot" style="--c:#8ad6ac"></i>Simplified version</div>
+    <div class="who"><i class="dot" style="--c:#c9a7ff"></i>Research brief</div>
+    <div class="who"><i class="dot" style="--c:#ff9c87"></i>Compare papers</div>
+    <div class="who"><i class="dot" style="--c:#6fd3d3"></i>Explain my highlights</div>
+  </div>
+</section>
+<div class="rule"></div>
+<section class="band mid">
+  <div>
+    <div class="face"><i></i><i></i></div>
+    <div class="name">Quiz me</div>
+    <div class="pills"><span class="on">Awake</span><span class="on">When I stay on a page</span></div>
+  </div>
+  <div>
+    <h2>What should I do?</h2>
+    <p class="step">Ask one short question that checks I understood the main idea of this page.</p>
+    <div class="pills"><span class="on">The paper I'm reading</span><span>The page I'm on</span><span>after 180 seconds</span></div>
+  </div>
+</section>
+<div class="rule"></div>
+<section class="band low">
+  <div>
+    <h2>Leaves you</h2>
+    <div class="tiles">
+      <div class="tile">Dot tells me</div>
+      <div class="tile on">Dot asks me a question</div>
+      <div class="tile">A card on the canvas</div>
+      <div class="tile">Dot highlights lines</div>
+      <div class="tile">A document</div>
+    </div>
+    <span class="btn">Let it go</span><span class="btn">Run now</span><span class="btn go">Save</span>
+  </div>
+  <div class="talk">What should a creature do while you read? Quiz me is working on the open page.</div>
+</section>
+</body>
+</html>

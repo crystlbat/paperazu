@@ -1,6 +1,7 @@
 """Creatures: the routes the screen calls, and one run walked without a real model."""
 import json
 from types import SimpleNamespace
+from typing import Any
 
 import pymupdf
 import pytest
@@ -101,7 +102,7 @@ def test_a_note_creature_saves_the_papers_and_keeps_the_rest_of_the_note(monkeyp
     assert seen[0] >= 4096
     assert note.startswith("My own line.")
     assert note.count("Ada Lovelace") == 1 and "Alan Turing" in note
-    assert "Papers mentioned" in note
+    assert note.count("--- Reference list ---") == 1
 
 
 def test_starters_are_added_once_and_a_shape_can_be_deleted() -> None:
@@ -207,7 +208,7 @@ def test_highlight_output_marks_a_real_quote(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_talk_returns_a_draft_and_does_not_save_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake(s: Settings, messages: list[dict[str, str]]) -> str:
+    def fake(s: Settings, messages: list[dict[str, str]], **kw: Any) -> str:
         return json.dumps({"reply": "A quiz creature.", "job": {
             "name": "Quiz", "color": 4, "trigger": "dwell", "every": 180, "output": "ask",
             "papers": [], "template_id": None, "on": True,
@@ -236,3 +237,32 @@ def test_complete_sends_no_think(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(llm, "client", lambda *a, **k: Fake())
     assert jobs.complete(Settings(model_name="m"), [{"role": "user", "content": "Hello"}]) == "hi"
     assert captured["extra_body"] == llm.NO_THINK and captured["model"] == "m"
+
+
+def test_a_paper_too_long_for_one_read_is_read_in_parts_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake(s: Settings, messages: list[dict[str, str]], **kw: Any) -> str:
+        calls.append((messages[1]["content"], kw))
+        return "Results: the gap halves." if "RESULTS" in messages[1]["content"] else "Brief from the notes."
+
+    monkeypatch.setattr(jobs, "complete", fake)
+    monkeypatch.setattr(jobs, "BUDGET", 400)
+    doc = pymupdf.open()
+    for title in ("Introduction", "Method", "Results", "References"):
+        page = doc.new_page()
+        page.insert_text((72, 80), title, fontsize=12)
+        for i in range(12):
+            page.insert_text((72, 110 + 14 * i), f"{title.upper()} line {i} about the study and its findings.", fontsize=9)
+    doc.set_toc([[1, t, i + 1] for i, t in enumerate(("Introduction", "Method", "Results", "References"))])
+    pid = library.create(doc.tobytes(), "long.pdf")
+    with TestClient(main.app) as c:
+        job = c.post("/jobs", json={"name": "Brief", "steps": [{"scope": "paper", "prompt": "Write a brief.", "model": ""}]}).json()
+        run = c.post(f"/jobs/{job['id']}/run", json={"paper_id": pid}).json()
+        jobs.execute(run["id"])
+        got = c.get(f"/runs/{run['id']}").json()
+    reads, last = calls[:-1], calls[-1][0]
+    assert reads and all(kw.get("max_tokens") == 300 for _, kw in reads)
+    assert not any("REFERENCES" in m for m, _ in reads)  # the reference list is not read for notes
+    assert "Results: the gap halves." in last and "RESULTS line" not in last  # the brief works from the notes
+    assert got["status"] == "done" and got["result"]["text"] == "Brief from the notes."

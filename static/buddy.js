@@ -65,6 +65,11 @@ const buddy = (() => {
       <span class="buddy-led"></span><span class="buddy-grid"></span>
       <span class="buddy-eyes" aria-hidden="true"><i></i><i></i></span><span class="buddy-zz" aria-hidden="true">z</span>
       <svg class="buddy-lensg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-5-5"/></svg>
+      <svg class="buddy-marker" viewBox="0 0 40 112" aria-hidden="true"><ellipse class="ink" cx="17" cy="108" rx="11" ry="3"/>
+        <path class="nib" d="M13 93h14l-2 12-11-4z"/><path class="collar" d="M7 83h26l-4 11H11z"/>
+        <rect class="barrel" x="6" y="24" width="28" height="62" rx="10"/><rect class="cap" x="6" y="3" width="28" height="26" rx="10"/>
+        <rect class="clip" x="27" y="7" width="4" height="28" rx="2"/><rect class="shine" x="11" y="30" width="4" height="48" rx="2"/>
+        <rect class="eye" x="13" y="46" width="5" height="10" rx="2.5"/><rect class="eye" x="22" y="46" width="5" height="10" rx="2.5"/></svg>
     </button>`;
   const grid = root.querySelector(".buddy-grid");
   const dots = Array.from({ length: W * H }, () => grid.appendChild(document.createElement("i")));
@@ -337,10 +342,25 @@ const buddy = (() => {
   let target = null, drag = null, dragged = false, pressed = false, pressTimer = 0, nestHeld = false;
   const nest = document.createElement("div");
   nest.className = "buddy-nest"; nest.setAttribute("aria-hidden", "true");
+  // a gooey home: a drip reaches for the pointer and the blur-and-threshold filter melts it into the core
+  nest.innerHTML = `<svg width="0" height="0" style="position:absolute"><filter id="nest-goo" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="9"/>
+    <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -9"/></filter></svg>
+    <span class="nest-ring"></span><span class="nest-goo"><i class="nest-core"></i><i class="nest-neck"></i><i class="nest-drip"></i></span>
+    <span class="nest-face" aria-hidden="true"><i></i><i></i><b>z</b></span>
+    <span class="nest-tip">Highlighter on. Select words to mark them.<b>Click here or press Esc to stop</b></span>`;
   document.body.append(nest);
+  const REACH = 300; // how far away the home starts to pull
+  const pull = (x, y) => { const [hx, hy] = homeCentre(), dx = x - hx, dy = y - hy, d = Math.hypot(dx, dy) || 1; return { hx, hy, dx, dy, d, t: Math.max(0, 1 - d / REACH) }; };
+  document.addEventListener("pointermove", (e) => {
+    if (!nest.classList.contains("show")) return;
+    const { dx, dy, d, t } = pull(e.clientX, e.clientY), r = t * Math.min(d, 80);
+    nest.style.setProperty("--gx", `${(dx / d) * r}px`); nest.style.setProperty("--gy", `${(dy / d) * r}px`);
+    nest.style.setProperty("--gt", t.toFixed(3));
+    nest.classList.toggle("near", t > 0.5);
+  }, { passive: true });
   const placeNest = () => { const [hx, hy] = homeCentre(); nest.style.left = `${hx}px`; nest.style.top = `${hy}px`; };
   const showNest = () => { placeNest(); nest.classList.add("show"); };
-  const hideNest = () => nest.classList.remove("show", "awake", "ready");
+  const hideNest = () => nest.classList.remove("show", "awake", "ready", "near");
   const overNest = (x, y) => { const r = nest.getBoundingClientRect(); return !!r.width && Math.hypot(x - r.left - r.width / 2, y - r.top - r.height / 2) < r.width / 2; };
   const chill = () => { root.classList.remove("awake"); nest.classList.remove("awake", "ready"); st.mood = "idle"; draw(); };
   function wake() {
@@ -350,7 +370,7 @@ const buddy = (() => {
     st.mood = "surprised"; draw();
     along?.pull?.(); // tag-along starts as Dot leaves the circle
   }
-  document.addEventListener("pointerdown", (e) => { if (nest.classList.contains("show") && !st.follow && !root.contains(e.target)) hideNest(); });
+  document.addEventListener("pointerdown", (e) => { if (nest.classList.contains("show") && !st.follow && !napOn && !root.contains(e.target)) hideNest(); }); // asleep as a highlighter, its home stays lit: the way back
   root.addEventListener("wheel", (e) => { // the page keeps scrolling when the pointer is over Dot
     const stage = document.querySelector(".pdf-stage");
     if (!stage || e.target.closest(".buddy-bubble")) return;
@@ -433,7 +453,11 @@ const buddy = (() => {
     else { root.classList.remove("pen"); st.mood = "idle"; draw(); goHome(); }
   });
   // As a highlighter Dot rides just above the pointer, eyes on the line below.
-  const follow = (e) => { place(e.clientX + 26, e.clientY - 30); st.dx = -1; st.dy = 1; st.lookUntil = Date.now() + 500; draw(); };
+  const follow = (e) => {
+    let x = e.clientX + 26, y = e.clientY - 30;
+    if (napOn) { const { hx, hy, d } = pull(e.clientX, e.clientY), k = Math.max(0, 1 - d / 150) ** 2 * 0.75; x += (hx - x) * k; y += (hy - y) * k; } // near home, the marker is drawn in
+    place(x, y); st.dx = -1; st.dy = 1; st.lookUntil = Date.now() + 500; draw();
+  };
   /** reading(on): Dot shrinks into a small yellow marker, to run along lines of the paper */
   function reading(on) { root.classList.toggle("pen", on); root.classList.toggle("reading", on); }
   function pen(on) {
@@ -445,7 +469,7 @@ const buddy = (() => {
   let napOn = false;
   function napPen(on) {
     if (on === napOn && on) return;
-    napOn = on; pen(on);
+    napOn = on; pen(on); nest.classList.toggle("pen", on);
     if (on) { showNest(); nest.classList.remove("ready"); st.mood = "idle"; draw(); }
     else { root.classList.remove("pen"); hideNest(); goHome(); }
   }
@@ -1076,10 +1100,38 @@ const buddy = (() => {
     return out;
   }
 
+  // ---------- size: Dot springs to a new size; growing it puffs a ring of dots out, shrinking it sucks one in ----------
+  const SIZES = [0.7, 0.85, 1, 1.2, 1.4, 1.6];
+  let sz = 1;
+  try { sz = SIZES.includes(Number(localStorage.getItem("dot-size"))) ? Number(localStorage.getItem("dot-size")) : 1; } catch { /* default */ }
+  root.style.setProperty("--sz", sz);
+  let sizeTimer = 0;
+  function size(step) {
+    if (!step) return sz;
+    const next = SIZES[Math.max(0, Math.min(SIZES.length - 1, SIZES.indexOf(sz) + step))];
+    root.classList.remove("growing", "shrinking", "at-limit"); void root.offsetWidth; // restart the animation
+    clearTimeout(sizeTimer);
+    if (next === sz) { root.classList.add("at-limit"); sizeTimer = setTimeout(() => root.classList.remove("at-limit"), 500); return sz; }
+    const up = next > sz; sz = next;
+    try { localStorage.setItem("dot-size", String(sz)); } catch { /* this visit only */ }
+    root.classList.add(up ? "growing" : "shrinking");
+    root.style.setProperty("--sz", sz);
+    st.mood = up ? "surprised" : "happy"; draw();
+    sizeTimer = setTimeout(() => { root.classList.remove("growing", "shrinking"); st.mood = "idle"; draw(); }, 800);
+    return sz;
+  }
+  /** resize(): Dot asks how big it should be, and keeps asking while you press Smaller or Bigger */
+  function resize() {
+    const pct = () => `${Math.round(sz * 100)}%`;
+    const again = (step) => () => { size(step); setTimeout(resize, 0); };
+    show({ text: `I am at ${pct()}. How big should I be?`, mood: "idle", sticky: true, actions: [
+      { label: "Smaller", onClick: again(-1) }, { label: "Bigger", onClick: again(1) }, { label: "Done", onClick: () => {} }] });
+  }
+
   document.body.append(root);
   setMuted(st.muted);
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
   return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, reading, open, format, draggable, tools: setTools,
-    follow: followMode, look, tagAlong, sleep, asleep, showcase, stretch, onSleep: (f) => { napHook = f; }, options, shape, prompt, gulp, burp, toolsOn, skip, centre, put, hold, nudge, wait: waitSkippable };
+    follow: followMode, look, tagAlong, sleep, asleep, showcase, stretch, onSleep: (f) => { napHook = f; }, options, shape, prompt, gulp, burp, toolsOn, skip, centre, put, hold, nudge, wait: waitSkippable, size, resize };
 })();

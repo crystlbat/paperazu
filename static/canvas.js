@@ -740,8 +740,9 @@ function canvasPanel(host, paperId, pdf) {
     if (b) { b.classList.remove("hop"); void b.offsetWidth; b.classList.add("hop"); }
   }, 2600);
   // a blob opens into its tree: the question and answer first, the references beside it, follow-ups further out
-  function unfold(r, from = null) {
-    if (!r || busy) return;
+  function unfold(r, from = null, tries = 0) {
+    if (!r) return;
+    if (busy) { if (tries < 40) setTimeout(() => unfold(r, from, tries + 1), 100); return; } // clicked while the canvas opens: open it once that is done
     tree = r.d.id; setMode();
     const list = treeOf(r), ids = new Set(list.map((c) => c.d.id));
     for (const c of cards.values()) if (c.el) c.el.classList.toggle("cv-out", !ids.has(c.d.id));
@@ -886,7 +887,8 @@ function canvasPanel(host, paperId, pdf) {
   }
   return {
     open, close, toggle, isOpen: () => opened, edit, view: showView, editing: () => editing,
-    mountEditor: (el, hooks) => { editor.append(el); editHooks = hooks; }, onViewChange: (f) => { onViewChange = f; }, add, drop, place, ask, command, followUp, note, el: host, redraw, lock, refresh, sweep: sweepTasks, card: (id) => cards.get(id),
+    mountEditor: (el, hooks) => { editor.append(el); editHooks = hooks; }, onViewChange: (f) => { onViewChange = f; }, add, drop, place, ask, command, followUp, note, el: host, redraw, lock, refresh, sweep: sweepTasks,
+    reload: () => { if (!opened && !gone) loaded = load(true); }, // cards saved elsewhere (a side answer) show on the next open card: (id) => cards.get(id),
     destroy() {
       gone = true; closeMenu();
       document.removeEventListener("pointerdown", skipAll, true);

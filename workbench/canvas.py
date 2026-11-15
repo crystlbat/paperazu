@@ -168,9 +168,22 @@ def _also(question: str, texts: list[str]) -> list[int]:
     return out
 
 
+def _around(paras: list[tuple[str, int, list[float], str]], quote: str) -> list[tuple[str, int, list[float], str]]:
+    """The paragraphs a selection covers, with one on each side for context. All of them when none matches."""
+    q = llm._stems(quote)
+    hit = [i for i, p in enumerate(paras) if len(st := llm._stems(p[3])) >= min(8, len(q)) and len(st & q) >= 0.5 * len(st)]  # a keyword line is no match
+    return [p for i, p in enumerate(paras) if hit and hit[0] - 1 <= i <= hit[-1] + 1] or paras
+
+
 def _cited(s: Any, paper_id: str, question: str, page: int, title: str, texts: list[str], ctx: str = "",
-           extra: list[int] = ()) -> dict[str, Any]:
-    """The local model answers and names the paragraphs it used. `page` is 1-based; `extra` are pages the cards point at."""
+           extra: list[int] = (), quote: str = "") -> dict[str, Any]:
+    """The local model answers and names the paragraphs it used. `page` is 1-based; `extra` are pages the cards point at.
+    With a `quote` (the part you selected) it reads that part and its neighbours only, so "simplify" stays on it."""
+    if quote:
+        paras = _around([(f"p{page}-b{i}", page, r, t) for i, (r, t) in enumerate(marks.paragraphs(paper_id, page) or []) if t], quote)
+        if paras:
+            got = llm.ask_with_sources(s, f"{question}\n(About the part I selected only, not the whole paper.)", title, paras, ctx)
+            return {**got, "trace": [f"read the {len(paras)} paragraphs round your selection"] + got.get("trace", [])}
     near = graph.pages_for(s, paper_id, question)
     graph_hit = bool(near)
     if not near:  # no embeddings: the pages around this one that fit the model's budget
@@ -235,13 +248,13 @@ def ask(s: Any, paper_id: str, question: str, page: int, from_card: int | None, 
         return {"ok": False, "error": "That card is not there."}
     ctx = _earlier(prior[::-1]) + (f"The part I selected on page {page} (\"this\" means this part):\n{quote}\n\n" if quote else "")
     pages = [c["page"] for c in prior if c["page"]]
-    got = _cited(s, paper_id, question, page, row["title"], texts, ctx, pages)
+    got = _cited(s, paper_id, question, page, row["title"], texts, ctx, pages, quote)
     last = next((c["text"] for c in prior if c["kind"] == "answer"), "")
     echoed = got["ok"] and last and _same(got["text"], last)
     if echoed:  # small models often hand back the earlier answer; ask once more, plainly
         rework = (f"Text to rework:\n{last}\n\nRewrite it, do not copy it: a numbered list, one part per line, in everyday "
                   f"words with no symbols or subscripts, then one everyday example. The student asked: {question}\n\n")
-        again = _cited(s, paper_id, question, page, row["title"], texts, rework, pages)
+        again = _cited(s, paper_id, question, page, row["title"], texts, rework, pages, quote)
         if again["ok"]:
             got = again
     trace = ([f"your selection, {len(quote)} characters"] if quote else ["no selection, the whole page"]) \

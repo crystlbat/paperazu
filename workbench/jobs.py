@@ -9,10 +9,9 @@ import threading
 import time
 from typing import Any
 
-from openai import APIConnectionError, APIError, AuthenticationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from . import db, library, llm, marks, settings
+from . import db, library, llm, marks, settings, websearch
 from .settings import Settings
 
 # One call carries about 12_000 characters of the paper. A call that reads N papers gives each 1/N.
@@ -20,7 +19,7 @@ BUDGET = 12_000
 MAX_QUEUED = 20
 TRIGGERS = ("manual", "open", "page", "dwell", "highlight", "timer")
 OUTPUTS = ("say", "ask", "card", "highlight", "doc", "note")
-SCOPES = ("page", "selection", "paper", "each_paper", "sections", "references", "template", "prev")
+SCOPES = ("page", "selection", "paper", "each_paper", "sections", "references", "template", "prev", "similar")
 # shortcut: a reference list can run past 12_000 characters; 24_000 still fits the context window.
 SECTION_BUDGET = 24_000
 
@@ -522,8 +521,38 @@ class _Unit:
         self.label, self.text, self.ask, self.paper_id, self.page = label, text, ask, paper_id, page
 
 
+def _parts(papers: list[str]) -> list[tuple[str, str]]:
+    """The papers in pieces of at most BUDGET characters, section by section, references left out. Empty when
+    all of them fit in one read, so a short paper is still read whole."""
+    if sum(len(p) for pid in papers for p in library.page_texts(pid) or []) <= BUDGET:
+        return []
+    out = []
+    for pid in papers:
+        prefix = f"{_title(pid)}: " if len(papers) > 1 else ""
+        for label, text in _sections(pid):
+            if re.search(r"reference|bibliograph", label, re.I):
+                continue
+            for i in range(0, len(text), BUDGET):
+                out.append((prefix + label + (" (cont.)" if i else ""), text[i:i + BUDGET]))
+    return out
+
+
+NOTES = ("Take notes on this part of a paper for the instruction below: the claims, methods, numbers and results "
+         "that matter for it, in plain words. At most 120 words. If nothing here matters, write only: nothing.")
+
+
+def _read_in_parts(s: Settings, step: dict[str, Any], template: dict[str, Any] | None, label: str, text: str) -> str:
+    """Notes on one piece of a paper too long to read at once; the step then works from the notes of every piece."""
+    want = step["prompt"] + "".join(f"\n- {x.get('title')}: {x.get('ask') or ''}" for x in (template or {}).get("sections") or [])
+    note = complete(s, [{"role": "system", "content": SYSTEM},
+                        {"role": "user", "content": f"{NOTES}\n\nInstruction: {want}\n\n<source part=\"{label}\">\n{text}\n</source>"}],
+                    max_tokens=300)
+    return f"## {label}\n{note.strip()}"
+
+
 def _units(step: dict[str, Any], papers: list[str], template: dict[str, Any] | None,
-           page: int | None, selection: str, prev: str, focus: str) -> list[_Unit]:
+           page: int | None, selection: str, prev: str, focus: str, notes: str = "") -> list[_Unit]:
+    """`notes` stand in for the paper text of a paper or template step when the papers were read in parts."""
     scope = step["scope"]
     pid = focus if focus in papers else papers[0]
     if scope == "prev":
@@ -534,6 +563,8 @@ def _units(step: dict[str, Any], papers: list[str], template: dict[str, Any] | N
         return [_Unit(f"Page {n or 1}", clip(pages[n - 1] if n else ""), paper_id=pid, page=n)]
     if scope == "selection":
         return [_Unit("the highlight", clip(selection), paper_id=pid, page=page)]
+    if scope == "similar":
+        return [_Unit("Similar papers", _title(pid), paper_id=pid)]
     if scope == "each_paper":
         return [_Unit(_title(p) or f"Paper {i + 1}", _paper_blob(p, BUDGET), paper_id=p) for i, p in enumerate(papers)]
     if scope in ("sections", "references"):
@@ -548,10 +579,10 @@ def _units(step: dict[str, Any], papers: list[str], template: dict[str, Any] | N
     if scope == "template":
         secs = (template or {}).get("sections") or [{"title": "Notes", "ask": ""}]
         share = max(BUDGET // max(len(papers), 1), 1)
-        blob = "\n\n".join(_paper_blob(p, share) for p in papers)
+        blob = notes or "\n\n".join(_paper_blob(p, share) for p in papers)
         return [_Unit(s.get("title") or "Notes", blob, ask=s.get("ask") or "", paper_id=pid) for s in secs]
     share = max(BUDGET // max(len(papers), 1), 1)
-    blob = "\n\n".join(_paper_blob(p, share) for p in papers)
+    blob = notes or "\n\n".join(_paper_blob(p, share) for p in papers)
     return [_Unit("the papers" if len(papers) > 1 else "the paper", blob, paper_id=pid)]
 
 
@@ -603,24 +634,9 @@ def _mark(paper_id: str, page: int | None, quote: str) -> dict[str, Any] | None:
     return None
 
 
-def complete(s: Settings, messages: list[dict[str, str]]) -> str:
-    """One model call. Tests replace this."""
-    try:
-        reply = llm.client(s).chat.completions.create(
-            model=llm.pick_model(s) or "default",
-            messages=messages,
-            max_tokens=s.max_output_tokens, temperature=s.temperature, extra_body=llm.NO_THINK,
-        )
-    except AuthenticationError:
-        raise RuntimeError("Wrong API key. Check it in Settings.")
-    except APIConnectionError:
-        raise RuntimeError("Could not reach the model. Is Unsloth running?")
-    except APIError as e:
-        raise RuntimeError(getattr(e, "message", None) or "The model call failed.")
-    text = llm._strip_thinking(reply.choices[0].message.content or "")
-    if text is None:
-        raise RuntimeError("The model ran out of room before it answered. Raise Max output tokens in Settings.")
-    return text
+def complete(s: Settings, messages: list[dict[str, str]], **kw: Any) -> str:
+    """One model call. Tests replace this. Raises llm.ModelError (a RuntimeError)."""
+    return llm.chat(s, messages, **kw)
 
 
 def _result(parts: list[tuple[str, str]], highlights: list[dict[str, Any]]) -> dict[str, Any]:
@@ -655,14 +671,25 @@ def _work(run_id: int) -> None:
     steps = json.loads(row["steps"])
     papers = json.loads(row["paper_ids"])
     template = json.loads(row["template_json"]) if row["template_json"] else None
-    total = sum(len(_units(s, papers, template, row["page"], row["selection"], "x", row["paper_id"])) for s in steps)
+    parts = _parts(papers) if any(s["scope"] in ("paper", "template") for s in steps) else []
+    total = sum(len(_units(s, papers, template, row["page"], row["selection"], "x", row["paper_id"]))
+                + (len(parts) if s["scope"] in ("paper", "template") else 0) for s in steps)
     _touch(run_id, total=max(total, 1), done=0)
     done = 0
     prev = ""
     last: list[tuple[str, str]] = []
     quotes: list[tuple[str, int | None, str]] = []
     for si, step in enumerate(steps):
-        units = _units(step, papers, template, row["page"], row["selection"], prev, row["paper_id"])
+        notes = []
+        for label, text in parts if step["scope"] in ("paper", "template") else []:  # too long for one read: notes first
+            if run_id in _stopping:
+                _finish(run_id, "stopped", _result(last, []))
+                return
+            _touch(run_id, label=f"reading {label}")
+            notes.append(_read_in_parts(_step_settings(step, row["output"]), step, template, label, text))
+            done += 1
+            _touch(run_id, done=done)
+        units = _units(step, papers, template, row["page"], row["selection"], prev, row["paper_id"], "\n\n".join(notes))
         highlight = row["output"] == "highlight" and si == len(steps) - 1
         parts: list[tuple[str, str]] = []
         for unit in units:
@@ -671,16 +698,12 @@ def _work(run_id: int) -> None:
                 return
             _touch(run_id, label=unit.label)
             cited = _cited(unit.text) if step.get("scope") == "references" else ""
-            if cited:
+            if step.get("scope") == "similar":
+                answer = similar(unit.text)  # a web search, not a model answer: the list is what it found
+            elif cited:
                 answer = cited  # a numbered bibliography copies across; the model stops partway and drops the rest
             else:
-                s = settings.get_all()
-                pinned = {"model_name": step["model"]} if step.get("model") else {}
-                if row["output"] == "note":
-                    pinned["max_output_tokens"] = max(s.max_output_tokens, 4096)  # a reference list is longer than a usual answer
-                if pinned:
-                    s = s.model_copy(update=pinned)
-                answer = complete(s, [{"role": "system", "content": SYSTEM},
+                answer = complete(_step_settings(step, row["output"]), [{"role": "system", "content": SYSTEM},
                                       {"role": "user", "content": _ask(step, unit, prev, highlight)}])
             found: list[str] = []
             if highlight:
@@ -703,8 +726,25 @@ def _work(run_id: int) -> None:
                 continue
     result = _result(last, highlights)
     if row["output"] == "note" and result["text"].strip():
-        _save_note(row["paper_id"], result["text"])
+        _save_note(row["paper_id"], result["text"], row["job_name"])
     _finish(run_id, "done", result)
+
+
+def similar(title: str) -> str:
+    """Papers like this one, from a web search: one line each, title and link. Raises RuntimeError when the web has none."""
+    found = websearch.search(settings.get_all(), f"research papers similar to {title}")["results"][:8]
+    lines = [f"- {r.get('title') or r.get('url')} — {r.get('url', '')}".rstrip(" —") for r in found if r.get("url") or r.get("title")]
+    if not lines:
+        raise RuntimeError(f"The web had no papers like {title}.")
+    return "\n".join(lines)
+
+
+def _step_settings(step: dict[str, Any], output: str) -> Settings:
+    s = settings.get_all()
+    pinned: dict[str, Any] = {"model_name": step["model"]} if step.get("model") else {}
+    if output == "note":
+        pinned["max_output_tokens"] = max(s.max_output_tokens, 4096)  # a reference list is longer than a usual answer
+    return s.model_copy(update=pinned) if pinned else s
 
 
 def _cited(text: str) -> str:
@@ -730,18 +770,16 @@ def _cited(text: str) -> str:
     return "\n".join(rows) if len(rows) >= 2 else ""
 
 
-_NOTE_FENCE = "--- Papers mentioned ---"
-
-
-def _save_note(paper_id: str, text: str) -> None:
-    """Append the papers to the note. A second run replaces the earlier list and leaves the rest of the note."""
+def _save_note(paper_id: str, text: str, title: str) -> None:
+    """Add the creature's output to the note under its own heading. A second run replaces its earlier block and leaves the rest."""
     row = _one("SELECT note FROM papers WHERE id = ?", (paper_id,))
     if not row:
         return
-    block = f"{_NOTE_FENCE}\n{text.strip()}\n---"
+    fence = f"--- {title.strip() or 'Creature'} ---"
+    block = f"{fence}\n{text.strip()}\n---"
     old = row["note"] or ""
-    if _NOTE_FENCE in old:
-        note = re.sub(r"\n*--- Papers mentioned ---\n.*?\n---", "\n\n" + block, old, count=1, flags=re.S)
+    if fence in old:
+        note = re.sub(r"\n*" + re.escape(fence) + r"\n.*?\n---", lambda _: "\n\n" + block, old, count=1, flags=re.S)
     else:
         note = (old.rstrip() + "\n\n" if old.strip() else "") + block
     note = note.strip() + "\n"
@@ -813,7 +851,8 @@ def talk(messages: list[Any]) -> dict[str, Any]:
     if len(said) < 6:
         return {"reply": "Tell me what you want done while you read, and I will turn it into a creature.", "job": None}
     names = "\n".join(f"{r['id']}: {r['name']}" for r in _all("SELECT id, name FROM job_templates ORDER BY id")) or "none yet"
-    text = complete(settings.get_all(), [{"role": "system", "content": TALK + names}, *clean])
+    # json_object makes the server hold the reply to valid JSON; small models otherwise break it and Dot reads it out raw
+    text = complete(settings.get_all(), [{"role": "system", "content": TALK + names}, *clean], response_format={"type": "json_object"})
     return _draft(text)
 
 

@@ -8,7 +8,6 @@ import re
 from datetime import date
 from typing import Any
 
-from openai import APIError
 
 from . import db, framework, graph, library, llm, primer
 from .settings import Settings
@@ -272,11 +271,8 @@ def _about_dot(s: Settings, question: str) -> dict[str, Any] | None:
         system += "\nYour personality, chosen by the student: " + s.dot_persona.strip()[:300]
     reply = ""
     try:
-        r = llm.client(s).chat.completions.create(
-            model=llm.pick_model(s) or "default", max_tokens=s.max_output_tokens, temperature=s.temperature, extra_body=llm.NO_THINK,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": question[:300]}])
-        reply = llm._strip_thinking(r.choices[0].message.content or "") or ""
-    except APIError:
+        reply = llm.chat(s, [{"role": "system", "content": system}, {"role": "user", "content": question[:300]}])
+    except llm.ModelError:
         pass
     reply = " ".join(re.sub(r"\bP\d+\b", "", reply.replace("\u2014", ",").replace("\u2013", ",")).split())
     reply = re.sub(r"(^|[.!?]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), re.sub(r"\bi\b", "I", reply))

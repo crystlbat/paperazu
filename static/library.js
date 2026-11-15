@@ -6,7 +6,8 @@
 // with transforms in one loop; CSS does the rest. Design: docs/superpowers/specs/2026-11-07-library-dot-design.md
 
 const LIB_BLOBS = [["find", "Ask", "#8ecbff"], ["web", "Web", "#3ddec8"], ["next", "What next?", "#7bd88f"], ["talks", "Talks", "#ff9e7a"],
-  ["pick", "Pick up", "#c6a0ff"], ["add", "Add paper", "#ffe347"], ["shelf", "Shelf", "#ff7ab8"], ["persona", "Persona", "#ffa86b"], ["set", "Settings", "#c9cdd6"]];
+  ["pick", "Pick up", "#c6a0ff"], ["add", "Add paper", "#ffe347"], ["shelf", "Shelf", "#ff7ab8"], ["persona", "Persona", "#ffa86b"], ["super", "Super intelligence", "#6ff7ff"],
+  ["set", "Settings", "#c9cdd6"]];
 const LIB_HINT = { web: "I search the web and bring pages back." };
 const SHELF_BLOBS = [["group", "#7bd88f"], ["sort", "#8ecbff"], ["show", "#ff9e7a"], ["theme", "#c6a0ff"],
   ["add", "#ffe347"], ["set", "#c9cdd6"], ["bubble", "#ff7ab8"]];
@@ -321,6 +322,10 @@ async function libJob(k) {
     await libWait(200);
   }
   if (!L) return;
+  if (k === "super") { // the Dot space: it unfolds out of Dot on arrival
+    try { sessionStorage.setItem("sp-back", "1"); } catch { /* it opens without the unfold */ }
+    location.hash = "#space"; return;
+  }
   if (k === "shelf") return libToShelf();
   if (k === "find") return libOpenField();
   if (k === "persona") return libOpenField(true);

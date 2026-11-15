@@ -296,6 +296,21 @@ def _find(words: list[tuple[str, list[Any]]], quote: str) -> list[Any]:
     return [r for _, rs in words[i:j] for r in rs]
 
 
+def _whole(text: str, quote: str, short: int = 8, most: int = 45) -> str:
+    """A quote of fewer than `short` words grown to the sentence of `text` it sits in, so a highlight marks a whole
+    claim and not a scrap of one ("fairness variance observed"). Longer quotes stay, and so does a scrap whose sentence
+    is over `most` words or most of the box."""
+    q = [n for w in quote.split() if (n := _norm(w))]
+    if len(q) >= short:
+        return quote
+    flat = " ".join(re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", text).split())  # join words split at a line's end
+    for sent in re.split(r"(?<=[.!?])\s+(?=[A-Z(\[])", flat):
+        toks = [n for w in sent.split() if (n := _norm(w))]
+        if any(toks[i:i + len(q)] == q for i in range(len(toks) - len(q) + 1)):
+            return sent if len(toks) <= most and len(sent) <= 0.6 * len(flat) else quote  # never most of the box
+    return quote
+
+
 def suggest(s: Any, paper_id: str, page: int, rect: list[float], title: str, focus: str = "") -> list[dict[str, Any]] | None:
     """Dot highlights the important quotes inside a box, about `focus` if you said what to look for. Quotes the model
     made up, or that are most of the box, are dropped."""
@@ -304,7 +319,7 @@ def suggest(s: Any, paper_id: str, page: int, rect: list[float], title: str, foc
     if not got:
         return None
     text = got[0]
-    quotes = llm.pick_quotes(s, text, title, focus)
+    quotes = list(dict.fromkeys(_whole(text, q) for q in llm.pick_quotes(s, text, title, focus)))  # two scraps of one sentence mark it once
     pg = _page(paper_id, page)
     if not pg:
         return None

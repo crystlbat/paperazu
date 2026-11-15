@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600&family=Instrument+Serif&family=Doto:wght@800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1440px;height:900px;overflow:hidden;background:#17181b;color:#e8e8e8;font:15px/1.35 Geist,sans-serif}
+header{height:56px;display:flex;align-items:center;gap:28px;padding:0 22px;border-bottom:1px solid #2b2c30}
+.brand{font:400 22px/1 "Instrument Serif",serif}
+nav{display:flex;gap:18px;color:#a8a9ae}
+nav b{background:#ffe347;color:#1f2023;padding:3px 8px;font-weight:600}
+.chip{margin-left:auto;border:1px solid #45464c;border-radius:99px;padding:4px 10px;color:#a8a9ae;font-size:13px}
+main{height:844px;display:grid;grid-template-columns:168px 230px 420px 280px 342px;background:radial-gradient(#303136 1px,transparent 1.2px) 0 0/18px 18px}
+section{min-width:0;padding:16px 14px;border-right:1px solid #2b2c30}
+h2{font:800 13px/1 Doto,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#a8a9ae;margin-bottom:10px}
+.pen{display:grid;gap:8px;align-content:start}
+.who{display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:center;color:#a8a9ae;font-size:13px}
+.who.on{color:#ffe347}
+.dot{width:28px;height:28px;border-radius:50%;background:var(--c)}
+.who.on .dot{box-shadow:0 0 0 3px #17181b,0 0 0 5px #ffe347}
+.egg{border:2px dashed #45464c;background:none}
+.choice{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.choice span,.awake{border:1px solid #45464c;border-radius:99px;padding:5px 9px;font-size:13px}
+.choice .on,.tile.on{background:#ffe347;color:#1f2023;border-color:#ffe347;font-weight:600}
+.sheet{background:#f4f4ef;color:#1f2023;border-radius:4px;padding:12px;margin:8px 0 14px;font-size:14px}
+.me{display:grid;justify-items:center;align-content:start;gap:8px;border-right-color:#ffe347}
+.body{width:148px;height:148px;border-radius:50%;background:#f0c25e;position:relative;box-shadow:inset 0 -8px 0 rgb(0 0 0/.14)}
+.body:before{content:"";position:absolute;inset:-10px;border-radius:50%;background:conic-gradient(#ffe347 40%,rgb(255 255 255/.12) 0);-webkit-mask:radial-gradient(closest-side,transparent 86%,#000 88%);mask:radial-gradient(closest-side,transparent 86%,#000 88%)}
+.eyes{position:absolute;left:0;right:0;top:42%;display:flex;justify-content:center;gap:18px}
+.eyes i{width:12px;height:18px;border-radius:99px;background:#1f2023;display:block}
+.name{font:800 40px/1 Doto,sans-serif;color:#ffe347}
+.row{display:flex;gap:8px;align-items:center}
+.sw{width:14px;height:14px;border-radius:50%;background:var(--c)}
+.sw.on{box-shadow:0 0 0 2px #17181b,0 0 0 4px #ffe347}
+.step{width:100%;text-align:left;background:#222326;border:1px solid #2b2c30;border-radius:16px;padding:10px 12px;margin-top:6px}
+.step small{color:#a8a9ae}
+.used{display:inline-block;margin-top:6px;border:1px solid #ffe347;color:#ffe347;border-radius:99px;padding:1px 8px;font-size:12px}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{border:1px solid #45464c;border-radius:12px;padding:12px 8px;text-align:center;color:#a8a9ae;font-size:13px}
+.talk{border-right:0}
+.tabs{display:flex;gap:14px;margin-bottom:12px}
+.tabs b{border-bottom:2px solid #ffe347}
+.msg{background:#222326;border-radius:14px;padding:10px 12px;margin-bottom:10px}
+.run{border:1px solid #2b2c30;border-radius:12px;padding:10px}
+.bar{height:6px;border-radius:99px;background:#2b2c30;margin-top:8px}
+.bar i{display:block;width:40%;height:100%;background:#ffe347;border-radius:99px}
+.barrow{display:flex;gap:8px;align-items:center;margin-top:12px}
+.btn{border:1px solid #45464c;border-radius:99px;padding:7px 12px}
+.btn.go{background:#ffe347;color:#1f2023;border-color:#ffe347;font-weight:600}
+.dim{color:#a8a9ae;font-size:13px;margin:6px 0}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Paper Workbench</div>
+  <nav><span>Library</span><span>Graph</span><b>Creatures</b><span>Settings</span></nav>
+  <div class="chip">Stand-in · 1 using the model</div>
+</header>
+<main>
+  <section class="pen">
+    <h2>Creatures</h2>
+    <div class="who on"><i class="dot" style="--c:#f0c25e"></i>Quiz me</div>
+    <div class="who"><i class="dot" style="--c:#7cb4ff"></i>Detailed outline</div>
+    <div class="who"><i class="dot" style="--c:#8ad6ac"></i>Simplified version</div>
+    <div class="who"><i class="dot" style="--c:#c9a7ff"></i>Research brief</div>
+    <div class="who"><i class="dot" style="--c:#ff9c87"></i>Compare papers</div>
+    <div class="who"><i class="dot" style="--c:#6fd3d3"></i>Explain my highlights</div>
+    <div class="who"><i class="dot egg"></i>New creature</div>
+  </section>
+  <section>
+    <h2>Reads</h2>
+    <div class="choice"><span class="on">The paper I'm reading</span><span>Papers I choose</span></div>
+    <div class="sheet">Whichever paper is open</div>
+    <h2>Wakes up</h2>
+    <div class="choice"><span class="on">When I stay on a page</span><span>When I open a paper</span><span>When I turn a page</span></div>
+    <p class="dim">after 180 seconds</p>
+  </section>
+  <section class="me">
+    <div class="body"><div class="eyes"><i></i><i></i></div></div>
+    <div class="name">Quiz me</div>
+    <div class="row"><span class="awake on">Awake</span><i class="sw" style="--c:#7cb4ff"></i><i class="sw" style="--c:#ff9c87"></i><i class="sw on" style="--c:#f0c25e"></i><i class="sw" style="--c:#6fd3d3"></i></div>
+    <div class="step"><small>reads The page I'm on · usual brain</small><p>Ask one short question that checks I understood the main idea of this page. Only the question.</p><span class="used">Asked on this page · stays</span></div>
+    <div class="barrow"><span class="btn">Let it go</span><span class="btn">Run now</span><span class="btn go">Save</span></div>
+  </section>
+  <section>
+    <h2>Leaves you</h2>
+    <div class="tiles">
+      <div class="tile">Dot tells me</div>
+      <div class="tile on">Dot asks me a question</div>
+      <div class="tile">A card on the canvas</div>
+      <div class="tile">Dot highlights lines</div>
+      <div class="tile">A document</div>
+    </div>
+  </section>
+  <section class="talk">
+    <div class="tabs"><b>Talk to Dot</b><span>Its runs</span></div>
+    <div class="msg">What should a creature do while you read?</div>
+    <div class="run"><b>Quiz me</b> <span class="dim">Working</span><p class="dim">On the page you are reading</p><div class="bar"><i></i></div></div>
+  </section>
+</main>
+</body>
+</html>

@@ -33,10 +33,16 @@ body:has(.page-creatures) { --c0: #17181b; --c1: #222326; --c2: #2b2c30; --cl: #
   border: 1px solid var(--cl); border-radius: 11px; background: var(--c1); color: var(--ctx); cursor: pointer; }
 .crt:focus-visible { outline: 2px solid var(--cy); outline-offset: 4px; }
 .crt .cbod { width: 92px; height: 92px; animation: crt-bob 3.2s ease-in-out calc(var(--i, 0) * -.6s) infinite, bwob 7s ease-in-out calc(var(--i, 0) * -1.1s) infinite; }
-.crt .code { font: 500 11px/1 var(--mono); letter-spacing: .04em; color: var(--ctx2); }
+.crt .code { margin-top: 8px; font: 500 11px/1 var(--mono); letter-spacing: .04em; color: var(--ctx2); font-variant-numeric: tabular-nums; }
 .crt .nm { font: 800 15px/1.15 "Doto", var(--mono); letter-spacing: .02em; text-transform: none; color: var(--cy); text-align: center; text-wrap: balance; }
 .crt .stt { font-size: 13px; color: var(--ctx2); text-align: center; min-height: 2.4em; }
-.crt.sel { border-color: var(--cy); }
+.crt.sel { border-color: var(--cl); background: #26272a; }
+/* circled: a yellow pen loop draws itself round the creature you are teaching */
+.crt .circ { position: absolute; top: -3px; left: 50%; width: 122px; height: 122px; translate: -50% 0; pointer-events: none; z-index: 2; }
+.crt .circ svg { width: 100%; height: 100%; overflow: visible; fill: none; stroke: var(--cy); stroke-width: 3.2; stroke-linecap: round;
+  stroke-dasharray: 1; stroke-dashoffset: 1; rotate: -8deg; filter: drop-shadow(0 1px 1px rgb(0 0 0 / .4)); }
+.crt.sel .circ svg { animation: crt-circle .55s cubic-bezier(.16, 1, .3, 1) forwards; }
+@keyframes crt-circle { to { stroke-dashoffset: 0; } }
 .crt.flip .cbod { scale: -1 1; }
 .crt.flip .cbod .eyes { scale: -1 1; }
 /* walking: quick waddle, feet step */
@@ -133,7 +139,7 @@ body:has(.page-creatures) { --c0: #17181b; --c1: #222326; --c2: #2b2c30; --cl: #
 .sheet[aria-pressed="true"] { opacity: 1; translate: 6px 0; rotate: -.6deg; }
 .sheet:nth-child(even)[aria-pressed="true"] { rotate: .6deg; }
 .sheet.ghost { opacity: .9; cursor: default; background: none; color: var(--ctx2); border: 1px dashed var(--cl); box-shadow: none; }
-.sheet.ghost::before { background: none; border-style: dashed; border-color: var(--cl); }
+.sheet.ghost::before { content: none; }
 
 /* the creature in the middle */
 .slot-me { grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 16px; justify-items: start; text-align: left; }
@@ -176,7 +182,7 @@ body:has(.page-creatures) { --c0: #17181b; --c1: #222326; --c2: #2b2c30; --cl: #
 .cr-teach:hover { border-color: var(--cy); color: var(--cy); }
 
 /* what it leaves you */
-.cr-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.cr-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .tile { display: grid; justify-items: center; gap: 6px; padding: 12px 6px 10px; border: 1px solid var(--cl); border-radius: 14px; background: none; color: var(--ctx2);
   cursor: pointer; font-size: 13px; line-height: 1.2; transition: translate .15s; }
 .tile .ico svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -323,3 +329,81 @@ body:has(.page-creatures) { --c0: #17181b; --c1: #222326; --c2: #2b2c30; --cl: #
 .cr ::selection { background: var(--cy); color: var(--on-marker); }
 .cr input, .cr textarea, .cr select { caret-color: var(--cy); }
 .cr-back { color: var(--ctx2); }
+
+/* the plate: actions sit at the top, clear of Dot's corner; the run follows under the name */
+.cr-benchtop { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; margin-bottom: 4px; border-bottom: 1px solid var(--c2); }
+.cr-acts { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cr-acts .cr-pill.wide { flex: 1 1 auto; min-width: 0; max-width: 220px; text-overflow: ellipsis; }
+.cr-acts .btn { flex: none; }
+.cr-bench > .cr-err { margin: 0 0 8px; }
+.cr-letgo { align-self: flex-start; margin-top: 4px; font-size: 14px; }
+.cr-status { display: flex; align-items: center; gap: 10px; min-height: 1.4em; margin: 0; font-size: 13px; color: var(--ctx2); }
+.cr-status:empty { display: none; }
+.cr-status[data-state="working"] span { color: var(--ctx); }
+.cr-status[data-state="done"] span { color: var(--cy); }
+.cr-status[data-state="failed"] span { color: #ff9b85; }
+.cr-status .cr-bar { flex: 1; max-width: 140px; display: block; }
+.cr-status .cr-link { padding: 0; font-size: 13px; color: var(--cy); text-decoration: underline; text-underline-offset: 3px; }
+
+/* phone: the grid, or the plate, one at a time */
+@media (max-width: 900px) {
+  .cr { height: auto; min-height: 100%; }
+  .cr-body, .cr-body:has(.cr-bench:not([hidden])) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; }
+  .cr-body:has(.cr-bench:not([hidden])) .cr-habitat { display: none; }
+  .cr-side { border-left: 0; border-top: 1px solid var(--c2); overflow: visible; }
+  .cr-side:has(.cr-bench:not([hidden])) { overflow: visible; }
+  .cr-side:has(.cr-bench:not([hidden])) .cr-bench, .cr-flow { overflow: visible; }
+  .cr-habitat { min-height: 0; overflow: visible; }
+  .cr-pen { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px 16px 24px; }
+  .crt .cbod { width: 76px; height: 76px; }
+  .crt .circ { width: 104px; height: 104px; }
+  .cr-benchtop { flex-wrap: wrap; }
+  .cr-acts { width: 100%; }
+  .cr-acts .cr-pill.wide { max-width: none; }
+  .cr-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* the creature reads its job back to you, in its own voice */
+.cr-readback { margin: -8px 0 0; padding: 14px 16px; border-radius: 12px; background: var(--c2); position: relative;
+  font: 400 21px/1.4 "Instrument Serif", Georgia, serif; color: var(--ctx2); text-wrap: pretty; }
+.cr-readback::before { content: ""; position: absolute; left: 30px; top: -8px; width: 16px; height: 16px; background: var(--c2); rotate: 45deg; border-radius: 3px 0 0 0; }
+.cr-readback b { font: 800 .82em/1 "Doto", var(--mono); color: var(--ctx); letter-spacing: .01em; animation: crv-ink .5s ease-out; }
+@keyframes crv-ink { from { color: var(--cy); } }
+@media (prefers-reduced-motion: reduce) { .cr-readback b { animation: none; } }
+
+/* ----- the plate, tightened: one rhythm, one control height ----- */
+.cr-flow { gap: 30px; padding-bottom: 104px; } /* the last row scrolls clear of Dot */
+.slot { gap: 10px; }
+.slot h3 + .cr-choice, .slot h3 + .cr-sheets, .slot h3 + .cr-thoughts, .slot h3 + .cr-tiles { margin-top: -2px; }
+.slot-in h3:not(:first-child) { margin-top: 12px; }
+.cr-chip { padding: 5px 11px; font-size: 13.5px; }
+.cr-chip[aria-pressed="true"] { font-weight: 600; }
+.cr-acts .cr-pill.wide { width: 200px; flex: 0 1 200px; }
+
+/* a step is one card: what it reads and with which brain, then what to do */
+.cr-thoughts { gap: 10px; }
+.cr-thoughts li { gap: 0; border: 1px solid var(--c2); border-radius: 12px; background: var(--c0); overflow: hidden; transition: border-color .15s; }
+.cr-thoughts li:focus-within { border-color: var(--cl); }
+.cr-thoughts li.wait { border-style: dashed; border-color: var(--cl); background: transparent; }
+.cr-pills { gap: 6px; padding: 8px 8px 0 12px; font-size: 13px; color: var(--ctx2); flex-wrap: wrap; row-gap: 2px; }
+.cr-pills .beat { width: 20px; height: 20px; display: grid; place-items: center; margin-right: 4px; border-radius: 50%; background: var(--c2); color: var(--ctx); font-size: 12px; }
+.cr-thoughts .cr-pill { flex: none; width: auto; max-width: 15ch; padding: 3px 18px 3px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--ctx);
+  appearance: none; font-weight: 600; text-overflow: ellipsis;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a8a9ae' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E") right 5px center / 9px no-repeat; }
+.cr-thoughts .cr-pill:hover { background-color: var(--c2); }
+.cr-thoughts .x { flex: none; }
+.cr-thoughts textarea, .cr-thoughts li.wait textarea { min-height: 3.6rem; padding: 6px 14px 12px; border: 0; border-radius: 0; background: transparent; font-size: 15px; }
+.cr-thoughts textarea:focus { border: 0; }
+.cr-teach { justify-self: start; padding: 5px 12px; font-size: 13.5px; }
+
+/* what it leaves you: compact rows, icon then words */
+.cr-tiles { gap: 6px; }
+.tile { display: flex; align-items: center; justify-items: start; gap: 9px; padding: 9px 12px; border-radius: 10px; font-size: 13.5px; text-align: left; }
+.tile .ico { flex: none; display: grid; }
+.tile .ico svg { width: 18px; height: 18px; }
+.tile:hover { translate: none; border-color: var(--ctx2); }
+@media (max-width: 900px) { .cr-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.cr-warn { margin: 0; padding: 0 14px 10px; font-size: 13px; line-height: 1.4; color: #ffc785; }
+.cr-outsays { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--ctx2); max-width: 62ch; }
+.tile:disabled { opacity: .35; cursor: not-allowed; }
+.tile:disabled:hover { border-color: var(--cl); color: var(--ctx2); }

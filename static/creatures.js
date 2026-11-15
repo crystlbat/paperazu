@@ -9,7 +9,7 @@ const CR_TRIGGER = { manual: "Only when I press Run", open: "When I open a paper
 const CR_OUTPUT = { doc: "A document to read here", say: "Dot tells me", ask: "Dot asks me a question",
   card: "A card on the canvas", highlight: "Dot highlights lines", note: "Saved in the paper's note" };
 const CR_SCOPE = { page: "The page I'm on", selection: "What I highlighted", paper: "The whole paper (all papers)",
-  each_paper: "Each paper in turn", sections: "Each section in turn", references: "The reference list",
+  each_paper: "Each paper in turn", sections: "Each section in turn", references: "The reference list", similar: "Similar papers (web search)",
   template: "Each template heading", prev: "Only the step before" };
 const CR_SUGGEST = ["Make a detailed outline of the paper", "Rewrite each section simply", "Quiz me when I stay on a page",
   "Compare my papers on their methods"];
@@ -162,7 +162,7 @@ function crSelect(options, value, attrs = {}) {
 
 // short words for the chips on a step: what it reads
 const CR_READS = { page: "this page", selection: "my highlight", paper: "the whole paper", each_paper: "each paper",
-  references: "the reference list",
+  references: "the reference list", similar: "similar papers on the web",
   sections: "each section", template: "each heading", prev: "the step before" };
 const CR_WAKE = { manual: "When I press Run", open: "I open a paper", page: "I turn a page", dwell: "I stay on a page",
   highlight: "I highlight", timer: "Every few minutes" };
@@ -175,6 +175,15 @@ const CR_OUT_ICON = {
   note: '<svg viewBox="0 0 24 24"><path d="M6 4h12v16H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>',
 };
 const CR_OUT_SHORT = { doc: "A document", card: "A canvas card", say: "Dot tells me", ask: "Dot asks me", highlight: "Highlights", note: "Your note" };
+const CR_OUT_SAYS = {
+  doc: "A write-up you read on this page, under Runs.",
+  card: "A card on the paper's canvas, next to where you are reading.",
+  say: "Dot says the answer in a speech bubble while you read.",
+  ask: "Dot asks you a question while you read. Your answer is saved on the canvas.",
+  highlight: "Blue highlights on the lines it picks out of the paper.",
+  note: "Added to the paper's note, under the creature's name. A new run replaces its old block.",
+};
+const CR_READER_ONLY = ["say", "ask", "card"]; // these land in the reader, so a creature that only wakes on Run never shows them
 function crIcon(svg) { const s = h("span", { class: "ico", "aria-hidden": "true" }); s.innerHTML = svg; return s; }
 // a creature's body: the same little Dot, in its own colour, with feet and a mouth
 function crBody(extra = "") {
@@ -250,6 +259,9 @@ async function renderCreatures() {
       crBody(), h("span", { class: "ring" }), h("span", { class: "prop", "aria-hidden": "true" }),
       h("span", { class: "zz", "aria-hidden": "true" }, h("i", {}, "z"), h("i", {}, "z"), h("i", {}, "z")),
       h("span", { class: "code" }), h("span", { class: "nm" }), h("span", { class: "stt" }));
+    const circ = h("span", { class: "circ", "aria-hidden": "true" }); // the pen loop round the one you are teaching
+    circ.innerHTML = '<svg viewBox="0 0 120 120"><path pathLength="1" d="M66 9C94 9 113 31 111 60c-2 31-25 52-55 51C27 110 8 89 9 58 10 30 33 11 62 10c14-1 26 3 34 9"/></svg>';
+    b.prepend(circ);
     return b;
   }
   const egg = h("button", { type: "button", class: "crt crt-egg", onclick: () => { hop(egg); openBench(null); } },
@@ -314,13 +326,14 @@ async function renderCreatures() {
     bench.hidden = false;
     drawBench(); drawPen(); drawTabs(); drawPanel();
     side.scrollTop = 0;
+    view.scrollTop = 0; // on a phone the plate replaces the grid; start at its top
   }
   function closeBench() {
     st.sel = null; st.edit = null; st.shape = null;
     bench.hidden = true;
     drawPen(); drawPanel();
   }
-  let big = null;
+  let big = null, status = null;
   function paintBig() {
     if (!big || !st.edit) return;
     const j = st.edit, saved = j.id && st.jobs.find((x) => x.id === j.id);
@@ -329,8 +342,24 @@ async function renderCreatures() {
     const r = saved && lastRun(saved);
     big.style.setProperty("--p", r?.status === "running" && r.total ? r.done / r.total : 0);
     if (!j.on) big.dataset.state = "asleep";
+    if (!status) return;
+    const [state, line] = saved ? stateOf(saved) : ["new", ""];
+    status.dataset.state = state;
+    status.replaceChildren(...(["working", "waiting", "done", "failed"].includes(state) ? [
+      h("span", {}, state === "failed" ? (r?.error || line) : line),
+      state === "working" && r?.total ? h("i", { class: "cr-bar", "aria-hidden": "true" }, h("i", { style: `width: ${(100 * r.done) / r.total}%` })) : null,
+      state === "done" && r ? h("button", { type: "button", class: "cr-link", onclick: () => { crMarkSeen(r.id); st.doc = r; st.tab = "runs"; closeBench(); drawTabs(); } }, "Read it") : null,
+    ].filter(Boolean) : []));
   }
-  const nod = () => { big?.classList.remove("nod"); void big?.offsetWidth; big?.classList.add("nod"); };
+  const nod = () => { big?.classList.remove("nod"); void big?.offsetWidth; big?.classList.add("nod"); paintSay?.(); };
+  let paintSay = null; // the creature reads its job back to you as you set it up
+  function jobSentence(j) {
+    const wake = CR_WAKE[j.trigger].replace(/^When I/, "when you").replace(/^I /, "when you ").replace(/^Every/, "every");
+    const out = { doc: "a document", card: "a canvas card", say: "a word from Dot", ask: "a question from Dot", highlight: "highlights", note: "a line in your note" }[j.output];
+    const reads = j.papers.length ? `${j.papers.length} paper${j.papers.length > 1 ? "s" : ""} you picked` : "the paper you’re reading";
+    const n = j.steps.length;
+    return ["I read ", h("b", {}, reads), ", wake ", h("b", {}, wake), ", think in ", h("b", {}, `${n} step${n > 1 ? "s" : ""}`), ", and leave you ", h("b", {}, out), "."];
+  }
   const chip = (label, on, click, attrs = {}) => h("button", { type: "button", class: "cr-chip", "aria-pressed": String(on), onclick: click, ...attrs }, label);
 
   function drawBench() {
@@ -353,7 +382,11 @@ async function renderCreatures() {
             onclick: () => { j.papers = on ? j.papers.filter((x) => x !== p.id) : [...j.papers, p.id]; drawIn(); nod(); } }, h("span", {}, p.title));
         })) : h("div", { class: "cr-sheets one" }, h("span", { class: "sheet ghost" }, h("span", {}, "Whichever paper is open"))),
         h("h3", {}, "Wakes up"),
-        h("div", { class: "cr-choice" }, Object.entries(CR_WAKE).map(([k, t]) => chip(t, j.trigger === k, () => { j.trigger = k; drawIn(); nod(); }))),
+        h("div", { class: "cr-choice" }, Object.entries(CR_WAKE).map(([k, t]) => chip(t, j.trigger === k, () => {
+          j.trigger = k;
+          if (k === "manual" && CR_READER_ONLY.includes(j.output)) j.output = "doc";
+          drawIn(); drawSteps(); drawOut(); nod();
+        }))),
         ["dwell", "timer"].includes(j.trigger) ? h("label", { class: "cr-inline" },
           j.trigger === "dwell" ? "after" : "every",
           h("input", { type: "number", min: 20, max: 3600, step: 10, value: j.every, "aria-label": "Seconds", oninput: (e) => { j.every = +e.target.value; } }),
@@ -384,15 +417,20 @@ async function renderCreatures() {
           } });
         say.value = s.prompt;
         requestAnimationFrame(() => { say.style.height = `${say.scrollHeight}px`; });
-        const reads = crSelect(CR_READS, s.scope, { class: "cr-pill", "aria-label": `Step ${i + 1} reads`, onchange: () => { s.scope = reads.value; } });
+        const reads = crSelect(CR_READS, s.scope, { class: "cr-pill", "aria-label": `Step ${i + 1} reads`, onchange: () => { s.scope = reads.value; drawSteps(); } });
+        const off = { page: j.trigger === "manual", selection: j.trigger !== "highlight" };
+        for (const o of reads.options) if (off[o.value]) o.textContent += j.trigger === "manual" || o.value === "selection" ? " (needs a reading wake-up)" : "";
+        const warn = s.scope === "selection" && j.trigger !== "highlight" ? "There is no highlight unless it wakes when you highlight."
+          : s.scope === "page" && j.trigger === "manual" ? "Run now has no page open, so it reads page 1. Pick a wake-up while you read, or read the whole paper."
+          : "";
         const brain = crSelect(brains, s.model, { class: "cr-pill", "aria-label": `Step ${i + 1} model`, onchange: () => { s.model = brain.value; } });
         if (s.model && !st.models.includes(s.model)) brain.append(h("option", { value: s.model, selected: true }, s.model));
         return h("li", { class: s.prompt.trim() ? "" : "wait" },
           h("div", { class: "cr-pills" },
             h("span", { class: "beat" }, String(i + 1)),
-            reads, brain,
+            h("span", {}, "reads"), reads, h("span", {}, "using"), brain,
             j.steps.length > 1 ? h("button", { type: "button", class: "x", "aria-label": `Forget step ${i + 1}`, onclick: () => { j.steps.splice(i, 1); drawSteps(); } }, "×") : null),
-          say);
+          say, warn ? h("p", { class: "cr-warn" }, warn) : null);
       }));
     }
     drawSteps();
@@ -400,15 +438,19 @@ async function renderCreatures() {
       if (j.steps.length >= 8) return;
       j.steps.push({ scope: "prev", prompt: "", model: "" }); drawSteps(); steps.lastChild.querySelector("textarea").focus(); nod();
     } }, "+ then…");
-    const meSlot = h("div", { class: "slot slot-me" }, big, h("div", { class: "cr-who" }, name, h("div", { class: "cr-row" }, colors, awake)));
+    status = h("p", { class: "cr-status", role: "status" });
+    const meSlot = h("div", { class: "slot slot-me" }, big, h("div", { class: "cr-who" }, name, h("div", { class: "cr-row" }, colors, awake), status));
     const stepSlot = h("div", { class: "slot slot-steps" }, h("h3", {}, "Steps"), steps, teach);
 
     // what it leaves you
     const outSlot = h("div", { class: "slot slot-out" });
     function drawOut() {
       const tiles = h("div", { class: "cr-tiles" }, Object.keys(CR_OUT_SHORT).map((k) =>
-        h("button", { type: "button", class: "tile", "aria-pressed": String(j.output === k),
+        h("button", { type: "button", class: "tile", "aria-pressed": String(j.output === k), disabled: j.trigger === "manual" && CR_READER_ONLY.includes(k),
+          title: j.trigger === "manual" && CR_READER_ONLY.includes(k) ? "Shows up while you read. Pick a wake-up other than Run." : CR_OUT_SAYS[k],
           onclick: () => { j.output = k; drawOut(); nod(); } }, crIcon(CR_OUT_ICON[k]), h("span", {}, CR_OUT_SHORT[k]))));
+      const says = h("p", { class: "cr-outsays" }, CR_OUT_SAYS[j.output],
+        j.trigger === "manual" ? " Dot tells me, asks me, and canvas cards need a wake-up while you read." : "");
       let shape = null;
       if (j.output === "doc") {
         const pick = (t) => { st.shape = t ? structuredClone(t) : null; j.template_id = t?.id ?? null; drawOut(); };
@@ -420,7 +462,7 @@ async function renderCreatures() {
             chip("+ New shape", !!st.shape && !st.shape.id, () => { st.shape = { name: j.name ? `${j.name} shape` : "", sections: [{ title: "", ask: "" }] }; j.template_id = null; drawOut(); })),
           st.shape ? paperOf(st.shape) : h("div", { class: "cr-paper free" }, h("i"), h("i"), h("i"), h("i", { class: "short" })));
       }
-      outSlot.replaceChildren(...[h("h3", {}, "Leaves you"), tiles, shape].filter(Boolean));
+      outSlot.replaceChildren(...[h("h3", {}, "Leaves you"), tiles, says, shape].filter(Boolean));
     }
     // the template as the sheet it will fill: one heading and its ask per line
     function paperOf(t) {
@@ -447,14 +489,19 @@ async function renderCreatures() {
     }
     drawOut();
 
+    const say = h("p", { class: "cr-readback", "aria-live": "polite" });
+    paintSay = () => say.replaceChildren(...jobSentence(j));
+    paintSay();
     bench.replaceChildren(
-      h("div", { class: "cr-benchtop" }, h("button", { type: "button", class: "cr-back", onclick: closeBench }, "← All creatures")),
-      h("div", { class: "cr-flow" }, meSlot, stepSlot, inSlot, outSlot),
-      h("div", { class: "cr-benchbar" }, msg,
-        j.id ? h("button", { type: "button", class: "cr-link danger", onclick: () => deleteJob(j) }, "Let it go") : null,
-        runOn,
-        h("button", { type: "button", class: "btn", onclick: () => runJob(j, j.papers.length ? null : runOn.value, msg) }, "Run now"),
-        h("button", { type: "button", class: "btn primary", onclick: () => saveJob(j, msg) }, j.id ? "Save" : "Hatch it")));
+      h("div", { class: "cr-benchtop" },
+        h("button", { type: "button", class: "cr-back", onclick: closeBench }, "← All creatures"),
+        h("div", { class: "cr-acts" }, runOn,
+          h("button", { type: "button", class: "btn", onclick: () => runJob(j, j.papers.length ? null : runOn.value, msg) }, "Run now"),
+          h("button", { type: "button", class: "btn primary", onclick: () => saveJob(j, msg) }, j.id ? "Save" : "Hatch it"))),
+      msg,
+      h("div", { class: "cr-flow" }, meSlot, say, inSlot, stepSlot, outSlot,
+        j.id ? h("button", { type: "button", class: "cr-link danger cr-letgo", onclick: () => deleteJob(j) }, `Let ${j.name || "it"} go`) : null));
+    paintBig();
   }
 
   async function saveJob(j, msg, stay = false) {  // stay: keep the bench open (Run saves first)

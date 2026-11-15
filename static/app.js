@@ -15,10 +15,10 @@ function h(tag, attrs = {}, ...kids) {
 }
 
 // calls that wait on the local model: Dot shows it is working while they run
-const MODEL_CALL = /\/(explain|ask|test-connection|check-context)$|\/check\/\w+$|\/export\/reflection$|^\/graph\/(index|search|suggest)$/;
+const MODEL_CALL = /\/(explain|ask|say|pickup|stages|test-connection|check-context)$|\/check\/\w+$|\/export\/reflection$|\/highlights\/suggest$|^\/graph\/(index|search|suggest)$|^\/dot\/talk$/;
 
 // calls that ask the model to write: off while Dot sleeps (searching, highlights, notes and the canvas still work)
-const AI_CALL = /\/(explain|ask|pickup|reflection)$|\/highlights\/suggest$|\/check\/\w+$|^\/jobs\/\d+\/run$|^\/dot\/talk$/;
+const AI_CALL = /\/(explain|ask|pickup|reflection)$|\/highlights\/suggest$|\/check\/\w+$|^\/jobs\/\d+\/run$|^\/dot\/talk$|^\/(?:space|char)\/say$/;
 const ASLEEP = "I am asleep, so the AI is off. Click me and pick Wake up to use it.";
 
 async function api(path, opts = {}) {
@@ -79,13 +79,13 @@ setInterval(refreshChip, 30000);
 
 // ---------- router ----------
 const view = $("#view");
-const pages = { library: renderLibrary, read: renderReader, graph: renderGraph, creatures: renderCreatures, settings: renderSettings };
+const pages = { library: renderLibrary, read: renderReader, graph: renderGraph, creatures: renderCreatures, space: () => renderSpace("/space"), char: () => renderSpace("/char"), verse: () => renderVerse(), settings: renderSettings };
 
 function route() {
   const [name, arg, extra] = location.hash.replace(/^#/, "").split("/");
   if (!pages[name]) { location.hash = "#library"; return; }
   document.querySelectorAll("[data-nav]").forEach((a) =>
-    a.classList.toggle("active", a.dataset.nav === name));
+    a.classList.toggle("active", a.dataset.nav === (name === "char" ? "space" : name))); // /char is Dot's page
   libraryLeave();
   $("#page-extra").replaceChildren();
   view.replaceChildren();

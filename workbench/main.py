@@ -1,5 +1,6 @@
 """FastAPI app: API routes plus the one-page frontend."""
 import json
+import re
 import os
 import time
 import sqlite3
@@ -10,13 +11,13 @@ from typing import Any
 
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from . import canvas, checker, db, export, guide, jobs, marks, framework, graph, library, llm, notes, primer, sections, settings, shelf, themes, websearch
+from . import canvas, char, checker, chibi, db, export, guide, harness, jobs, marks, framework, graph, library, llm, notes, primer, sections, settings, shelf, space, themes, verse, websearch
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -26,6 +27,7 @@ PORT = int(os.environ.get("PORT", "8765"))
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     db.init()
+    char.init_db()
     library.pick_missing_templates()
     primer.reset_stale()
     jobs.start()
@@ -38,8 +40,10 @@ app = FastAPI(title="Paper Reading Workbench", lifespan=lifespan)
 @app.middleware("http")
 async def no_stale_assets(request: Request, call_next: Any) -> Response:
     response = await call_next(request)
-    if request.url.path == "/" or request.url.path.startswith("/static/"):
-        response.headers["Cache-Control"] = "no-cache"  # revalidate, so UI edits show at once
+    if request.url.path in ("/", "/char", "/space") or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 
@@ -879,6 +883,331 @@ def dot_talk(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return jobs.talk(body.get("messages") or [])
     except RuntimeError as e:
         raise HTTPException(502, detail=str(e))
+
+
+@app.get("/space")
+def get_space() -> dict[str, Any]:
+    return space.state()
+
+
+@app.get("/space/notes")
+def get_space_notes() -> dict[str, Any]:
+    return {"notes": space.all_notes()}
+
+
+@app.post("/space/say")
+def space_say(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(422, detail="Say something to Dot.")
+    return space.say(text)
+
+
+@app.delete("/space/vars/{var_id}")
+def space_remove_var(var_id: int) -> dict[str, Any]:
+    if not space.remove_var(var_id):
+        raise HTTPException(404, detail="That variable is gone.")
+    return space.state()
+
+
+@app.delete("/space")
+def space_clear() -> dict[str, Any]:
+    space.clear()
+    return space.state()
+
+
+@app.get("/char")
+def char_entry(request: Request) -> Any:
+    if "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse(url="/#char")
+    return char.state()
+
+
+@app.get("/char/notes")
+def get_char_notes() -> dict[str, Any]:
+    return {"notes": char.all_notes()}
+
+
+@app.get("/char/questions")
+def get_char_questions() -> dict[str, Any]:
+    return {"questions": char.get_questions()}
+
+
+@app.post("/char/say")
+def char_say(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(422, detail="Say something to Jarvis.")
+    learn_mode = bool(body.get("learn_mode") or False)
+    return char.say(text, learn_mode=learn_mode, answering=bool(body.get("answering")))
+
+
+@app.post("/space/preview")
+def space_preview(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """How a rule sentence would be read, without saving it."""
+    return {"rules": space.preview(str(body.get("text") or "")[:600])}
+
+
+@app.post("/char/speak")
+def char_speak(body: dict[str, Any] = Body(...)) -> Response:
+    try:
+        return Response(char.speak(str(body.get("text") or "")), media_type="audio/mpeg")
+    except Exception as e:  # e.g. "The loaded model cannot answer in speech."
+        raise HTTPException(503, detail=f"No speaking model: {getattr(e, 'read', lambda: str(e).encode())()[:200].decode(errors='ignore')}")
+
+
+@app.get("/char/mind")
+def char_mind() -> dict[str, Any]:
+    return char.mind()
+
+
+@app.get("/char/mesh")
+def char_mesh() -> dict[str, Any]:
+    return char.mesh()
+
+
+@app.post("/char/creatures/asker")
+def char_asker() -> dict[str, Any]:
+    return {"asked": char.asker(), "open": char._open_questions(char._start())}
+
+
+@app.post("/char/creatures/pruner")
+def char_pruner() -> dict[str, Any]:
+    return char.pruner()
+
+
+@app.post("/char/creatures/sorter")
+def char_sorter(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    return char.sorter(int(body.get("limit") or 1))
+
+
+@app.post("/char/reflect")
+def char_reflect(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    return char.reflect(on_char=bool(body.get("char")))
+
+
+@app.get("/char/systems")
+def char_systems() -> dict[str, Any]:
+    return char.systems()
+
+
+@app.post("/char/systems")
+def char_set_system(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        char.set_system(int(body.get("id", -1)), bool(body.get("on")))
+    except ValueError as e:
+        raise HTTPException(404, detail=str(e))
+    return char.systems()
+
+
+_model_seen: dict[str, Any] = {}  # the last model status and when, so polling the engines does not list the models each time
+
+
+def _model() -> tuple[bool, str]:
+    if time.time() - _model_seen.get("t", 0) > 10:
+        _model_seen.update(llm.model_status(settings.get_all()), t=time.time())
+    return _model_seen["status"] == "ready", _model_seen["label"]
+
+
+@app.get("/char/engines")
+def char_engines() -> dict[str, Any]:
+    return char.engines(*_model())
+
+
+@app.post("/char/dial")
+def char_dial(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        return {"dial": char.set_dial(float(body.get("curiosity"))), "disposition": char.disposition()}
+    except (TypeError, ValueError):
+        raise HTTPException(422, detail="curiosity must be a number from 0 to 3")
+
+
+@app.get("/char/note/{note_id}")
+def char_note(note_id: int) -> dict[str, Any]:
+    try:
+        return char.note(note_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@app.get("/char/journal")
+def char_journal() -> dict[str, Any]:
+    """Its study journal, newest page first."""
+    return {"pages": char.journal()}
+
+
+@app.get("/char/report")
+def char_report() -> dict[str, Any]:
+    return {**char.report(*_model()), "harness_loop": harness.totals(), "cycles": harness.cycles(30), "mode": char.mode(), "tracker": char.tracker()}
+
+
+@app.post("/char/cycle")
+def char_cycle(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        budget = max(1, min(12, int(body.get("budget") or harness.BUDGET)))
+    except (TypeError, ValueError):
+        raise HTTPException(422, detail="budget must be a whole number")
+    try:
+        return harness.cycle(budget)
+    except RuntimeError as e:
+        raise HTTPException(409, detail=str(e))
+
+
+@app.get("/char/cycles")
+def char_cycles(limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
+    return {"cycles": harness.cycles(limit)}
+
+
+@app.get("/model/swap")
+def model_swap() -> dict[str, Any]:
+    return dict(llm.SWAP)
+
+
+@app.post("/char/rest")
+def char_rest(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    if body.get("char") and char.mode() == "planner" and not body.get("only"):  # planner mode: idle time runs one harness cycle instead of the rule loop; a step you ask for by name still runs
+        try:
+            c = harness.cycle()
+        except RuntimeError as e:
+            c = {"busy": str(e), "executed": []}
+        did = [x for x in c["executed"] if x["outcome"] == "ok"]
+        return {"done": not did, "kind": "cycle", "topic": f"cycle {c.get('cycle', '')}".strip(), "note": " · ".join(x["cmd"] for x in did),
+                "cycle": c, "questions": char._open_questions(char._start())[::-1][:3], "graph": char.graph()}
+    only = body.get("only")
+    if only is not None and only not in char.SYS_OF:
+        raise HTTPException(422, detail=f"no step called {only}")
+    return char.rest(on_char=bool(body.get("char")), n=None if body.get("n") is None else int(body["n"]), force=bool(body.get("force")), only=only)
+
+
+@app.get("/verse")
+def verse_page() -> RedirectResponse:
+    return RedirectResponse("/#verse")
+
+
+@app.get("/verse/personas")
+def verse_list() -> dict[str, Any]:
+    return verse.personas()
+
+
+@app.post("/verse/enter")
+def verse_enter(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        p = verse.enter(str(body.get("name") or ""))
+    except KeyError:
+        raise HTTPException(404, detail="There is no persona by that name.")
+    char._engine("persona", "ok", f"entered {p['name']}")
+    return verse.personas()
+
+
+@app.post("/verse/new")
+def verse_new(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    who = str(body.get("who") or "").strip()
+    if not who:
+        raise HTTPException(422, detail="Name who it should become.")
+    if who.startswith("/") or not any(c.isalpha() for c in who):  # a slash command typed in the wrong box once made a persona called "/Step"
+        raise HTTPException(422, detail="That looks like a command, not someone to become.")
+    _, said = char.become_persona(who)  # puts the live one away first, then looks the new one up
+    return {**verse.personas(), "said": said}  # says so when the model was down and it got a generic voice
+
+
+@app.delete("/verse/personas/{name:path}")  # :path so a name with a "/" in it can still be deleted
+def verse_delete(name: str) -> dict[str, Any]:
+    try:
+        verse.delete(name)
+    except KeyError:
+        raise HTTPException(404, detail="There is no persona by that name.")
+    except ValueError as e:
+        raise HTTPException(409, detail=str(e))
+    return verse.personas()
+
+
+@app.get("/char/chibi")
+def char_chibi(name: str = "") -> dict[str, Any]:
+    """The look Dot's chibi form takes for a persona (the live one by default), from a reference looked up on the web once and stored."""
+    p = char.get_profile()
+    if name and name != p["name"]:
+        try:
+            p = verse.profile(name)
+        except KeyError:
+            raise HTTPException(404, detail="There is no persona by that name.")
+    return chibi.reference(p["name"], p["look"], p["persona"])
+
+
+@app.get("/char/monitor")
+def char_monitor() -> dict[str, Any]:
+    return char.monitor()
+
+
+@app.post("/char/tint")
+def char_tint(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    tint = str(body.get("tint") or "")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", tint):
+        raise HTTPException(422, detail="Pick a colour.")
+    p = char.get_profile()
+    char.update_profile(p["name"], p["persona"], p["look"], tint)
+    return char.state()
+
+
+@app.get("/char/wiring")
+def char_wiring() -> dict[str, Any]:
+    return char.wiring()
+
+
+@app.post("/char/wiring")
+def char_wire(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        if body.get("correction"):
+            char.set_correction(str(body["correction"]), bool(body.get("accept")))
+            return char.wiring()
+        if body.get("mode"):
+            char.set_mode(str(body["mode"]))
+            return char.wiring()
+        return char.wire(str(body.get("text") or ""))
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+
+
+@app.post("/char/correction")
+def char_correction(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        char.answer_correction(str(body.get("text") or ""))
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+    return char.wiring()
+
+
+@app.post("/char/tracker")
+def char_tracker(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        return char.set_tracker(body.get("sleep_at"), body.get("max"))
+    except (TypeError, ValueError):
+        raise HTTPException(422, detail="sleep_at and max must be numbers")
+
+
+@app.delete("/char/correction")
+def char_skip_correction() -> dict[str, Any]:
+    char.skip_correction()
+    return char.wiring()
+
+
+@app.delete("/char/instructions/{note_id}")
+def char_remove_instruction(note_id: int) -> dict[str, Any]:
+    if not char.remove_instruction(note_id):
+        raise HTTPException(404, detail="No such instruction.")
+    return char.wiring()
+
+
+@app.delete("/char/vars/{var_id}")
+def char_remove_var(var_id: int) -> dict[str, Any]:
+    if not char.remove_var(var_id):
+        raise HTTPException(404, detail="That variable is gone.")
+    return char.state()
+
+
+@app.delete("/char")
+def char_clear() -> dict[str, Any]:
+    char.clear()
+    return char.state()
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

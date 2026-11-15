@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600&family=Instrument+Serif&family=Doto:wght@800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1440px;height:900px;overflow:hidden;background:#17181b;color:#e8e8e8;font:15px/1.35 Geist,sans-serif}
+header{height:56px;display:flex;align-items:center;gap:28px;padding:0 22px;border-bottom:1px solid #2b2c30}
+.brand{font:400 22px/1 "Instrument Serif",serif}
+nav{display:flex;gap:18px;color:#a8a9ae}
+nav b{background:#ffe347;color:#1f2023;padding:3px 8px;font-weight:600}
+.chip{margin-left:auto;border:1px solid #45464c;border-radius:99px;padding:4px 10px;color:#a8a9ae;font-size:13px}
+.room{height:844px;background:radial-gradient(#303136 1px,transparent 1.2px) 0 0/18px 18px;position:relative}
+.far{position:absolute;left:80px;right:80px;top:24px;display:flex;justify-content:space-between}
+.who{display:grid;justify-items:center;gap:4px;width:90px;font:800 12px/1 Doto,sans-serif;color:#a8a9ae}
+.dot{width:34px;height:34px;border-radius:50%;background:var(--c)}
+.face{position:absolute;left:50%;top:150px;translate:-50% 0;display:grid;justify-items:center;gap:8px}
+.body{width:200px;height:200px;border-radius:50%;background:#f0c25e;position:relative;box-shadow:inset 0 -12px 0 rgb(0 0 0/.14)}
+.body:before{content:"";position:absolute;inset:-14px;border-radius:50%;background:conic-gradient(#ffe347 40%,rgb(255 255 255/.12) 0);-webkit-mask:radial-gradient(closest-side,transparent 86%,#000 88%);mask:radial-gradient(closest-side,transparent 86%,#000 88%)}
+.eyes{position:absolute;left:0;right:0;top:58%;display:flex;justify-content:center;gap:26px}
+.eyes i{width:16px;height:22px;border-radius:99px;background:#1f2023;display:block}
+.name{font:800 56px/1 Doto,sans-serif;color:#ffe347}
+.awake{background:#ffe347;color:#1f2023;border-radius:99px;padding:4px 10px;font-weight:600}
+.papers{position:absolute;left:48px;top:280px;width:280px}
+.papers .sheet{background:#f4f4ef;color:#1f2023;padding:18px;border-radius:3px;rotate:-3deg;box-shadow:0 16px 24px -16px #000}
+.papers h2,.near h2{font:400 26px/1.05 "Instrument Serif",serif;margin-bottom:8px}
+.choice{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.choice span{border:1px solid #c9cbd0;border-radius:99px;padding:4px 8px;font-size:13px;color:#1f2023}
+.choice .on{background:#ffe347;border-color:#ffe347}
+.said{position:absolute;left:50%;top:470px;translate:-50% 0;width:460px;background:#222326;border-radius:18px;padding:14px 16px;text-align:center}
+.said small{color:#a8a9ae}
+.near{position:absolute;left:50%;bottom:28px;translate:-50% 0;width:640px;background:#f4f4ef;color:#1f2023;padding:18px 22px 16px;border-radius:3px 3px 0 0;box-shadow:0 -12px 30px -18px #000}
+.near .q{font:400 28px/1.15 "Instrument Serif",serif}
+.dotcol{position:absolute;right:36px;top:240px;width:240px}
+.msg{background:#222326;border-radius:14px;padding:12px;margin-bottom:8px}
+.btn{display:inline-block;margin-top:8px;border:1px solid #45464c;border-radius:99px;padding:7px 12px}
+.btn.go{background:#ffe347;color:#1f2023;border-color:#ffe347;font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Paper Workbench</div>
+  <nav><span>Library</span><span>Graph</span><b>Creatures</b><span>Settings</span></nav>
+  <div class="chip">Stand-in · 1 using the model</div>
+</header>
+<div class="room">
+  <div class="far">
+    <div class="who"><i class="dot" style="--c:#7cb4ff"></i>Detailed outline</div>
+    <div class="who"><i class="dot" style="--c:#8ad6ac"></i>Simplified version</div>
+    <div class="who"><i class="dot" style="--c:#c9a7ff"></i>Research brief</div>
+    <div class="who"><i class="dot" style="--c:#ff9c87"></i>Compare papers</div>
+    <div class="who"><i class="dot" style="--c:#6fd3d3"></i>Explain my highlights</div>
+    <div class="who"><i class="dot" style="--c:#45464c"></i>New creature</div>
+  </div>
+  <div class="face">
+    <div class="body"><div class="eyes"><i></i><i></i></div></div>
+    <div class="name">Quiz me</div>
+    <span class="awake">Awake</span>
+  </div>
+  <div class="papers">
+    <div class="sheet">
+      <h2>Reads</h2>
+      Whichever paper is open
+      <div class="choice"><span class="on">The paper I'm reading</span><span>When I stay on a page</span></div>
+    </div>
+  </div>
+  <div class="said">
+    <small>reads The page I'm on · usual brain · asked on this page, and it stays</small>
+    <p>Ask one short question that checks I understood the main idea of this page. Only the question.</p>
+  </div>
+  <div class="near">
+    <h2>Leaves you</h2>
+    <p class="q">Dot asks me a question</p>
+    <span class="btn">Let it go</span>
+    <span class="btn">Run now</span>
+    <span class="btn go">Save</span>
+  </div>
+  <div class="dotcol">
+    <div class="msg">What should a creature do while you read?</div>
+    <div class="msg"><b>Quiz me</b> is working on the page you are reading.</div>
+  </div>
+</div>
+</body>
+</html>
