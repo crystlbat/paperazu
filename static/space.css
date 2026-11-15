@@ -1087,16 +1087,6 @@ body:has(#view.page-space, #view.page-char, #view.page-verse) .buddy { display: 
 .sw-x { all: unset; cursor: pointer; color: #71717a; padding: 0 6px; border-radius: 4px; } .sw-x:hover { color: #f4f4f5; background: #1f2229; } .sw-x:focus-visible { outline: 2px solid #6ff7ff; }
 
 /* the training run on Story: one line, three big numbers, one glowing trace */
-.f1 { display: grid; gap: 22px; }
-.f1-line { margin: 0; display: flex; align-items: center; gap: 10px; color: #a1a1aa; font-size: 13.5px; }
-.f1-line i { width: 8px; height: 8px; border-radius: 50%; background: #3f3f46; } .f1[data-live="true"] .f1-line i { background: var(--team); box-shadow: 0 0 12px var(--team); animation: sw-aura 1.6s ease-in-out infinite; }
-.f1-vars { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 28px 32px; }
-.f1-v { margin: 0; display: grid; gap: 8px; }
-.f1-v figcaption { display: flex; align-items: baseline; gap: 10px; } .f1-v figcaption span { color: #a1a1aa; font-size: 12.5px; flex: 1; }
-.f1-v strong { font: 800 26px/1 "Doto", var(--mono, monospace); color: var(--c); text-shadow: 0 0 18px color-mix(in srgb, var(--c) 40%, transparent); font-variant-numeric: tabular-nums; }
-.f1-v small { font: 11px var(--mono, monospace); color: #71717a; min-width: 52px; text-align: right; } .f1-v small[data-d="up"] { color: #7dffa8; } .f1-v small[data-d="down"] { color: #fca5a5; }
-.f1-plot { position: relative; height: 72px; border-bottom: 1px solid #1f1f23; } .f1-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.f1-plot i { position: absolute; width: 7px; height: 7px; translate: -50% -50%; border-radius: 50%; background: #c79bff; box-shadow: 0 0 10px #c79bff; }
 .f1-now { margin: 0; color: #71717a; font-size: 12.5px; }
 /* the training run on Controls */
 .sw-ctl:has(.sw-train) { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
@@ -1130,3 +1120,37 @@ body:has(#view.page-space, #view.page-char, #view.page-verse) .buddy { display: 
 .sw-tblock { display: grid; gap: 12px; padding: 18px 0; border-top: 1px solid #1f1f23; } .sw-tblock:last-child { padding-bottom: 0; }
 .sw-tblock h5 { margin: 0; display: flex; align-items: center; gap: 10px; font: 600 13px var(--sans, system-ui); color: #f4f4f5; }
 .sw-tblock h5 b { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #27272a; color: #6ff7ff; font: 700 11px var(--mono, monospace); }
+/* the letter after a run */
+.sw-sent { color: #7dffa8; }
+
+/* Story: one chart, the variables as lines over the information flow */
+.f1 { display: grid; gap: 18px; }
+.f1-line { display: flex; align-items: center; gap: 10px; color: #a1a1aa; font-size: 13.5px; } .f1-line p { margin: 0; flex: 1; }
+.f1-line i { width: 8px; height: 8px; border-radius: 50%; background: #3f3f46; } .f1[data-live="true"] .f1-line i { background: var(--team); box-shadow: 0 0 12px var(--team); animation: sw-aura 1.6s ease-in-out infinite; }
+.f1-leg { display: flex; flex-wrap: wrap; gap: 6px 22px; }
+.f1-leg button { all: unset; cursor: default; display: inline-flex; align-items: baseline; gap: 7px; padding: 4px 0; border-bottom: 2px solid var(--c); }
+.f1-leg button:focus-visible { outline: 2px solid #6ff7ff; outline-offset: 3px; }
+.f1-leg span { color: #a1a1aa; font-size: 12.5px; }
+.f1-leg strong { font: 800 22px/1 "Doto", var(--mono, monospace); color: var(--c); font-variant-numeric: tabular-nums; text-shadow: 0 0 14px color-mix(in srgb, var(--c) 35%, transparent); }
+.f1-leg small { font: 10.5px var(--mono, monospace); color: #71717a; } .f1-leg small[data-d="up"] { color: #7dffa8; } .f1-leg small[data-d="down"] { color: #fca5a5; }
+.f1-plot { position: relative; height: clamp(320px, 42vw, 460px); } .f1-plot svg { display: block; width: 100%; height: 100%; overflow: visible; } .f1-plot svg [data-k] { transition: opacity .2s; }
+.f1-plot i { position: absolute; translate: -50% -50%; border-radius: 50%; pointer-events: none; }
+.f1-bead { width: 8px; height: 8px; background: #c79bff; box-shadow: 0 0 10px #c79bff; }
+.f1-stage { width: 12px; height: 12px; background: var(--c); box-shadow: 0 0 0 6px color-mix(in srgb, var(--c) 18%, transparent), 0 0 18px var(--c); }
+.f1-t0, .f1-t1 { position: absolute; top: calc(68% + 6px); font: 11px var(--mono, monospace); color: #52525b; } .f1-t0 { left: 0; } .f1-t1 { right: 0; }
+.f1.sw-flow strong { height: auto; padding: 0; font-size: 44px; }
+/* the letter: its own tab, in the app's dark style */
+.sw-letter { max-width: 760px; display: grid; gap: 22px; }
+.sw-letter header small { font: 11px var(--mono, monospace); letter-spacing: .1em; text-transform: uppercase; color: #71717a; }
+.sw-letter h3 { margin: 4px 0 8px; font: 400 32px/1.15 "Instrument Serif", Georgia, serif; color: #f4f4f5; } .sw-letter header p { margin: 0; color: #a1a1aa; font-size: 14px; line-height: 1.55; }
+.sw-letter ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 14px; counter-reset: q; }
+.sw-letter li { counter-increment: q; padding: 18px 20px; border: 1px solid #1f1f23; border-radius: 14px; background: #0f0f12; }
+.sw-letter li p { margin: 0 0 12px; font-size: 14.5px; line-height: 1.55; color: #e4e4e7; } .sw-letter li p::before { content: counter(q) "  "; font: 800 18px "Doto", var(--mono, monospace); color: #52525b; }
+.sw-letter li i { font: normal 600 10.5px var(--mono, monospace); letter-spacing: .08em; text-transform: uppercase; color: #ffb347; margin-right: 8px; }
+.sw-letter textarea { width: 100%; box-sizing: border-box; font: 14px/1.5 var(--sans, system-ui); color: #f4f4f5; background: #09090b; border: 1px solid #27272a; border-radius: 10px; padding: 10px 12px; resize: vertical; }
+.sw-letter textarea:focus { outline: 2px solid #6ff7ff; border-color: transparent; } .sw-letter textarea:disabled { opacity: .4; }
+.sw-skip { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12.5px; color: #71717a; cursor: pointer; }
+.sw-lnote { all: unset; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid #1f1f23; border-radius: 12px; color: #d4d4d8; font-size: 13.5px; }
+.sw-lnote:hover { border-color: #3f3f46; } .sw-lnote:focus-visible { outline: 2px solid #6ff7ff; } .sw-lnote span { margin-left: auto; color: #6ff7ff; }
+.sw-lnote i { width: 8px; height: 8px; border-radius: 50%; background: #ffb347; box-shadow: 0 0 10px #ffb347; }
+.sw-lcount { margin-left: 5px; font: 600 10px var(--mono, monospace); color: #09090b; background: #ffb347; border-radius: 99px; padding: 1px 5px; vertical-align: 2px; }

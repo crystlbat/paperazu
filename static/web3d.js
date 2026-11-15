@@ -356,7 +356,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
         g ? st(g[0] === "admit" ? "yes" : "no", g[0] === "admit" ? "Let in at the gate" : "Turned away at the gate", h("p", {}, esc(g[1])))
           : st(n.verdict === "keep" ? "yes" : n.verdict === "drop" ? "no" : "wait", n.verdict === "keep" ? "Kept by the Verifier, after it was saved" : n.verdict === "drop" ? "Dropped by the Verifier, after it was saved" : "Not judged yet", h("p", {}, "Written before the intake gate existed.")),
         st((n.names || []).length ? "yes" : "wait", "Joined the mesh", h("p", {}, (n.names || []).length ? n.names.map(esc).join(", ") : "No names taken from it yet.")))); };
-  const TABS = [["story", "Story"], ["chat", "Chat"], ["journal", "Journal"], ["notes", "Notes"], ["activity", "Activity"], ["engines", "Engines"], ["controls", "Controls"]];
+  const TABS = [["story", "Story"], ["letter", "Letter"], ["chat", "Chat"], ["journal", "Journal"], ["notes", "Notes"], ["activity", "Activity"], ["engines", "Engines"], ["controls", "Controls"]];
   const MODE_DOES = { sleeping: "Asleep: no replies and no learning, so nothing you type reaches the model. Swap models and test with Run one step.", quiet: "Only answers you. Never learns by itself.", curious: "Learns by itself while you are away.", proactive: "Learns, then tells you what it found.", planner: "Idle time runs harness cycles: planner, controller, executor, Verifier." };
   const ctl = { budget: 4, roles: null, busy: "", last: null, swap: null }; let rCyc = null, jPages = null, cnet = null, cMesh = null, cTurns = null; // its study journal, pulled while that tab is open
   try { rTab = localStorage.getItem("sw-rtab") || "story"; } catch { rTab = "story"; }
@@ -374,35 +374,65 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   async function act(label, fn) { ctl.busy = label; paintReport(); try { ctl.last = { label, ok: true, out: await fn() }; } catch (e) { ctl.last = { label, ok: false, out: String(e?.message || e) }; } ctl.busy = ""; await pullReport(true); }
   // ---------- F1 on the Story page: a broadcast of the training run, timing bar, sectors, telemetry, checkpoints ----------
   const mmss = (s) => `${Math.floor((s || 0) / 60)}:${String(Math.round(s || 0) % 60).padStart(2, "0")}`;
-  const varChart = (k, pts, colour, band, byTime) => { // one variable over the run, on its own scale so small moves show; purple beads are checkpoints
-    const vs = pts.map((p) => +p[k] || 0), lo0 = Math.min(...vs, band ? band[0] : Infinity), hi0 = Math.max(...vs, band ? band[1] : -Infinity), pad = Math.max(.01, (hi0 - lo0) * .15), lo = lo0 - pad, hi = hi0 + pad;
-    const T = Math.max(1, pts.at(-1)?.t || 0), N = Math.max(1, pts.length - 1), X = (i) => ((byTime ? (pts[i].t || 0) / T : i / N) * 300).toFixed(1), Y = (v) => (76 - (v - lo) / (hi - lo) * 72).toFixed(1), path = vs.map((v, i) => `${i ? "L" : "M"}${X(i)},${Y(v)}`).join("");
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"), id = `f1g-${k}`;
-    svg.setAttribute("viewBox", "0 0 300 80"); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("aria-hidden", "true");
-    const steps = byTime ? pts.slice(1).map((p, i) => `<rect x="${X(i)}" width="${Math.max(0, X(i + 1) - X(i)).toFixed(1)}" y="0" height="80" fill="#fff" opacity="${i % 2 ? .015 : .045}"/>`).join("") : ""; // each step's own width: how long it took
-    const ticks = pts.map((_, i) => `<circle cx="${X(i)}" cy="80" r="1.6" fill="#52525b"/>`).join("");
-    svg.innerHTML = steps + ticks + `<defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${colour}" stop-opacity=".28"/><stop offset="1" stop-color="${colour}" stop-opacity="0"/></linearGradient></defs>`
-      + (band ? `<rect x="0" width="300" y="${Y(band[1])}" height="${Math.max(1, Y(band[0]) - Y(band[1])).toFixed(1)}" fill="#7dffa8" opacity=".1"/>` : "")
-      + `<path d="${path}L300,80L0,80Z" fill="url(#${id})"/><path d="${path}" fill="none" stroke="${colour}" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
-    const last = vs.at(-1), dv = last - vs[0], beads = pts.map((p, i) => p.snap ? h("i", { style: `left:${X(i) / 3}%;top:${Y(vs[i]) / .8}%` }) : null).filter(Boolean);
-    return h("figure", { class: "f1-v", style: `--c:${colour}`, "aria-label": `${k}: ${r2(last)}, ${dv >= 0 ? "up" : "down"} ${r2(Math.abs(dv))} over the run` },
-      h("figcaption", {}, h("span", {}, k), h("strong", {}, String(r2(last))), h("small", { "data-d": dv > 0 ? "up" : dv < 0 ? "down" : "" }, dv ? `${dv > 0 ? "▲" : "▼"} ${r2(Math.abs(dv))}` : "flat")),
-      h("div", { class: "f1-plot" }, svg, ...beads)); };
-  const f1 = (d) => {
+  const letterBox = (d) => { // after a run: what it needs from you, answered in place
+    const L = d.letter, items = L?.items || [], run = d.train?.runs?.[0], D = (ctl.drafts ||= {});
+    if (!items.length) return ctl.sent ? h("p", { class: "sw-dmut sw-sent" }, ctl.sent) : "";
+    const lg = run?.log || [], first = lg[0], last = lg.at(-1);
+    const intro = run && run.status !== "running" && last ? `Run ${run.id} finished${run.why ? ` (${run.why})` : ""}. Curiosity went from ${r2(first?.curiosity)} to ${r2(last?.curiosity)} over ${n0(last.step)} steps. To keep learning, I need you for these:` : "To keep learning, I need you for these:";
+    const send = () => act("letter", () => api("/char/letter", { method: "POST", body: JSON.stringify({ answers: items.map((x) => ({ id: x.id, text: D[x.id] || "", skip: D[`skip:${x.id}`] })) }) })
+      .then((r) => { items.forEach((x) => { delete D[x.id]; delete D[`skip:${x.id}`]; }); ctl.sent = `Sent: ${r.given} answered, ${r["let go"]} let go.`; return ctl.sent; }));
+    return h("section", { class: "sw-letter" }, h("header", {}, h("small", {}, `From ${esc(L.who)}`), h("h3", {}, "A letter for you"), h("p", {}, intro)),
+      h("ol", {}, ...items.map((x) => h("li", {}, h("p", {}, h("i", {}, x.kind === "wish" ? "Wish" : "Question"), esc(x.ask)),
+        h("textarea", { rows: 2, placeholder: "Your answer… (leave blank to answer later)", value: D[x.id] || "", disabled: !!D[`skip:${x.id}`], oninput: (e) => { D[x.id] = e.target.value; } }),
+        h("label", { class: "sw-skip" }, h("input", { type: "checkbox", checked: !!D[`skip:${x.id}`], onchange: (e) => { D[`skip:${x.id}`] = e.target.checked; report(true); } }), "Let it go")))),
+      h("div", { class: "sw-wbtns" }, h("button", { type: "button", disabled: !!ctl.busy, onclick: send }, "Submit")));
+  };
+  const f1 = (d, loop) => { // one picture: every variable as a line on its own 0–1 scale, and the information flow as the floor it all stands on
     const run = d.train?.runs?.[0], live = !!d.train?.active && run && ["running", "paused"].includes(run.status), cfg = run?.config, log = run?.log || [], last = log.at(-1), tint = d.tint || "#6ff7ff";
     const pts = log.length > 1 ? log : (() => { const S = Object.fromEntries((d.series || []).map((x) => [x.name, x.points || []])), n = Math.max(0, ...Object.values(S).map((p) => p.length)); return [...Array(n)].map((_, i) => Object.fromEntries(Object.entries(S).map(([k, p]) => [k, p[i] ?? 0]))); })();
     const C = { curiosity: tint, maturity: "#ffb347", frontier: "#c79bff", ...NEED_C, trust: "#e4e4e7" };
-    const keys = Object.keys(C).filter((k) => pts.some((p) => typeof p[k] === "number"));
-    const byTime = ctl.byTime && pts.some((p) => p.t), endT = pts.at(-1)?.t || 0;
-    const axis = h("div", { class: "f1-axis" }, h("span", {}, byTime ? "0:00" : "step 0"), h("div", { class: "sw-dseg f1-x", role: "radiogroup", "aria-label": "Across the bottom" },
-      ...[["Steps", false], ["Time", true]].map(([t, v]) => h("button", { type: "button", role: "radio", "aria-checked": String(!!ctl.byTime === v), onclick: () => { ctl.byTime = v; report(true); } }, t))),
-      h("span", {}, byTime ? mmss(endT) : `step ${pts.length - 1}`));
+    const keys = pts.length > 1 ? Object.keys(C).filter((k) => pts.some((p) => typeof p[k] === "number")) : [];
+    const byTime = ctl.byTime && pts.some((p) => p.t), T = Math.max(1, pts.at(-1)?.t || 0), N = Math.max(1, pts.length - 1);
+    const X = (i) => (byTime ? (pts[i].t || 0) / T : i / N) * 1000, TOP = 18, BASE = 196; // lines live in 18–196; the flow is the floor under them
+    const scale = (k) => { const vs = pts.map((p) => +p[k] || 0), band = k === "curiosity" && cfg ? [cfg.lo, cfg.hi] : null, lo = Math.min(...vs, band?.[0] ?? Infinity), hi = Math.max(...vs, band?.[1] ?? -Infinity);
+      return { vs, band, Y: (v) => hi - lo < 1e-9 ? (TOP + BASE) / 2 : BASE - (v - lo) / (hi - lo) * (BASE - TOP) }; };
+    const L = d.learned || {}, st = (n) => { const s = loop.find((x) => x.system === n); return s ? stageOf(s).state : ["idle", ""]; }, gate = (d.trace || []).find((t) => t.kind === "evaluate");
+    const S = [{ n: L.plans, k: "plan lines", c: SC[2], s: st(2), to: () => { rSys = 2; go("activity"); } }, { n: L.questions, k: "questions", c: SC[1], s: st(1), sub: `${n0(L.answered)} answered`, to: () => { rSys = 1; go("activity"); } },
+      { n: L.notes, k: "notes written", c: SC[0], s: st(0), to: () => go("notes") }, { n: L.verified, k: "let in", c: SC[3], s: gate ? [gate.outcome === "ok" ? "working" : gate.outcome, gate.detail] : st(3), sub: `${n0(L.rejected)} turned away`, gate: true, to: () => go("notes") },
+      { n: L.names, k: "names in the mesh", c: SC[0], s: ["", "people, places and things it can link"], to: () => { tEngine = "extract"; rSys = null; go("activity"); } }];
+    const most = Math.max(1, ...S.map((x) => n0(x.n))), w = (v) => 4 + (n0(v) / most) * 44, FY = 262; // ribbon width is how much got through each stage
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 1000 300"); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("aria-hidden", "true");
+    const sc = Object.fromEntries(keys.map((k) => [k, scale(k)])), path = (k) => sc[k].vs.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${sc[k].Y(v).toFixed(1)}`).join("");
+    svg.innerHTML = `<defs><linearGradient id="f1fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${tint}" stop-opacity=".22"/><stop offset="1" stop-color="${tint}" stop-opacity="0"/></linearGradient>`
+      + S.slice(0, -1).map((x, i) => `<linearGradient id="f1r${i}"><stop offset="0" stop-color="${x.c}"/><stop offset="1" stop-color="${S[i + 1].c}"/></linearGradient>`).join("") + "</defs>"
+      + (byTime ? pts.slice(1).map((p, i) => `<rect x="${X(i).toFixed(1)}" width="${Math.max(0, X(i + 1) - X(i)).toFixed(1)}" y="0" height="${BASE + 8}" fill="#fff" opacity="${i % 2 ? .012 : .035}"/>`).join("") : "") // each band is one step: wide means slow
+      + [.25, .5, .75].map((f) => `<line x1="0" x2="1000" y1="${BASE - f * (BASE - TOP)}" y2="${BASE - f * (BASE - TOP)}" stroke="#fff" opacity=".04" vector-effect="non-scaling-stroke"/>`).join("")
+      + `<line x1="0" x2="1000" y1="${BASE + 8}" y2="${BASE + 8}" stroke="#27272a" vector-effect="non-scaling-stroke"/>`
+      + S.slice(0, -1).map((x, i) => { const x0 = 100 + i * 200, x1 = x0 + 200, a = w(Math.min(n0(x.n), n0(S[i + 1].n))), b = w(S[i + 1].n);
+        return `<path d="M${x0} ${FY - a / 2} C${x0 + 100} ${FY - a / 2} ${x1 - 100} ${FY - b / 2} ${x1} ${FY - b / 2} L${x1} ${FY + b / 2} C${x1 - 100} ${FY + b / 2} ${x0 + 100} ${FY + a / 2} ${x0} ${FY + a / 2}Z" fill="url(#f1r${i})" opacity=".3"/>`; }).join("")
+      + (sc.curiosity?.band ? `<rect x="0" width="1000" y="${sc.curiosity.Y(sc.curiosity.band[1]).toFixed(1)}" height="${Math.max(1, sc.curiosity.Y(sc.curiosity.band[0]) - sc.curiosity.Y(sc.curiosity.band[1])).toFixed(1)}" fill="#7dffa8" opacity=".07" data-k="curiosity"/>` : "")
+      + (sc.curiosity ? `<path d="${path("curiosity")}L1000,${BASE + 8}L0,${BASE + 8}Z" fill="url(#f1fill)" data-k="curiosity"/>` : "")
+      + keys.filter((k) => k !== "curiosity").map((k) => `<path d="${path(k)}" data-k="${k}" fill="none" stroke="${C[k]}" stroke-width="1.6" opacity=".8" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`).join("")
+      + (sc.curiosity ? `<path d="${path("curiosity")}" data-k="curiosity" fill="none" stroke="${tint}" stroke-width="3.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>` : "");
+    const pin = (x, y, cls, c) => h("i", { class: cls, style: `left:${x / 10}%;top:${y / 3}%${c ? `;--c:${c}` : ""}` });
+    const beads = sc.curiosity ? pts.map((p, i) => p.snap ? pin(X(i), sc.curiosity.Y(sc.curiosity.vs[i]), "f1-bead") : null).filter(Boolean) : [];
+    const plot = h("div", { class: "f1-plot" }, svg, ...beads, ...S.map((x, i) => pin(100 + i * 200, FY, "f1-stage", x.c)),
+      keys.length ? h("span", { class: "f1-t0" }, byTime ? "0:00" : "step 0") : "", keys.length ? h("span", { class: "f1-t1" }, byTime ? mmss(pts.at(-1)?.t) : `step ${N}`) : "");
+    const focus = (k) => svg.querySelectorAll("[data-k]").forEach((p) => { p.style.opacity = !k || p.dataset.k === k ? "" : ".08"; });
+    const legend = keys.length ? h("div", { class: "f1-leg" }, ...keys.map((k) => { const v = sc[k].vs, dv = v.at(-1) - v[0];
+      return h("button", { type: "button", style: `--c:${C[k]}`, onmouseenter: () => focus(k), onmouseleave: () => focus(), onfocus: () => focus(k), onblur: () => focus(), "aria-label": `${k}: ${r2(v.at(-1))}, ${dv >= 0 ? "up" : "down"} ${r2(Math.abs(dv))}` },
+        h("span", {}, k), h("strong", {}, String(r2(v.at(-1)))), h("small", { "data-d": dv > 0 ? "up" : dv < 0 ? "down" : "" }, dv ? `${dv > 0 ? "▲" : "▼"}${r2(Math.abs(dv))}` : "–")); })) : "";
     const line = live ? `${run.status === "paused" ? "Paused" : "Training"} · step ${n0(last?.step)} of ${n0(cfg?.max_steps)} · ${mmss(last?.t)} of ${mmss(cfg?.minutes * 60)} · ${n0(run.snaps)} checkpoints` : run ? `Last run ${run.status === "done" ? "finished" : run.status}${run.why ? `: ${run.why}` : ""} · ${n0(run.snaps)} checkpoints` : "Start a training run on Controls";
-    return h("section", { class: "f1", "data-live": String(!!live), style: `--team:${tint}` },
-      h("p", { class: "f1-line" }, h("i"), line),
-      pts.length > 1 ? h("div", { class: "f1-vars" }, ...keys.map((k) => varChart(k, pts, C[k], k === "curiosity" && cfg ? [cfg.lo, cfg.hi] : null, byTime))) : "",
-      pts.length > 1 ? axis : "",
-      live && last?.outcome ? h("p", { class: "f1-now" }, `Step ${n0(last.step)}: ${esc(last.outcome)}`) : "");
+    const toggle = keys.length ? h("div", { class: "sw-dseg f1-x", role: "radiogroup", "aria-label": "Across the bottom" },
+      ...[["Steps", false], ["Time", true]].map(([t, v]) => h("button", { type: "button", role: "radio", "aria-checked": String(!!ctl.byTime === v), onclick: () => { ctl.byTime = v; report(true); } }, t))) : "";
+    return h("figure", { class: "f1 sw-flow", "data-live": String(!!live), style: `--team:${tint}` },
+      h("div", { class: "f1-line" }, h("i"), h("p", {}, line), toggle), legend, plot,
+      h("ol", {}, ...S.map((x) => h("li", { style: `--c:${x.c}` }, h("button", { type: "button", onclick: x.to, title: "Open the details" },
+        h("strong", {}, String(n0(x.n))), h("b", {}, x.k), x.sub ? h("small", { class: x.gate ? "sw-out" : "" }, x.sub) : "",
+        x.s[1] ? h("p", { "data-s": x.s[0] }, esc(x.s[0] && x.s[0] !== "working" ? `${x.s[0]}: ${x.s[1]}` : x.s[1])) : "")))),
+      live && last?.outcome ? h("p", { class: "f1-now" }, `Step ${n0(last.step)}: ${esc(last.outcome)}`) : "",
+      h("figcaption", {}, "Lines: every variable over the run, each on its own scale. Floor: what it planned, asked, wrote, let in and linked, left to right."));
   };
   const youBox = (d) => { const Y = { ...(d.you || {}) }, about = Y.about || ""; delete Y.about;
     const box = h("textarea", { rows: 3, placeholder: "e.g. I'm Osiris, your Guardian. You were my Ghost before you were destroyed.", "aria-label": "Who you are, in your own words" }); box.value = about;
@@ -424,23 +454,6 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
         h("div", { class: "sw-wbtns" }, h("button", { type: "button", disabled: !!ctl.busy, onclick: () => box.value.trim() && act("give", () => api(`/char/want/${w.id}`, { method: "POST", body: JSON.stringify({ gift: box.value }) }).then(() => "given: it will read it and check it")) }, "Give it"),
           h("button", { type: "button", class: "ghost", disabled: !!ctl.busy, onclick: () => act("let go", () => api(`/char/want/${w.id}`, { method: "POST", body: "{}" }).then(() => "let go")) }, "Let it go"))); }),
       ...done.map((w) => h("p", { class: "sw-dmut" }, `${w.status === "given" ? "✓ you gave it" : "· let go:"} ${esc(w.thing)}`))); };
-  const flow = (d, loop) => { // the story in one picture: what it planned, asked, wrote, let in, and linked; band width is how much got through
-    const L = d.learned || {}, st = (n) => { const s = loop.find((x) => x.system === n); return s ? stageOf(s).state : ["idle", ""]; };
-    const gate = (d.trace || []).find((t) => t.kind === "evaluate");
-    const S = [{ n: L.plans, k: "plan lines", c: SC[2], s: st(2), to: () => { rSys = 2; go("activity"); } }, { n: L.questions, k: "questions", c: SC[1], s: st(1), sub: `${n0(L.answered)} answered`, to: () => { rSys = 1; go("activity"); } },
-      { n: L.notes, k: "notes written", c: SC[0], s: st(0), to: () => go("notes") }, { n: L.verified, k: "let in", c: SC[3], s: gate ? [gate.outcome === "ok" ? "working" : gate.outcome, gate.detail] : st(3), sub: `${n0(L.rejected)} turned away`, gate: true, to: () => go("notes") },
-      { n: L.names, k: "names in the mesh", c: SC[0], s: ["", "people, places and things it can link"], to: () => { tEngine = "extract"; rSys = null; go("activity"); } }];
-    const hi = Math.max(1, ...S.map((x) => n0(x.n))), w = (v) => 3 + (n0(v) / hi) * 26, svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", "0 0 1000 40"); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("aria-hidden", "true");
-    svg.innerHTML = `<defs>${S.slice(0, -1).map((x, i) => `<linearGradient id="swf${i}"><stop offset="0" stop-color="${x.c}"/><stop offset="1" stop-color="${S[i + 1].c}"/></linearGradient>`).join("")}</defs>`
-      + S.slice(0, -1).map((x, i) => { const x0 = 100 + i * 200, x1 = x0 + 200, a = w(Math.min(n0(x.n), n0(S[i + 1].n)) || 0), b = w(n0(S[i + 1].n));
-        return `<path d="M${x0} ${20 - a / 2} C${x0 + 100} ${20 - a / 2} ${x1 - 100} ${20 - b / 2} ${x1} ${20 - b / 2} L${x1} ${20 + b / 2} C${x1 - 100} ${20 + b / 2} ${x0 + 100} ${20 + a / 2} ${x0} ${20 + a / 2}Z" fill="url(#swf${i})" opacity=".28"/>`; }).join("")
-      + S.map((x, i) => `<circle cx="${100 + i * 200}" cy="20" r="6" fill="${x.c}"/><circle cx="${100 + i * 200}" cy="20" r="12" fill="none" stroke="${x.c}" opacity=".25"/>`).join("");
-    return h("figure", { class: "sw-flow" }, h("div", { class: "sw-flow-art" }, svg),
-      h("ol", {}, ...S.map((x) => h("li", { style: `--c:${x.c}` }, h("button", { type: "button", onclick: x.to, title: "Open the details" },
-        h("strong", {}, String(n0(x.n))), h("i", { class: "sw-flow-gap" }), h("b", {}, x.k), x.sub ? h("small", { class: x.gate ? "sw-out" : "" }, x.sub) : "",
-        x.s[1] ? h("p", { "data-s": x.s[0] }, esc(x.s[0] && x.s[0] !== "working" ? `${x.s[0]}: ${x.s[1]}` : x.s[1])) : "")))),
-      h("figcaption", {}, "Everything it learns flows left to right. The gate decides what gets in; what it turns away never reaches its memory.")); };
   const VERB = { reflect: "wrote a note on", evaluate: "judged at the gate", check: "verified", extract: "took names from", plan: "planned", ask: "asked", goal: "set goals from", wonder: "wondered about", bake: "consolidated", review: "reread a reply", fold: "folded", sort: "sorted", cycle: "ran", model: "swapped models" };
   function paintReport() {
     const d = rData; if (!d) return; const T = d.totals || {}, C = d.corrections || {}, L = d.learned || {}, D = d.disposition || {}, F = D.frontier || {}, HL = d.harness_loop || {};
@@ -472,8 +485,10 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
               p.taught?.length ? [h("dt", {}, "You taught it"), h("dd", {}, p.taught.map(esc).join(" · "))] : "",
               p.next?.length ? [h("dt", {}, "Wants to know"), h("dd", {}, p.next.map(esc).join(" · "))] : "",
               h("dt", {}, "Talked with you"), h("dd", {}, `${p.chats} time${p.chats === 1 ? "" : "s"}`))))); },
+      letter: () => letterBox(d) || h("p", { class: "sw-dmut" }, "Nothing to answer. After a run, what it needs from you shows up here."),
       story: () => { const done = trace.filter((t) => t.outcome === "ok").slice(0, 6), old = n0(D.curiosity) - n0(F.term);
-        return h("div", { class: "sw-story" }, f1(d), flow(d, loop),
+        const nL = d.letter?.items?.length || 0;
+        return h("div", { class: "sw-story" }, nL ? h("button", { type: "button", class: "sw-lnote", onclick: () => go("letter") }, h("i"), `${who} wrote you a letter: ${nL} thing${nL === 1 ? "" : "s"} it needs from you`, h("span", {}, "Read it →")) : "", f1(d, loop),
           h("div", { class: "sw-story2" },
             h("section", {}, h("h4", {}, "Just now"), done.length ? h("ol", { class: "sw-feed" }, ...done.map((t) => h("li", {}, h("button", { type: "button", onclick: () => { rSel = { step: tkey(t), note: t.ref }; go("activity"); } },
               h("time", {}, local(t.at)), h("p", {}, h("b", { style: `color:${SC[t.system] || "#d4d4d8"}` }, `${who} ${VERB[t.kind] || t.kind}`), ` ${esc(t.detail.split(":")[0])}`)))))
@@ -556,7 +571,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const keep = [...panel.querySelectorAll(".sw-dlist, .sw-dsheet, .sw-dbody")].map((x) => x.scrollTop);
     panel.replaceChildren(h("div", { class: "sw-db" },
       h("header", { class: "sw-dtop" }, h("h2", {}, head), h("p", {}, h("i", { class: "sw-lamp", "data-up": String(!!d.model?.up) }), ` ${esc(d.model?.label)} · since ${local(d.since)} · ${esc(d.mode)} mode · ${n0(T.ok)} of ${n0(T.steps)} steps did something`),
-        h("nav", { class: "sw-dtabs", role: "tablist", "aria-label": "Report sections" }, ...TABS.map(([k, t]) => h("button", { type: "button", role: "tab", "aria-selected": String(rTab === k), onclick: () => go(k) }, t)))),
+        h("nav", { class: "sw-dtabs", role: "tablist", "aria-label": "Report sections" }, ...TABS.map(([k, t]) => h("button", { type: "button", role: "tab", "aria-selected": String(rTab === k), onclick: () => go(k) }, t, k === "letter" && d.letter?.items?.length ? h("sup", { class: "sw-lcount" }, String(d.letter.items.length)) : "")))),
       h("div", { class: "sw-dbody" }, body[rTab]())));
     panel.querySelectorAll(".sw-dlist, .sw-dsheet, .sw-dbody").forEach((x, i) => { x.scrollTop = keep[i] || 0; });
   }

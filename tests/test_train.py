@@ -26,7 +26,7 @@ def test_a_run_learns_until_curiosity_reaches_the_target_and_snapshots_as_it_fal
     char.add_memory("Resting: char Sagira", "0", source="sheet")
     run_id = _run(monkeypatch, [5.0, 4.4, 3.8, 3.5, 2.9, 0.8], {"lo": 0.0, "hi": 1.0, "max_steps": 50})
     r = train.status()["runs"][0]
-    assert r["status"] == "done" and "target range" in r["why"] and r["log"][-1]["curiosity"] == 0.8
+    assert r["status"] == "done" and "reached the target" in r["why"] and r["log"][-1]["curiosity"] == 0.8
     snaps = train.snapshots(run_id)
     assert [s["why"].split(" ")[0] for s in snaps] == ["start", "curiosity", "curiosity", "curiosity", "curiosity", "end:"]  # 4.4, 3.8, 2.9, 0.8 each fell by 0.5 or more; 3.5 did not
     assert snaps[0]["prompt"].startswith("You are Sagira.") and "works" in snaps[0] and "fails" in snaps[0]
@@ -44,7 +44,7 @@ def test_a_run_stops_at_its_step_budget_and_its_dataset_is_claude_fine_tuning_js
     n = char.add_memory("Reflection: Who is Xivu Arath?", "The Hive god of war.", source="reflection")["id"]
     char.add_memory(f"Checked: {n}", "keep", source="sheet")
     run_id = _run(monkeypatch, [5.0] * 10, {"lo": 0.0, "hi": 1.0, "max_steps": 3})
-    assert train.status()["runs"][0]["why"] == "the step budget is spent"
+    assert train.status()["runs"][0]["why"] == "used all 3 steps"
     lines = [json.loads(x) for x in train.dataset(run_id).splitlines()]
     assert {l["messages"][0]["content"] for l in lines} == {"Who is Osiris?", "Who is Xivu Arath?"}
     assert all(l["system"].startswith("You are Sagira.") and [m["role"] for m in l["messages"]] == ["user", "assistant"] for l in lines)

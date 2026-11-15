@@ -1069,6 +1069,17 @@ def char_you(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     return {"you": char.set_you(body.get("about") if "about" in body else None, body.get("forget"))}
 
 
+@app.get("/char/letter")
+def char_letter() -> dict[str, Any]:
+    return char.letter()
+
+
+@app.post("/char/letter")
+def char_letter_answer(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """[{id, text, skip}]: your answers to its letter; blank ones wait for the next letter."""
+    return char.answer_letter(list(body.get("answers") or []))
+
+
 @app.get("/char/tools")
 def char_tools() -> dict[str, Any]:
     """Its tools as a graph, wired into its mesh: what each step made, which feeds which, and the model they run on."""
@@ -1093,7 +1104,7 @@ def char_want(want_id: int, body: dict[str, Any] = Body(default={})) -> dict[str
 @app.get("/char/report")
 def char_report() -> dict[str, Any]:
     return {**char.report(*_model()), "harness_loop": harness.totals(), "cycles": harness.cycles(30), "mode": char.mode(), "tracker": char.tracker(),
-            "race": verse.live_race(), "train": train.status()}
+            "race": verse.live_race(), "train": train.status(), "letter": char.letter()}
 
 
 @app.post("/char/cycle")

@@ -1130,7 +1130,7 @@ def test_report_route_shape_counts_and_persona_scoping(monkeypatch):
     con.close()
     char.add_memory("Baked", '{"nE": 0, "nAE": 0}', source="sheet")
     r = client.get("/char/report").json()
-    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "series", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train"}
+    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "series", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train", "letter"}
     assert r["who"] == "Sherlock" and r["since"] and r["model"] == {"up": True, "label": "Model ready"}
     t = r["totals"]
     assert t["steps"] == t["ok"] + t["skipped"] + t["failed"] == len(r["trace"]) and t["ok"] == 3 and t["skipped"] >= 2  # reflect, the intake gate, and one more
@@ -1502,3 +1502,22 @@ def test_a_topic_must_name_something_from_its_world():
     assert {"Sagira", "Destiny", "Osiris", "Vex", "Ghost"} <= w
     assert not char.on_world("What is the political landscape", w) and not char.on_world("the role of the Archon in governance", w)
     assert char.on_world("How did Osiris lose his Light?", w) and not char.on_world("a ghost story", w)  # proper nouns only, as written
+
+
+def test_a_letter_asks_what_it_needs_and_takes_your_answers():
+    from workbench import char
+    char.update_profile("Sagira From Destiny 2", "You are Sagira, the Ghost of the Warlock Osiris. You studied the Vex with him.", [], "")
+    char.add_memory("Question: Why does Osiris study the Vex?", "Why does Osiris study the Vex? (from 0)", source="question")
+    char.add_memory("Question: What is the political landscape?", "What is the political landscape? (from 0)", source="question")
+    asks = [x["ask"] for x in char.letter()["items"]]
+    assert "Why does Osiris study the Vex?" in asks and not any("political" in a for a in asks)  # off-world questions stay out
+    r = char.answer_letter([{"id": "q:Why does Osiris study the Vex?", "text": "To understand the Vex simulations."}])
+    assert r["given"] == 1 and "Why does Osiris study the Vex?" not in [x["ask"] for x in r["letter"]["items"]]
+    assert any(m["content"] == "To understand the Vex simulations." for m in char.mind()["memories"])
+
+
+def test_a_wish_is_the_character_asking_not_a_fan_asking_about_it():
+    assert char.in_voice("Could you find me the Vex? I keep losing them.", "Sagira From Destiny 2")
+    assert not char.in_voice("Why is Osiris so important to Sagira? I want to be a better friend to her.", "Sagira From Destiny 2")
+    assert not char.in_voice("Help me understand her role in the game!", "Sagira From Destiny 2")
+    assert not char.in_voice("", "Sagira From Destiny 2")

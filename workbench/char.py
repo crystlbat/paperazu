@@ -545,6 +545,12 @@ def on_world(text: str, words: set[str] | None = None) -> bool:
     return not words or any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
 
 
+def in_voice(said: str | None, who: str) -> bool:
+    """A wish is the character asking you: one that names the character in the third person, or calls its world "the game", was written as a fan asking about it."""
+    first = (who.split() or [""])[0]
+    return bool(said) and not (first and re.search(rf"\b{re.escape(first)}\b", said)) and not re.search(r"\bthe game\b", said, re.I)
+
+
 LENSES = ("Who or what is {name}?", "Why does {name} matter to {who}?", "Where and when does {name} show up?")  # a name seen through a lens is a question; each answer opens the next
 IDEA_LENSES = ("How did {name} start?", "What makes {name} hard?", "How has {name} changed?")  # an idea is a doing, so it gets asked about its start, its friction and its change
 
@@ -1472,6 +1478,33 @@ def _want_from() -> tuple[str, str, str] | None:
     return None
 
 
+def letter() -> dict[str, Any]:
+    """What it needs from you, as one letter you answer in place: its waiting wishes and its open questions, only those about its world."""
+    words = world_words()
+    who = get_profile()["name"]
+    items = [{"id": f"w{w['id']}", "kind": "wish", "ask": w["said"] if in_voice(w.get("said"), who) else f"Could you find me {w['thing']}?"} for w in wants() if w["status"] == "waiting" and on_world(f"{w['thing']} {w['topic']}", words)]
+    items += [{"id": f"q:{q}", "kind": "question", "ask": q} for q in _open_questions(_start()) if on_world(q, words)][:max(0, 6 - len(items))]
+    return {"who": get_profile()["name"], "items": items}
+
+
+def answer_letter(answers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Your answers: a wish you answer is given, a question you answer becomes a note its Verifier checks; one you skip is let go."""
+    open_qs, done = set(_open_questions(_start())), {"given": 0, "let go": 0}
+    for a in answers:
+        aid, text = str(a.get("id", "")), str(a.get("text") or "").strip()[:4000]
+        if not text and not a.get("skip"):
+            continue  # left blank: it stays in the next letter
+        if aid.startswith("w") and aid[1:].isdigit():
+            if give_want(int(aid[1:]), text) is not None:
+                done["given" if text else "let go"] += 1
+        elif aid.startswith("q:") and (q := aid[2:]) in open_qs:
+            add_memory(f"Reflection: {q}"[:80], text or "(let go: you skipped it)", source="reflection" if text else "sheet")
+            if text:
+                feel({"fullness": 0.1, "wonder": -0.05}, "you answered its question")
+            done["given" if text else "let go"] += 1
+    return {**done, "letter": letter()}
+
+
 def give_want(want_id: int, gift: str = "") -> dict[str, Any] | None:
     """You answer a want: what you give becomes a note it reads (and its Verifier checks); nothing given lets it go."""
     con = db.connect()
@@ -2015,7 +2048,9 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             if not on_world(f"{thing} {topic}"):
                 return no("off its world: it wanted something that names nothing from it")
             said = _clean(_ask(f"{me['text'][:500]}\n\nIn one sentence, in the first person, ask the person you talk to for this and say why. Use only the facts given.",
-                               f"You want: {thing}\nWhy: {because}", 60), 300) or f"Could you find me {thing}? {because}."
+                               f"You want: {thing}\nWhy: {because}", 60), 300)
+            if not in_voice(said, me["who"]):
+                said = f"Could you find me {thing}? {because}."
             add_memory(f"Want: {topic}"[:80], json.dumps({"thing": thing, "because": because, "topic": topic, "said": said, "status": "waiting"}), source="sheet")
             con = db.connect()
             with con:
