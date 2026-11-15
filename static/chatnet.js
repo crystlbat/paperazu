@@ -31,7 +31,7 @@ function makeChatNet() {
     edges = (mesh?.edges || []).filter(([a, b]) => nodes.has(a) && nodes.has(b));
     const key = (turns || []).map((t) => t.id).join(",");
     if (key !== turnsKey) { turnsKey = key; const atEnd = bubbles.scrollHeight - bubbles.scrollTop - bubbles.clientHeight < 40;
-      bubbles.replaceChildren(...(turns || []).slice(-60).map((t) => h("li", { class: `cn-b ${t.role === "dot" ? "it" : "you"}` }, t.text)));
+      bubbles.replaceChildren(...(turns || []).slice(-60).map((t) => h("li", { class: `cn-b ${t.role === "dot" ? "it" : "you"}${t.text.startsWith("A wish: ") ? " wish" : ""}` }, t.text, t.heard ? h("small", { class: `cn-heard ${t.heard === "kept" ? "kept" : ""}` }, t.heard === "kept" ? "kept" : "let go") : "")));
       if (atEnd || (turns || []).at(-1)?.id !== lastTurn) bubbles.scrollTop = bubbles.scrollHeight; lastTurn = (turns || []).at(-1)?.id || 0;
       if (!bubbles.children.length) bubbles.append(h("li", { class: "cn-empty" }, "Nothing said yet. Type below to talk to it.")); }
   }

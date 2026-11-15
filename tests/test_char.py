@@ -1130,7 +1130,7 @@ def test_report_route_shape_counts_and_persona_scoping(monkeypatch):
     con.close()
     char.add_memory("Baked", '{"nE": 0, "nAE": 0}', source="sheet")
     r = client.get("/char/report").json()
-    assert set(r) == {"who", "since", "model", "totals", "corrections", "learned", "disposition", "series", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker"}
+    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "series", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker"}
     assert r["who"] == "Sherlock" and r["since"] and r["model"] == {"up": True, "label": "Model ready"}
     t = r["totals"]
     assert t["steps"] == t["ok"] + t["skipped"] + t["failed"] == len(r["trace"]) and t["ok"] == 3 and t["skipped"] >= 2  # reflect, the intake gate, and one more
@@ -1399,3 +1399,73 @@ def test_a_step_at_the_end_of_the_line_still_gets_its_turn(monkeypatch):
             char.TRIED["n"] += 1; char.TRIED[k] = char.TRIED["n"]
     order, why = char._choose(("check", "sort", "reflect", "fold", "practise"))
     assert order[:3] == ("check", "fold", "practise") and "waited longest" in why
+
+
+def test_it_remembers_who_you_are_and_tells_the_reply(monkeypatch):
+    seen: list[Any] = []
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: seen.append(m) or "ok")
+    char.say("hello")
+    assert "do not know who the person you talk to is" in json.dumps(seen)
+    char.say("My name is Bibin and I'm your captain. I work as a designer.")
+    char.say("I am a bit tired")  # a mood, not who you are
+    assert char.you() == {"name": "Their name is Bibin", "theirs": "They are your captain", "work": "They work as a designer"}
+    seen.clear()
+    char.say("call me Bee")
+    assert char.you()["name"] == "Their name is Bee"
+    assert "Their name is Bee; They are your captain" in json.dumps(seen)
+
+
+def test_needs_drift_shift_with_a_cause_steer_its_steps_and_a_tired_character_rests(monkeypatch):
+    char.update_profile("Alfred", "You are Alfred, the butler.", [], "")
+    char.add_memory("Resting: char Alfred", "0", source="sheet")
+    now = char.time.time()
+    assert char.needs()["energy"] == 0.6 and not char.tired()
+    assert char.feel({"energy": -0.5}, "a long night") == [{"need": "energy", "dir": "down", "value": 0.1, "cause": "a long night"}]
+    assert char.shifts()[0]["cause"] == "a long night"
+    assert char.rest(True, None)["tired"] and char._blocks(True)[1]["reflect"].startswith("tired")
+    assert char.rest(True, None, force=True).get("tired") is None  # the harness and your own "run one step" still run
+    monkeypatch.setattr(char.time, "time", lambda: now + 3600)  # an hour of rest: 6 x 0.15 back
+    assert not char.tired() and char.needs()["fullness"] < 0.6  # and hungrier for new notes
+    char.feel({"fullness": -0.5}, "nothing new to read")
+    order, why = char._choose(("check", "sort", "reflect", "fill", "practise"))
+    assert order[:3] == ("check", "reflect", "fill") and "fullness low" in why
+
+
+def test_it_asks_for_what_it_lacks_and_reads_what_you_give(monkeypatch):
+    char.update_profile("Alfred", "You are Alfred, the butler.", [], "")
+    char.add_memory("Resting: char Alfred", "0", source="sheet")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: "Might you find me a proper account of Robin, sir?")
+    assert char.rest(True, None, only="want")["why"] == "nothing it lacks that you could give"
+    n = char.add_memory("Reflection: Who is Robin?", "Robin is Batman's partner.", source="reflection")["id"]
+    char.add_memory(f"Guess: {n}", "0.80|a butler", source="sheet")
+    r = char.rest(True, None, only="want")
+    assert r["kind"] == "want" and "Who is Robin?" in r["topic"] and "80% off" in r["note"]
+    w = char.wants()[0]
+    assert w["status"] == "waiting" and w["said"].startswith("Might you")
+    assert char._chat_since()[-1]["text"] == "A wish: Might you find me a proper account of Robin, sir?"
+    assert char.rest(True, None, only="want")["why"] == "nothing it lacks that you could give"  # asked once, not again
+    joy = char.needs()["joy"]
+    got = char.give_want(w["id"], "Robin is Dick Grayson, Bruce Wayne's ward.")
+    assert got["status"] == "given" and char.needs()["joy"] > joy
+    assert any(m["content"].startswith("Robin is Dick Grayson") and m["source"] == "reflection" for m in char.mind()["memories"])
+
+
+def test_it_keeps_what_matters_lets_small_talk_go_and_trust_follows(monkeypatch):
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: "ok")
+    char.say("hii")
+    char.say("My name is Bibin")
+    assert list(char.heard().values()) == ["let go", "kept"]
+    assert char.trust() == {"kept": 1, "n": 2, "value": 0.5, "trusted": False}
+    assert [t.get("heard") for t in char.state()["turns"] if t["role"] == "user"] == ["let go", "kept"]
+
+
+def test_asleep_it_neither_answers_nor_learns_but_a_step_you_run_still_runs(monkeypatch):
+    calls = []
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: calls.append(m) or "ok")
+    char.set_mode("sleeping")
+    r = char.say("hello there, how are you today?")
+    assert r["asleep"] and "asleep" in r["reply"] and not calls and not char._chat_since()  # no model call, nothing in its chat
+    assert char.rest(True, None)["quiet"] and char._blocks(True)[1]["reflect"] == "sleeping mode"
+    char.set_mode("curious")
+    char.say("hello")
+    assert calls

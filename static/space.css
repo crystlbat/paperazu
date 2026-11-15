@@ -1058,3 +1058,26 @@ body:has(#view.page-space, #view.page-char, #view.page-verse) .buddy { display: 
 /* Dot speaks below itself, never across its own face; a soft shadow keeps it readable over the mesh */
 .sp-web .sw-say { top: auto; bottom: 104px; translate: -50% 0; max-height: 34%; overflow: hidden; }
 .sp-web .sw-ink p { text-shadow: 0 2px 14px rgb(5 7 12 / .95), 0 0 2px rgb(5 7 12 / .9); }
+/* aura: every part that runs on a model glows in that model's colour; parts on the same model glow alike */
+.sw-aura { display: inline-flex; align-items: center; gap: 6px; font: 500 11.5px var(--mono, ui-monospace, monospace); color: var(--aura); padding: 3px 9px 3px 7px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--aura) 45%, transparent); background: color-mix(in srgb, var(--aura) 9%, transparent); box-shadow: 0 0 14px -3px var(--aura); margin: 2px 0 8px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-aura i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--aura); box-shadow: 0 0 8px var(--aura); animation: sw-aura 2.8s ease-in-out infinite; }
+.sw-auras { font-size: 12.5px; color: #a1a1aa; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; } .sw-auras .sw-aura { margin: 0; }
+.sw-aurad select { border-color: color-mix(in srgb, var(--aura) 50%, #27272a) !important; box-shadow: 0 0 16px -6px var(--aura); }
+.sw-aurad { position: relative; padding-left: 14px; } .sw-aurad::before { content: ""; position: absolute; left: 0; top: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--aura); box-shadow: 0 0 8px var(--aura); animation: sw-aura 2.8s ease-in-out infinite; }
+@keyframes sw-aura { 50% { opacity: .45; box-shadow: 0 0 2px var(--aura); } }
+@media (prefers-reduced-motion: reduce) { .sw-aura i, .sw-aurad::before { animation: none; } }
+.sw-droles select { font: 13px var(--sans, system-ui); color: #f4f4f5; background: #0f0f12; border: 1px solid #27272a; border-radius: 8px; padding: 8px 10px; min-width: 0; width: 100%; }
+/* its life on the Story tab: needs, the latest mood shift, what it wants from you */
+.sw-feels ul { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 8px; }
+.sw-feels li { display: grid; grid-template-columns: 70px minmax(0, 1fr) 28px; align-items: center; gap: 10px; font-size: 12.5px; color: #c9cdd6; }
+.sw-feels li i { height: 6px; border-radius: 99px; background: #1c1f26; overflow: hidden; } .sw-feels li i b { display: block; height: 100%; background: var(--c); border-radius: inherit; box-shadow: 0 0 10px -2px var(--c); transition: width .6s ease; }
+.sw-feels li i.low b { animation: sw-aura 1.8s ease-in-out infinite; } .sw-feels li small { color: #71717a; font: 11px var(--mono, monospace); text-align: right; }
+.sw-shift { font-size: 12px; }
+.sw-wants article { display: grid; gap: 6px; padding: 12px 0; border-top: 1px solid #1f2229; } .sw-wants article:first-of-type { border-top: 0; padding-top: 0; }
+.sw-wants article b { font-weight: 600; color: #ffd27a; } .sw-wants article p { margin: 0; color: #e4e4e7; font-size: 13.5px; } .sw-wants article small { color: #71717a; font-size: 12px; }
+.sw-wants textarea { font: 13px var(--sans, system-ui); color: #f4f4f5; background: #0f0f12; border: 1px solid #27272a; border-radius: 8px; padding: 8px 10px; resize: vertical; min-height: 44px; }
+.sw-wants textarea::placeholder { color: #71717a; font-style: italic; }
+.sw-wbtns { display: flex; gap: 8px; } .sw-wbtns button { font: 500 12.5px var(--sans, system-ui); color: #0b0d12; background: #ffd27a; border: 1px solid #ffd27a; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.sw-wbtns button.ghost { color: #d4d4d8; background: transparent; border-color: #27272a; } .sw-wbtns button:disabled { opacity: .5; cursor: default; }
+.cn-heard { display: block; margin-top: 4px; font: 10.5px var(--mono, monospace); color: #71717a; letter-spacing: .02em; } .cn-heard.kept { color: #7dffa8; }
+.cn-b.wish { border: 1px solid color-mix(in srgb, #ffd27a 55%, transparent); box-shadow: 0 0 16px -6px #ffd27a; }

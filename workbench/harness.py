@@ -9,6 +9,7 @@ from . import char, db, jobs, llm, settings
 
 DOES = {"plan": "write a short research plan (three topics) from what it has read",
         "bake": "consolidate: freeze the answer counts maturity is read from",
+        "want": "ask the person for something it lacks: a source on a guess that was far off, or a topic the web had nothing on",
         "journal": "write a page of its study journal from what it studied, guessed wrong and was taught since the last page",
         "goal": "turn the oldest open plan line into one question",
         "ask": "turn names in the graph into new questions",
@@ -58,7 +59,8 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
     state = [f"curiosity {d['curiosity']}, maturity {d['maturity']}, frontier per layer {json.dumps(d['frontier']['layers'])}",
              "open questions: " + ("; ".join(char._open_questions(char._start())[:5]) or "none"),
              "unchecked notes: " + (", ".join(f"{r['id']} ({r['title'].removeprefix('Reflection: ')[:50]})" for r in _unchecked()[:5]) or "none"),
-             "names in its graph: " + (", ".join(names) or "none")]
+             "names in its graph: " + (", ".join(names) or "none"),
+             "needs (0 to 1; a low one says what to do first): " + ", ".join(f"{k} {v:.2f}" for k, v in char.needs().items())]
     if fb:  # in plain words, not command syntax: a small planner copied "cmd: drop (why)" lines back as its next commands
         vs = json.loads(fb[0]["content"])
         if idle := sorted({v["cmd"].split()[0] for v in vs if not v["keep"]}):
@@ -120,7 +122,7 @@ def starved(proposed: list[dict[str, str]]) -> str:
     _, blocked = char._blocks(True)
     asked = {c["name"] for c in proposed}
     waiting = [k for k in COMMANDS if k not in asked and k not in runs and not blocked.get(k)]
-    order = ("check", "extract", "review", "sort", "fold", "ideas", "wonder", "fill", "practise", "tune", "journal")  # checking and reading for names first: the rest builds on them
+    order = ("check", "extract", "review", "sort", "fold", "ideas", "wonder", "fill", "practise", "tune", "journal", "want")  # checking and reading for names first: the rest builds on them
     return next((k for k in order if k in waiting), waiting[0] if waiting else "")
 
 

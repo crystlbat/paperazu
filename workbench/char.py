@@ -333,10 +333,12 @@ def state() -> dict[str, Any]:
     ).fetchall()
     con.close()
 
-    turns = []
+    turns, kept = [], heard()
     for r in rows:
         d = dict(r)
         d["events"] = json.loads(d["events"]) if d.get("events") else []
+        if d["id"] in kept:
+            d["heard"] = kept[d["id"]]  # it kept what you said, or let it go
         turns.append(d)
 
     papers = [{"id": str(m["id"]), "title": m["title"], "content": m["content"], "authors": m["source"], "is_note": True} for m in mem_rows]
@@ -1083,7 +1085,7 @@ def monitor() -> dict[str, Any]:
             "loop": {"reviewed": rv["reviewed"], "mistakes": rv["mistakes"], "cycles": cycles, "instructions": len(rv["instructions"]), "fixes": sum(c["state"] == "on" for c in corrections())}}
 
 
-MODES = ("quiet", "curious", "proactive", "planner")  # quiet: never learns by itself; curious: learns while idle; proactive: also tells you what it found; planner: idle time runs harness cycles
+MODES = ("sleeping", "quiet", "curious", "proactive", "planner")  # sleeping: no model calls at all, not even replies (swap models, test); quiet: never learns by itself; curious: learns while idle; proactive: also tells you what it found; planner: idle time runs harness cycles
 
 
 def mode() -> str:
@@ -1146,7 +1148,7 @@ PROMPTS: deque[dict[str, Any]] = deque(maxlen=40)  # shortcut: the prompt log li
 # S2 thinks (writes a plan), S1 turns the plan and the names it knows into goals (questions, its own sheet), S0 just executes (search, note, names, voice).
 SYSTEMS: dict[int, tuple[str, str, tuple[str, ...]]] = {
     2: ("Plan", "Thinks about what the character should learn next and writes a short plan, and consolidates what it has answered so far, and writes its study journal.", ("plan", "bake", "journal")),
-    1: ("Goals", "Turns the plan and the names it knows into questions to answer, and fills in its own sheet.", ("goal", "ask", "wonder", "fill")),
+    1: ("Goals", "Turns the plan and the names it knows into questions to answer, and fills in its own sheet.", ("goal", "ask", "wonder", "fill", "want")),
     0: ("Execute", "Just does the work: looks a question up, writes the note, pulls out names and ideas from notes and from your chat, practises its voice.", ("reflect", "extract", "ideas", "practise", "sort", "fold")),
     3: ("Verify", "Watches the other three: picks the next step from everything that could run, checks each new note, and proposes a prompt fix when a system keeps slipping.", ("check", "review", "tune")),
 }
@@ -1188,7 +1190,7 @@ def _fix(kind: str) -> str:
     return next((" " + c["text"] for c in corrections() if c["kind"] == kind and c["state"] == "on"), "")
 
 
-NOT_A_REPLY = ("I got curious:", "Earlier you asked", "Noted. From now on", "I can't reach the model")  # lines the app wrote, not replies to judge
+NOT_A_REPLY = ("I got curious:", "Earlier you asked", "Noted. From now on", "I can't reach the model", "A wish: ", "I'm too tired to take that on")  # lines the app wrote, not replies to judge
 OUT_OF_CHARACTER = re.compile(r"(?i)\b(?:LFM\d*|Liquid AI|Liquid Foundation|language model|AI model|as an AI|I am an AI|AI assistant|trained by|(?:text|images?|audio) (?:as )?inputs?|inputs? and produce)\b")
 
 
@@ -1286,6 +1288,211 @@ def _day_since(since: int) -> dict[str, Any]:
             "next": _open_questions(since)[:3], "chats": chats}
 
 
+_END = r"(?=\s*(?:[.,!?;]|$|\band\b|\bwho\b|\bbut\b))"
+ABOUT_YOU = (  # what you say about yourself, and how the persona is told it. shortcut: phrases, not a model call per message
+    ("name", re.compile(r"(?i)\b(?:my name is|call me|i am called|i'm called)\s+([A-Za-z][\w'-]*(?: (?-i:[A-Z])[\w'-]*)?)"), "Their name is {}"),  # a surname only when capitalised: "Bibin and ..." is not one
+    ("theirs", re.compile(rf"(?i)\b(?:i am|i'm|im)\s+your\s+([a-z][\w '-]{{1,40}}?){_END}"), "They are your {}"),
+    ("mine", re.compile(rf"(?i)\byou(?:'re| are)\s+my\s+([a-z][\w '-]{{1,40}}?){_END}"), "You are their {}"),
+    ("role", re.compile(rf"(?i)\b(?:i am|i'm|im)\s+an?\s+(?!bit\b|little\b|lot\b|kind\b|sort\b)([a-z][\w '-]{{1,40}}?){_END}"), "They are a {}"),
+    ("work", re.compile(r"(?i)\bi ((?:work|study)\s(?:as|at|in|on)\s[^.,!?;]{2,50})"), "They {}"))
+
+
+def you() -> dict[str, str]:
+    """Who the person is to the live persona: what they said about themselves, newest word on each thing."""
+    con = db.connect()
+    rows = con.execute("SELECT title, content FROM char_memories WHERE source = 'sheet' AND title LIKE 'You: %' AND id > ? ORDER BY id", (_start(),)).fetchall()
+    con.close()
+    got = {r["title"].removeprefix("You: "): r["content"] for r in rows}
+    return {k: got[k] for k in dict.fromkeys(k for k, _, _ in ABOUT_YOU) if k in got}  # name first, then who they are to it
+
+
+def learn_you(text: str) -> list[str]:
+    """Keep what a message says about the person (name, who they are to it, their work); a new word on a thing replaces the old."""
+    got = [(k, t.format(m.group(1).strip())) for k, rx, t in ABOUT_YOU if (m := rx.search(text))]
+    if not got:
+        return []
+    con = db.connect()
+    with con:
+        for k, fact in got:
+            con.execute("DELETE FROM char_memories WHERE source = 'sheet' AND title = ? AND id > ?", (f"You: {k}", _start()))
+            con.execute("INSERT INTO char_memories (title, content, source) VALUES (?, ?, 'sheet')", (f"You: {k}", fact[:120]))
+    con.close()
+    return [f for _, f in got]
+
+
+def _you_line() -> str:
+    known, n, tr = you(), sum(1 for t in _chat_since() if t["role"] == "user"), trust()
+    feel = (" You trust them: be warm and open, and say what you are unsure of." if tr["trusted"] else
+            " You do not trust them much yet: be polite and a little guarded." if tr["n"] >= TRUST_AFTER and tr["value"] < LOW else "")
+    if not known:
+        return f"You do not know who the person you talk to is yet: they are not anyone from your world unless they tell you. You have talked {n} times.{feel}"
+    return f"The person you talk to (they told you this): {'; '.join(known.values())}. You have talked {n} times.{feel}"
+
+
+# ---------- its life between chats, the way Pino lives in his town: needs that drain and pick what it does next, mood shifts with a cause,
+# wants it asks you for (each one grounded in something that went wrong), and what it keeps of what you say, which is how much it trusts you ----------
+NEEDS = {"fullness": "new notes feed it; it gets hungry while nothing new comes in",
+         "energy": "every model step spends a little; it comes back while it rests",
+         "wonder": "questions to chase: making them raises it, answering them spends it",
+         "joy": "guesses that come out right, and wants you give it",
+         "calm": "mistakes and turned-away notes shake it; it settles with time"}
+DRIFT = {"fullness": -0.02, "energy": 0.15, "wonder": 0.0, "joy": 0.0, "calm": 0.05}  # per ten minutes, while time passes
+LOW, HIGH, TIRED = 0.3, 0.7, 0.2
+LEADS = {"fullness": ("reflect", "fill"), "wonder": ("wonder", "ask", "plan", "goal"), "calm": ("check", "review", "tune")}  # a low need puts these first
+STEP_COST = 0.03  # energy a model step spends
+WANTS_OPEN = 3  # at most this many wants wait for you at once
+TRUST_AFTER = 10  # messages before it can trust you: trust is earned over a while
+WISH = "A wish: "  # how a want reads in the chat; an app line, not a reply to judge
+
+
+def needs() -> dict[str, float]:
+    """Its needs now, 0 to 1: the last value written, drifted by the time since (energy and calm come back, fullness drains)."""
+    con = db.connect()
+    row = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Needs' AND id > ? ORDER BY id DESC LIMIT 1", (_start(),)).fetchone()
+    con.close()
+    got = json.loads(row["content"]) if row else {}
+    tens = max(0.0, (time.time() - float(got.get("at", time.time()))) / 600)
+    return {k: round(min(1.0, max(0.0, float(got.get(k, 0.6)) + DRIFT[k] * tens)), 3) for k in NEEDS}
+
+
+def tired() -> bool:
+    return needs()["energy"] < TIRED
+
+
+def feel(changes: dict[str, float], cause: str) -> list[dict[str, Any]]:
+    """Change its needs; a need that drops below LOW or climbs above HIGH is a mood shift, kept with what brought it on."""
+    if not any(changes.values()):
+        return []
+    before = needs()
+    after = {k: round(min(1.0, max(0.0, before[k] + changes.get(k, 0.0))), 3) for k in NEEDS}
+    shifts = [{"need": k, "dir": "down" if after[k] < before[k] else "up", "value": after[k], "cause": cause[:160]} for k in NEEDS
+              if (before[k] >= LOW > after[k]) or (before[k] <= HIGH < after[k])]
+    con = db.connect()
+    with con:
+        con.execute("DELETE FROM char_memories WHERE source = 'sheet' AND title = 'Needs' AND id > ?", (_start(),))
+        con.execute("INSERT INTO char_memories (title, content, source) VALUES ('Needs', ?, 'sheet')", (json.dumps({**after, "at": time.time()}),))
+        for sh in shifts:
+            con.execute("INSERT INTO char_memories (title, content, source) VALUES (?, ?, 'sheet')", (f"Shift: {sh['need']}", json.dumps(sh)))
+    con.close()
+    return shifts
+
+
+def shifts(limit: int = 12) -> list[dict[str, Any]]:
+    con = db.connect()
+    rows = con.execute("SELECT content, created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Shift: %' AND id > ? ORDER BY id DESC LIMIT ?", (_start(), limit)).fetchall()
+    con.close()
+    return [{**json.loads(r["content"]), "at": r["created_at"]} for r in rows]
+
+
+def _feel_line() -> str:
+    """How it feels, for its reply prompt: only what stands out."""
+    n = needs()
+    bits = [x for x, on in (("You are tired.", n["energy"] < TIRED), ("You are hungry for something new to read.", n["fullness"] < LOW),
+                            ("Your head is full of questions.", n["wonder"] > HIGH), ("You are in high spirits.", n["joy"] > HIGH),
+                            ("You are a little low.", n["joy"] < LOW), ("You are unsettled by your recent mistakes.", n["calm"] < LOW)) if on]
+    return "How you feel right now (let it colour your tone; never list it): " + " ".join(bits) if bits else ""
+
+
+def _felt(kind: str, got: tuple[str, str]) -> None:
+    """What a step that did something does to its needs."""
+    d: dict[str, float] = {} if kind in NO_MODEL else {"energy": -STEP_COST}
+    if kind == "reflect":
+        d |= {"fullness": 0.15, "wonder": -0.05}
+        con = db.connect()
+        g = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Guess: %' AND id > ? ORDER BY id DESC LIMIT 1", (_start(),)).fetchone()
+        con.close()
+        sur = float(g["content"].split("|")[0]) if g else 0.5
+        d |= {"joy": 0.1} if sur < 0.3 else {"joy": -0.05, "wonder": 0.05} if sur >= 0.5 else {}
+    elif kind in ("wonder", "ask", "plan", "goal"):
+        d["wonder"] = 0.1
+    elif kind == "check" and got[1].startswith("rejected"):
+        d["calm"] = -0.1
+    elif kind == "review" and got[1].startswith("mistake"):
+        d |= {"calm": -0.15, "joy": -0.05}
+    elif kind == "journal":
+        d["calm"] = 0.1
+    feel(d, f"{kind}: {got[0]} ({got[1]})"[:160])
+
+
+def wants() -> list[dict[str, Any]]:
+    """What it asked you for, newest first: waiting, given, or let go."""
+    con = db.connect()
+    rows = con.execute("SELECT id, content, created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Want: %' AND id > ? ORDER BY id DESC", (_start(),)).fetchall()
+    con.close()
+    return [{"id": r["id"], "at": r["created_at"], **json.loads(r["content"])} for r in rows]
+
+
+def _want_from() -> tuple[str, str, str] | None:
+    """Something it lacks that you could give, each from what actually happened: a guess that was far off, or a topic the web had nothing on."""
+    had = {w["topic"].lower() for w in wants()}
+    con = db.connect()
+    far = con.execute("SELECT g.content, n.title FROM char_memories g JOIN char_memories n ON n.id = CAST(substr(g.title, 8) AS INTEGER) "
+                      "WHERE g.source = 'sheet' AND g.title LIKE 'Guess: %' AND g.id > ? ORDER BY g.id DESC LIMIT 20", (_start(),)).fetchall()
+    empty = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Run: reflect' AND content LIKE '%nothing found on the web for %' AND id > ? ORDER BY id DESC LIMIT 20", (_start(),)).fetchall()
+    con.close()
+    for r in far:
+        sur, guess = r["content"].split("|", 1)
+        topic = r["title"].removeprefix("Reflection: ")
+        if float(sur) >= 0.5 and topic.lower() not in had:
+            return f"a source I can trust on {topic}", f'I guessed "{guess[:120]}" and it was {round(float(sur) * 100)}% off what I then read', topic
+    for r in empty:
+        topic = json.loads(r["content"]).get("detail", "").split("nothing found on the web for ", 1)[-1].strip()
+        if topic and topic.lower() not in had:
+            return f"anything about {topic}", f"I looked {topic} up and the web had nothing", topic
+    return None
+
+
+def give_want(want_id: int, gift: str = "") -> dict[str, Any] | None:
+    """You answer a want: what you give becomes a note it reads (and its Verifier checks); nothing given lets it go."""
+    con = db.connect()
+    row = con.execute("SELECT content FROM char_memories WHERE id = ? AND source = 'sheet' AND title LIKE 'Want: %'", (want_id,)).fetchone()
+    con.close()
+    if not row:
+        return None
+    w = json.loads(row["content"])
+    gift = gift.strip()[:4000]
+    w.update(status="given" if gift else "let go", gift=gift)
+    con = db.connect()
+    with con:
+        con.execute("UPDATE char_memories SET content = ? WHERE id = ?", (json.dumps(w), want_id))
+    con.close()
+    if gift:
+        add_memory(f"Reflection: {w['topic']}"[:80], gift, source="reflection")
+        feel({"joy": 0.2, "fullness": 0.15}, f"you gave it {w['thing']}")
+    return {"id": want_id, **w}
+
+
+def trust() -> dict[str, Any]:
+    """How much of what you say it kept: the more it keeps, the more it trusts you, which shows in how openly it talks."""
+    con = db.connect()
+    rows = [r["content"] for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Heard: %' AND id > ?", (_start(),))]
+    con.close()
+    kept = rows.count("kept")
+    value = round((kept + 1) / (len(rows) + 2), 2)  # starts at a half, moves with each message
+    return {"kept": kept, "n": len(rows), "value": value, "trusted": len(rows) >= TRUST_AFTER and value >= HIGH}
+
+
+def _hear(turn_id: int, text: str, told: list[str], lit: list[str], mem_rows: list[Any], up: str) -> bool:
+    """Keep or let go: it keeps what tells it who you are, touches its world, pushes it on or says something long enough to matter; small talk drifts."""
+    kept = bool(told or lit or mem_rows or up or len(text.split()) >= 12)
+    add_memory(f"Heard: {turn_id}", "kept" if kept else "let go", source="sheet")
+    if kept:
+        feel({"joy": 0.03}, f'you said "{text[:80]}"')
+    return kept
+
+
+def heard() -> dict[int, str]:
+    con = db.connect()
+    rows = con.execute("SELECT title, content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Heard: %' AND id > ?", (_start(),)).fetchall()
+    con.close()
+    return {int(r["title"].removeprefix("Heard: ")): r["content"] for r in rows}
+
+
+def life() -> dict[str, Any]:
+    """Needs, mood shifts, wants and trust, for the page."""
+    return {"needs": needs(), "about": NEEDS, "tired": tired(), "shifts": shifts(), "wants": wants(), "trust": trust()}
+
+
 def journal() -> list[dict[str, Any]]:
     """Its study journal, newest page first: the page it wrote, and the facts under it."""
     con = db.connect()
@@ -1301,11 +1508,14 @@ def _choose(kinds: tuple[str, ...]) -> tuple[tuple[str, ...], str]:
     got = [float(r["content"].split("|")[0]) for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Guess: %' AND id > ? ORDER BY id DESC LIMIT 5", (_start(),))]
     con.close()
     sur = sum(got) / len(got) if got else 0.5
-    order = ("check", "review", "tune", "sort", "extract", "bake", "journal", "reflect", "goal", "ask", "plan", "fold", "ideas", "wonder", "fill", "practise") if sur >= 0.3 else ("check", "review", "tune", "sort", "extract", "bake", "journal", "goal", "ask", "plan", "reflect", "ideas", "wonder", "fill", "practise")
+    order = ("check", "review", "tune", "sort", "extract", "bake", "journal", "want", "reflect", "goal", "ask", "plan", "fold", "ideas", "wonder", "fill", "practise") if sur >= 0.3 else ("check", "review", "tune", "sort", "extract", "bake", "journal", "want", "goal", "ask", "plan", "reflect", "ideas", "wonder", "fill", "practise")
     first = ("check", "review")  # verify before building on a note, always
     waited = [k for k in order if k not in first and TRIED["n"] - TRIED.get(k, -STARVE) >= STARVE]  # starved: at the end of the line too long, it gets a turn
-    order = tuple(k for k in first if k in order) + tuple(waited) + tuple(k for k in order if k not in first and k not in waited)
-    return tuple(k for k in order if k in kinds), (f"{', '.join(waited[:3])} waited longest, so they go first; " if waited else "") + f"surprise {sur:.2f}: " + ("still being surprised, so answer open questions first" if sur >= 0.3 else "guesses keep coming out right, so look for new ground first")
+    n = needs()
+    low = sorted((v, k) for k, v in n.items() if v < LOW and k in LEADS)  # the lowest need leads: hungry reads, restless asks, shaken checks
+    lead = [x for _, k in low for x in LEADS[k] if x not in first]
+    order = tuple(k for k in first if k in order) + tuple(dict.fromkeys(lead + waited)) + tuple(k for k in order if k not in first and k not in waited and k not in lead)
+    return tuple(k for k in order if k in kinds), "".join(f"{k} low ({v:.2f}), so {LEADS[k][0]} first; " for v, k in low) + (f"{', '.join(waited[:3])} waited longest, so they go first; " if waited else "") + f"surprise {sur:.2f}: " + ("still being surprised, so answer open questions first" if sur >= 0.3 else "guesses keep coming out right, so look for new ground first")
 
 SYS_OF = {k: n for n, (_, _, ks) in SYSTEMS.items() for k in ks} | {"evaluate": 3}  # the intake gate runs inside reflect, not as a step of its own, and belongs to the Verifier
 TARGETS = {"reflect": "topic", "check": "note id", "fold": "name"}  # the steps rest(target=...) can aim; the rest ignore a target
@@ -1317,7 +1527,7 @@ class _Trace(deque):
 
 TRACE: deque[dict[str, Any]] = _Trace(maxlen=60)  # shortcut: the run log lives in memory like PROMPTS; a restart clears it
 ENGINES: dict[str, dict[str, Any]] = {}  # kind -> what it did the last time it was tried, for /char/engines; in memory like TRACE
-ENGINE_ORDER = ("plan", "goal", "ask", "wonder", "fill", "reflect", "extract", "ideas", "practise", "sort", "fold", "evaluate", "check", "review", "tune", "bake", "journal", "reply", "correction", "persona", "model", "cycle")
+ENGINE_ORDER = ("plan", "goal", "ask", "wonder", "fill", "want", "reflect", "extract", "ideas", "practise", "sort", "fold", "evaluate", "check", "review", "tune", "bake", "journal", "reply", "correction", "persona", "model", "cycle")
 NO_MODEL = ("bake", "correction")  # the engines that never call the model
 _sys: int | None = None  # the system whose step is running, so its prompts are filed under it
 _failed = ""  # set by _ask when the model call failed or said nothing, so a step that did nothing can tell "model failed" from "nothing to do"
@@ -1350,14 +1560,15 @@ def _blocked(kind: str, off: set[int], braked: bool, quiet: bool, up: bool = Tru
         return f"system S{SYS_OF[kind]} off"
     if braked and kind in EXPLORES:
         return "curiosity at 0 (braked)"
-    return "quiet mode" if quiet and kind in SYS_OF else ""
+    return f"{mode()} mode" if quiet and kind in SYS_OF else ""
 
 
 def _blocks(up: bool) -> tuple[set[int], dict[str, str]]:
     """The systems off, and why each engine could not run now ("" when it could): shared by /char/engines and /char/report."""
     off, d = systems_off(), disposition()
-    braked, quiet = (d["nE"] > 0 or d["dial"] == 0) and d["curiosity"] <= 0, mode() == "quiet"
-    return off, {k: _blocked(k, off, braked, quiet, up) for k in ENGINE_ORDER}
+    braked, quiet = (d["nE"] > 0 or d["dial"] == 0) and d["curiosity"] <= 0, mode() in ("quiet", "sleeping")
+    t = tired()
+    return off, {k: _blocked(k, off, braked, quiet, up) or ("tired: resting until its energy comes back" if t and k in SYS_OF and k not in NO_MODEL else "") for k in ENGINE_ORDER}
 
 
 def engines(up: bool, label: str) -> dict[str, Any]:
@@ -1416,7 +1627,7 @@ def report(up: bool, label: str) -> dict[str, Any]:
     by_topic = {n["topic"]: n["id"] for n in notes}
     for r in runs:  # a step about a note links to it, so the page can open the note behind the step
         r["ref"] = next((i for t, i in by_topic.items() if r["detail"].startswith(t + ":") or r["detail"].startswith(t[:60])), None) if r["kind"] in ("reflect", "evaluate", "check", "extract") else None
-    return {"notes": notes, "who": get_profile()["name"], "since": mark["created_at"] if mark else "", "model": {"up": up, "label": label},
+    return {"notes": notes, "who": get_profile()["name"], "you": you(), "life": life(), "since": mark["created_at"] if mark else "", "model": {"up": up, "label": label},
             "totals": {"steps": len(runs), "ok": outcomes.count("ok"), "skipped": outcomes.count("skipped"), "failed": outcomes.count("failed"), "cycles": cycles,
                        "replies": sum(t["role"] == "dot" and not t["text"].startswith(NOT_A_REPLY) for t in _chat_since())},
             "corrections": corr, "learned": learned, "disposition": disposition(), "series": monitor()["series"], "harness": harness, "trace": runs[:300]}
@@ -1526,20 +1737,24 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
         me = {"who": row[0]["name"], "text": row[0]["learned"], "look": json.loads(row[0]["look"] or "[]"), "tint": row[0]["tint"], "var": row[0]["id"]} if row else None
     braked = False
     if on_char:
-        if mode() == "quiet" and not force:
+        if mode() in ("quiet", "sleeping") and not force:  # your own "run one step" still runs, to test a model you just swapped in
             for k in SYS_OF:
-                _engine(k, "blocked", "quiet mode")
+                _engine(k, "blocked", f"{mode()} mode")
             return {"done": True, "kind": "", "topic": "", "note": "", "incurious": True, "quiet": True, "questions": _open_questions(_start())[::-1][:3], "graph": graph()}
         if not force and (q := _open_correction()) and q.get("kind") == "direction":
             for k in SYS_OF:
                 _engine(k, "blocked", "waiting for you to say which way to grow")
             return {"done": True, "kind": "", "topic": "", "note": "", "asking": True, "questions": _open_questions(_start())[::-1][:3], "graph": graph()}
+        if not force and tired():  # it has spent itself: it rests until energy comes back with time
+            for k in SYS_OF:
+                _engine(k, "blocked", "tired: resting until its energy comes back")
+            return {"done": True, "kind": "", "topic": "", "note": "", "tired": True, "why": "tired: resting until its energy comes back", "questions": _open_questions(_start())[::-1][:3], "graph": graph()}
         if target is None and _var("asleep", 0) == 1:  # asleep, it learns the way you told it to grow
             target = (_direction() or None)
         d = disposition()  # curiosity is the brake: at 0 it stops reaching outward, but still reads your chat and checks its own work. A character that knows no names yet is not braked: it has to start somewhere
         braked = not force and (d["nE"] > 0 or d["dial"] == 0) and d["curiosity"] <= 0
     off = systems_off()
-    kinds = tuple(k for k in ("reflect", "wonder", "fill", "practise", "extract", "ideas", "ask", "plan", "goal", "check", "review", "tune", "sort", "fold", "bake", "journal") if SYS_OF[k] not in off and not (braked and k in EXPLORES)) or ("check",)
+    kinds = tuple(k for k in ("reflect", "wonder", "fill", "practise", "extract", "ideas", "ask", "plan", "goal", "check", "review", "tune", "sort", "fold", "bake", "journal", "want") if SYS_OF[k] not in off and not (braked and k in EXPLORES)) or ("check",)
     for k in SYS_OF:
         if k not in kinds:
             _engine(k, "blocked", _blocked(k, off, braked, False))
@@ -1714,6 +1929,22 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
                 return no("plan line dropped: its question was asked before")
             add_memory(f"Question: {q}?"[:80], f"{q}? (from {pl['id']})", source="question")
             return pl["content"], q + "?"
+        if kind == "want":  # S1: it asks you for something it lacks, grounded in what went wrong, the way Pino asks at his shrine
+            if not on_char or not me:
+                return no("asks only on the character page")
+            if (k := sum(w["status"] == "waiting" for w in wants())) >= WANTS_OPEN:
+                return no(f"{k} wants already waiting for you")
+            if not (got := _want_from()):
+                return no("nothing it lacks that you could give")
+            thing, because, topic = got
+            said = _clean(_ask(f"{me['text'][:500]}\n\nIn one sentence, in the first person, ask the person you talk to for this and say why. Use only the facts given.",
+                               f"You want: {thing}\nWhy: {because}", 60), 300) or f"Could you find me {thing}? {because}."
+            add_memory(f"Want: {topic}"[:80], json.dumps({"thing": thing, "because": because, "topic": topic, "said": said, "status": "waiting"}), source="sheet")
+            con = db.connect()
+            with con:
+                con.execute("INSERT INTO char_turns (role, text) VALUES ('dot', ?)", (WISH + said,))
+            con.close()
+            return thing, because
         if kind == "journal":  # its study journal: once enough has happened since the last page, it writes one, in its own voice
             if not on_char or not me:
                 return no("keeps a journal only on the character page")
@@ -1723,7 +1954,8 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             facts = "\n".join(["What is true, from your notes:", *[f"- {k}" for k in day["known"]],
                                *[f"You once guessed, WRONGLY, for \"{g['q']}\": \"{g['guess']}\"" for g in day["surprised"][:3]],
                                *[f"The person taught you: {t}" for t in day["taught"][:3]],
-                               f"You still want to know: {'; '.join(day['next']) or 'nothing yet'}", f"You talked with the person {day['chats']} times"])
+                               f"You still want to know: {'; '.join(day['next']) or 'nothing yet'}", _you_line(),
+                               *[f"Your {sh['need']} went {sh['dir']} because of: {sh['cause']}" for sh in shifts(3)]])
             voice = f"{me['text'][:700]}\n\nYou write one paragraph of your journal: a reflection on yourself, in the first person, two or three sentences. Use only the facts given; a wrong guess was never true; invent nothing. "
             parts = [_clean(_ask(voice + f"Begin with \"I am {me['who']}\": who you are now, in light of what is true from your notes.", facts, 120), 500),
                      _clean(_ask(voice + "Begin with \"I have been\": what you got wrong before you looked it up, and how learning the truth changed you.", facts, 120), 500),
@@ -1859,6 +2091,7 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             TRACE.append({"at": time.strftime("%H:%M:%S"), **out})
             if on_char:
                 _tick(kind)
+                _felt(kind, got)
                 if kind not in ("check", "review", "tune", "sort", "journal"):  # housekeeping is not learning, so it does not spend your push
                     _ease_momentum()
             if why:
@@ -2125,6 +2358,10 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
     s = settings.get_all()
     extra_events = []
 
+    if mode() == "sleeping":  # asleep: nothing you type reaches the model or its chat, so a stray message changes nothing
+        st = state()
+        return {"reply": f"Zzz… {get_profile()['name'].split()[0]} is asleep. Wake it with /wake or on Controls.", "events": [], "card": None, "questions": [], "recall": {"notes": [], "names": []}, "asleep": True,
+                **{k: st[k] for k in ("vars", "tables", "papers", "graph")}}
     q = _open_correction()
     if q and len(text.split()) >= 3 and not UP.search(text) and not text.strip().endswith("?"):  # an up is always an up, a question is a question, and "hii" is a greeting: none is an answer
         con = db.connect()
@@ -2141,6 +2378,7 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
             return {"reply": reply, "events": [], "card": None, "questions": [], "recall": {"notes": [], "names": []}, **{k: st[k] for k in ("vars", "tables", "papers", "graph")}}
 
     up = _up(text)
+    told_you = learn_you(text)
 
     # 1. Check for creature withdrawal / ladder hook command
     if re.search(r"\b(?:remove|withdraw|recall|dismiss|pull up|ascend|clear|hide|ladder hook)\b.*?\b(?:creature|creture|crew|blobs?|ladder|hook)s?\b|\bbuild a (?:letter|ladder) hook\b", text, re.I):
@@ -2205,6 +2443,8 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
     # 4. Check for autonomous research job
     spawned_job = None
     research_match = None if varish else RESEARCH_PATTERN.search(text)
+    if research_match and tired() and direct is None:  # it says no when it has nothing left, as Pino does
+        direct, research_match = "I'm too tired to take that on right now. Let me rest a while, then ask me again.", None
     if research_match:
         goal = research_match.group(1).strip()
         if len(goal) > 2:
@@ -2231,7 +2471,7 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
         )
 
     # 6. Build prompt with persona, active variables, and memory
-    system_directives = [profile["persona"]]
+    system_directives = [profile["persona"], _you_line(), *[x for x in [_feel_line()] if x]]
     counts = [v for v in variables() if v["kind"] == "count" and v["name"] != "proactivity"]
     if counts:  # the real numbers, so the model does not count by itself or copy an old count
         system_directives.append("Variables the app keeps (real values, already updated for this message): "
@@ -2276,6 +2516,12 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
     messages.append({"role": "user", "content": text})
 
     # 7. Generate response
+    if s.chat_model and not direct:  # the reply model you picked on Controls: swapped in for the reply, as the harness does for its steps
+        try:
+            llm.ensure(s, s.chat_model)
+            s = s.model_copy(update={"model_name": s.chat_model})
+        except Exception as e:  # noqa: BLE001 — the loaded model still answers
+            _engine("model", "failed", f"could not swap in {s.chat_model}: {e}")
     try:
         raw_reply = direct or jobs.complete(s, messages, max_tokens=250).strip()
         if not direct: _log("reply", messages, raw_reply)
@@ -2333,11 +2579,13 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
             "INSERT INTO char_turns (role, text, events) VALUES ('user', ?, ?)",
             (text, json.dumps(all_events)),
         )
+        user_id = con.execute("SELECT MAX(id) AS m FROM char_turns WHERE role = 'user'").fetchone()["m"]
         dot_id = con.execute(
             "INSERT INTO char_turns (role, text, events) VALUES ('dot', ?, ?)",
             (final_reply, json.dumps(all_events)),
         ).lastrowid
     con.close()
+    _hear(user_id, text, told_you, lit, mem_rows, up)
     if up == "SLEEP":  # its question is the last thing it said, so your next message is the answer (the same path as a correction)
         add_memory(f"Asking: {dot_id}", json.dumps({"asked": text[:300], "said": "", "why": ASK_WAY, "chat": dot_id, "kind": "direction"}), source="sheet")
 

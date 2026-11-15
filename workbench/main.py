@@ -1036,6 +1036,21 @@ def char_journal() -> dict[str, Any]:
     return {"pages": char.journal()}
 
 
+@app.get("/char/life")
+def char_life() -> dict[str, Any]:
+    """Its needs, mood shifts, wants and trust."""
+    return char.life()
+
+
+@app.post("/char/want/{want_id}")
+def char_want(want_id: int, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Give it what it asked for (the gift becomes a note it reads), or let the want go (no gift)."""
+    w = char.give_want(want_id, str(body.get("gift") or ""))
+    if w is None:
+        raise HTTPException(404, detail="no such want")
+    return w
+
+
 @app.get("/char/report")
 def char_report() -> dict[str, Any]:
     return {**char.report(*_model()), "harness_loop": harness.totals(), "cycles": harness.cycles(30), "mode": char.mode(), "tracker": char.tracker()}

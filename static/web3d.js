@@ -160,18 +160,18 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     if (d.who !== formOf) { formOf = d.who; form = null; cb = 0; api("/char/chibi").then((c) => { if (formOf === d.who) form = c; }).catch(() => {}); } // a new persona: Dot starts as a sphere and morphs once its reference is in
     who.textContent = d.who; vars = d.signals.map((s) => ({ name: s.name, value: Math.round(s.value * 100) / 100 }));
     lamps.querySelectorAll("span").forEach((l) => l.classList.toggle("off", !d.systems.find((s) => s.id === +l.dataset.s)?.on));
-    modes.replaceChildren(...[["quiet", "Quiet", "Never learns by itself"], ["curious", "Curious", "Learns while idle"], ["proactive", "Proactive", "Learns, and tells you what it found"]].map(([m, t, tip]) =>
+    modes.replaceChildren(...[["sleeping", "Sleep", "No replies, no learning: safe to swap models"], ["quiet", "Quiet", "Never learns by itself"], ["curious", "Curious", "Learns while idle"], ["proactive", "Proactive", "Learns, and tells you what it found"]].map(([m, t, tip]) =>
       h("button", { type: "button", role: "radio", "aria-checked": String(d.mode === m), title: tip, onclick: async () => { try { await api("/char/wiring", { method: "POST", body: JSON.stringify({ mode: m }) }); } catch { return; } refresh(); } }, t)));
     root.dataset.mode = d.mode; const T = d.tracker || {}; learning = !!T.asleep; modeChip.textContent = T.asleep ? "learning" : T.asking ? "asking" : d.mode;
     modeChip.style.setProperty("--p", String(Math.min(1, (T.momentum || 0) / (T.sleep_at || 3)))); modeChip.dataset.halo = T.asleep ? "asleep" : T.asking ? "asking" : "";
     modeChip.title = `Momentum ${T.momentum ?? 0} of ${T.sleep_at ?? 3}: ${T.ups ?? 0} ups said; every ${T.every ?? 10} add 1. ${T.asleep ? "Asleep, learning the way you told it to grow; it wakes when the push is spent." : "At the threshold it asks which way to grow, then sleeps to learn it."}`;
-    paintTrack(T); if (ear) ear.placeholder = `Talk to ${d.who.split(" ")[0]}…`;
+    paintTrack(T); if (ear) ear.placeholder = d.mode === "sleeping" ? `${d.who.split(" ")[0]} is asleep. Type /wake to wake it` : `Talk to ${d.who.split(" ")[0]}…`;
     engines();
     const braked = d.wires[0]?.holding; // one line that says what you can do right now
     const q = d.review?.open; asking = q || null; // the correction loop, as talk: it says what went wrong, and your next message is the answer
     hint.replaceChildren(detached ? "The model is detached: the harness lies flat until it is back." : q?.kind === "direction" ? h("span", {}, "It asks which way to grow. Your next message sets it. ", h("button", { type: "button", class: "sw-skip", onclick: skipAsk }, "Skip"))
       : T.asleep ? "Asleep: it is learning the way you told it to grow, and wakes when the push is spent."
-      : q ? h("span", {}, "Your next message teaches it what to do instead. ", h("button", { type: "button", class: "sw-skip", onclick: skipAsk }, "Skip")) : d.mode === "quiet" ? "Quiet mode: it only answers. Start typing to talk to it."
+      : q ? h("span", {}, "Your next message teaches it what to do instead. ", h("button", { type: "button", class: "sw-skip", onclick: skipAsk }, "Skip")) : d.mode === "sleeping" ? "Asleep: it will not answer or learn. Type /wake, or wake it on Controls." : d.mode === "quiet" ? "Quiet mode: it only answers. Start typing to talk to it."
       : braked ? "It has nothing new to chase. Tell it about something and its curiosity wakes up."
       : "It is learning by itself. Watch, or just start typing to talk to it.");
     if (q && ear) ear.placeholder = q.kind === "direction" ? "Which way should it grow?" : "Tell it what to do instead…";
@@ -357,13 +357,33 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
           : st(n.verdict === "keep" ? "yes" : n.verdict === "drop" ? "no" : "wait", n.verdict === "keep" ? "Kept by the Verifier, after it was saved" : n.verdict === "drop" ? "Dropped by the Verifier, after it was saved" : "Not judged yet", h("p", {}, "Written before the intake gate existed.")),
         st((n.names || []).length ? "yes" : "wait", "Joined the mesh", h("p", {}, (n.names || []).length ? n.names.map(esc).join(", ") : "No names taken from it yet.")))); };
   const TABS = [["story", "Story"], ["chat", "Chat"], ["journal", "Journal"], ["notes", "Notes"], ["activity", "Activity"], ["engines", "Engines"], ["controls", "Controls"]];
-  const MODE_DOES = { quiet: "Only answers you. Never learns by itself.", curious: "Learns by itself while you are away.", proactive: "Learns, then tells you what it found.", planner: "Idle time runs harness cycles: planner, controller, executor, Verifier." };
+  const MODE_DOES = { sleeping: "Asleep: no replies and no learning, so nothing you type reaches the model. Swap models and test with Run one step.", quiet: "Only answers you. Never learns by itself.", curious: "Learns by itself while you are away.", proactive: "Learns, then tells you what it found.", planner: "Idle time runs harness cycles: planner, controller, executor, Verifier." };
   const ctl = { budget: 4, roles: null, busy: "", last: null, swap: null }; let rCyc = null, jPages = null, cnet = null, cMesh = null, cTurns = null; // its study journal, pulled while that tab is open
   try { rTab = localStorage.getItem("sw-rtab") || "story"; } catch { rTab = "story"; }
   if (!TABS.some(([k]) => k === rTab)) rTab = "story";
-  const go = (k) => { rTab = k; try { localStorage.setItem("sw-rtab", k); } catch { /* not remembered */ } if (k === "controls") loadRoles(); paintReport(); };
-  async function loadRoles() { if (ctl.roles) return; try { const s = await api("/settings"); ctl.roles = { planner_model: s.planner_model || "", chat_model: s.chat_model || "", judge_model: s.judge_model || "" }; } catch { ctl.roles = { error: true }; } paintReport(); }
+  const go = (k) => { rTab = k; try { localStorage.setItem("sw-rtab", k); } catch { /* not remembered */ } if (k === "controls" || k === "engines") loadRoles(); paintReport(); };
+  async function loadRoles() { if (ctl.roles) return;
+    try { const [s, m] = await Promise.all([api("/settings"), api("/model/status").catch(() => ({ models: [] }))]);
+      ctl.roles = { planner_model: s.planner_model || "", chat_model: s.chat_model || "", judge_model: s.judge_model || "" };
+      ctl.loaded = s.model_name || ""; ctl.models = (m.models || []).filter((x) => !/embed|asr|audio|tts|chatterbox|whisper|manifests\//i.test(x)); // only models that can talk
+    } catch { ctl.roles = { error: true }; } paintReport(); }
+  const auraOf = (id) => { let n = 7; for (const c of id || "") n = (n * 31 + c.charCodeAt(0)) >>> 0; return `hsl(${n % 360} 85% 66%)`; }; // one colour per model: parts on the same model glow alike
+  const modelOf = (role) => (ctl.roles && !ctl.roles.error && ctl.roles[`${role}_model`]) || ctl.loaded || "";
+  const auraChip = (role, what) => { const id = modelOf(role); return id ? h("span", { class: "sw-aura", style: `--aura:${auraOf(id)}`, title: `${what} ${id}` }, h("i"), short(id)) : ""; };
+  const short = (id) => (id || "").split("/").pop().replace(/-GGUF$|-MLX.*$|:latest$/i, "");
   async function act(label, fn) { ctl.busy = label; paintReport(); try { ctl.last = { label, ok: true, out: await fn() }; } catch (e) { ctl.last = { label, ok: false, out: String(e?.message || e) }; } ctl.busy = ""; await pullReport(true); }
+  const NEED_C = { fullness: "#7dffa8", energy: "#ffd27a", wonder: "#6ff7ff", joy: "#ff7ac6", calm: "#b49cff" };
+  const feels = (L) => !L ? "" : h("section", { class: "sw-feels" }, h("h4", {}, L.tired ? "How it feels · resting" : "How it feels"),
+    h("ul", {}, ...Object.entries(L.needs || {}).map(([k, v]) => h("li", { title: L.about?.[k] || "", style: `--c:${NEED_C[k] || "#a1a1aa"}` },
+      h("span", {}, k), h("i", { class: v < .3 ? "low" : "" }, h("b", { style: `width:${Math.round(v * 100)}%` })), h("small", {}, Math.round(v * 100))))),
+    L.shifts?.length ? h("p", { class: "sw-dmut sw-shift" }, `${L.shifts[0].dir === "down" ? "↓" : "↑"} ${esc(L.shifts[0].need)}, ${local(L.shifts[0].at)}: ${esc(L.shifts[0].cause)}`) : "");
+  const wishes = (L) => { const open = (L?.wants || []).filter((w) => w.status === "waiting"), done = (L?.wants || []).filter((w) => w.status !== "waiting").slice(0, 3);
+    if (!L || (!open.length && !done.length)) return h("section", {}, h("h4", {}, "It wants"), h("p", { class: "sw-dmut" }, "Nothing yet. When a guess is far off, or the web has nothing on a topic, it asks you for it here."));
+    return h("section", { class: "sw-wants" }, h("h4", {}, "It wants"), ...open.map((w) => { const box = h("textarea", { rows: 2, placeholder: "Paste what you found, or a few lines you know", "aria-label": `Give it ${w.thing}` });
+      return h("article", {}, h("b", {}, esc(w.thing)), h("p", {}, esc(w.said)), h("small", {}, `what brought it on: ${esc(w.because)}`), box,
+        h("div", { class: "sw-wbtns" }, h("button", { type: "button", disabled: !!ctl.busy, onclick: () => box.value.trim() && act("give", () => api(`/char/want/${w.id}`, { method: "POST", body: JSON.stringify({ gift: box.value }) }).then(() => "given: it will read it and check it")) }, "Give it"),
+          h("button", { type: "button", class: "ghost", disabled: !!ctl.busy, onclick: () => act("let go", () => api(`/char/want/${w.id}`, { method: "POST", body: "{}" }).then(() => "let go")) }, "Let it go"))); }),
+      ...done.map((w) => h("p", { class: "sw-dmut" }, `${w.status === "given" ? "✓ you gave it" : "· let go:"} ${esc(w.thing)}`))); };
   const flow = (d, loop) => { // the story in one picture: what it planned, asked, wrote, let in, and linked; band width is how much got through
     const L = d.learned || {}, st = (n) => { const s = loop.find((x) => x.system === n); return s ? stageOf(s).state : ["idle", ""]; };
     const gate = (d.trace || []).find((t) => t.kind === "evaluate");
@@ -418,6 +438,10 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
             h("section", {}, h("h4", {}, "Just now"), done.length ? h("ol", { class: "sw-feed" }, ...done.map((t) => h("li", {}, h("button", { type: "button", onclick: () => { rSel = { step: tkey(t), note: t.ref }; go("activity"); } },
               h("time", {}, local(t.at)), h("p", {}, h("b", { style: `color:${SC[t.system] || "#d4d4d8"}` }, `${who} ${VERB[t.kind] || t.kind}`), ` ${esc(t.detail.split(":")[0])}`)))))
               : h("p", { class: "sw-dmut" }, "Nothing yet."), why ? h("p", { class: "sw-dmut sw-why" }, `When a step does nothing, it is most often because “${esc(why[0])}”.`) : ""),
+            feels(d.life), wishes(d.life),
+            h("section", {}, h("h4", {}, "Who you are to it"), Object.keys(d.you || {}).length ? h("ul", { class: "sw-you" }, ...Object.values(d.you).map((f) => h("li", {}, f)))
+              : h("p", { class: "sw-dmut" }, `It does not know you yet. Tell it, for example “My name is Sam” or “I'm your captain”.`),
+              d.life?.trust ? h("p", { class: "sw-dmut" }, `It kept ${n0(d.life.trust.kept)} of the ${n0(d.life.trust.n)} things you said. ` + (d.life.trust.trusted ? "It trusts you, so it talks to you openly." : d.life.trust.n < 10 ? "Trust takes ten messages to earn." : `Trust ${Math.round(d.life.trust.value * 100)}%: at 70% it opens up.`)) : ""),
             h("section", {}, h("h4", {}, "Curiosity"), h("p", { class: "sw-big" }, h("strong", {}, r2(D.curiosity)), h("span", {}, `maturity ${r2(D.maturity)}`)),
               h("p", { class: "sw-dmut" }, `${r2(old)} comes from names it has met but not looked up, ${r2(F.term)} from the mesh still left open (${Math.round(n0(F.F) * 100)}% open, ${n0(F.D)} layers deep).`), lineChart(d.series || [])))); },
       notes: () => split([h("p", { class: "sw-dmut sw-lhead" }, `${notes.length} notes · ${n0(L.verified)} let in · ${n0(L.rejected)} turned away`), h("ol", { class: "sw-dl sw-dnotes" }, ...notes.map(noteRow))], inspect()),
@@ -429,13 +453,13 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
             h("time", {}, local(t.at)), h("b", { style: `color:${SC[t.system] || "#d4d4d8"}` }, `${sysTag(t.system)} ${t.kind}`), h("span", {}, t.outcome === "ok" ? "did" : t.outcome), h("p", {}, esc(t.detail)))); }))], inspect()); },
       engines: () => h("div", { class: "sw-eng2" },
         h("div", { class: "sw-stages" }, ...loop.map((s) => { const st = stageOf(s), [name, role] = STAGE[s.system] || [s.name, s.does];
-          return h("section", { style: `--c:${SC[s.system]}` }, h("h4", {}, `${sysTag(s.system)} ${name}`), h("p", { class: "sw-dmut" }, `${role}. ${s.on === false ? "Switched off." : ""}`),
+          return h("section", { style: `--c:${SC[s.system]}` }, h("h4", {}, `${sysTag(s.system)} ${name}`), s.system != null ? auraChip("chat", "Its steps run on") : "", h("p", { class: "sw-dmut" }, `${role}. ${s.on === false ? "Switched off." : ""}`),
             h("ul", {}, ...(s.engines || []).map((e) => { const n = n0(e.ok) + n0(e.skipped) + n0(e.failed);
               return h("li", {}, h("button", { type: "button", title: "Show this engine's steps", onclick: () => { tEngine = e.kind; rSys = null; go("activity"); } },
                 h("span", {}, h("b", {}, e.kind), h("small", {}, n ? `${n0(e.ok)} of ${n} did something` : "never ran")),
                 n ? h("i", { class: "sw-bar" }, h("b", { style: `flex:${n0(e.ok)}` }), h("b", { class: "sk", style: `flex:${n0(e.skipped)}` }), h("b", { class: "fa", style: `flex:${n0(e.failed)}` })) : "",
                 e.blocked ? h("p", {}, `Blocked: ${esc(e.blocked)}`) : e.last && e.last.outcome !== "ok" ? h("p", {}, `Last time: ${esc(e.last.detail)}`) : "")); }))); })),
-        h("section", { class: "sw-cyc" }, h("h4", {}, "Harness cycles"), cycles.length ? h("p", { class: "sw-dmut" }, `${n0(HL.cycles_run)} cycles: the planner proposed ${n0(HL.proposed)} commands, the controller rejected ${n0(HL.rejected)}, ${n0(HL.executed)} ran and the Verifier kept ${n0(HL.kept)}. ${n0(HL.swaps)} model swaps took ${n0(HL.swap_seconds)} s.`) : "",
+        h("section", { class: "sw-cyc" }, h("h4", {}, "Harness cycles"), h("p", { class: "sw-auras" }, "plans on ", auraChip("planner", "The planner runs on"), " · judges on ", auraChip("judge", "The Verifier runs on")), cycles.length ? h("p", { class: "sw-dmut" }, `${n0(HL.cycles_run)} cycles: the planner proposed ${n0(HL.proposed)} commands, the controller rejected ${n0(HL.rejected)}, ${n0(HL.executed)} ran and the Verifier kept ${n0(HL.kept)}. ${n0(HL.swaps)} model swaps took ${n0(HL.swap_seconds)} s.`) : "",
           cycles.length ? h("ol", { class: "sw-dl sw-dnotes" }, ...cycles.slice(0, 8).map((c) => h("li", {}, h("button", { type: "button", "aria-current": String(rCyc === c.cycle), onclick: () => { rCyc = rCyc === c.cycle ? null : c.cycle; paintReport(); } },
               ic((c.verdicts || []).some((v) => v.keep) ? "yes" : (c.executed || []).length ? "wait" : "no"), h("b", {}, `Cycle ${c.cycle}`), h("time", {}, `${(c.executed || []).length} ran`),
               h("p", {}, rCyc === c.cycle ? [...(c.rejected || []).map((r) => `rejected ${r.cmd}: ${r.why}`), ...(c.executed || []).map((r) => `${r.cmd}: ${r.outcome} ${r.detail}`), ...(c.verdicts || []).map((v) => `${v.keep ? "kept" : "dropped"} ${v.cmd}: ${v.why}`)].join(" · ") : (c.proposed || []).join(" · "))))))
@@ -462,11 +486,13 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
               h("label", {}, "commands", h("input", { type: "number", min: 1, max: 12, value: ctl.budget, oninput: (e) => { ctl.budget = Math.max(1, Math.min(12, +e.target.value || 4)); } }))),
             h("p", { class: "sw-dstat", "data-ok": ctl.busy ? "busy" : String(ctl.last?.ok ?? "") }, ctl.busy ? `Running ${ctl.busy}. A cycle calls the model several times and can take minutes.` : ctl.last ? `${ctl.last.label}: ${typeof ctl.last.out === "string" ? ctl.last.out : "done"}` : "Nothing run from here yet."),
             h("div", { class: "sw-dbtns" }, h("button", { type: "button", onclick: () => mind() }, "Open memory"), h("button", { type: "button", onclick: () => wiring() }, "Wiring and rules"), h("button", { type: "button", onclick: () => report(false) }, "Back to the scene"))),
-          h("section", {}, h("h4", {}, "Which model thinks"), h("p", { class: "sw-dmut" }, h("i", { class: "sw-lamp", "data-up": String(!!d.model?.up) }), ` Loaded now: ${esc(d.model?.label)}`),
+          h("section", {}, h("h4", {}, "Which model thinks"), h("p", { class: "sw-dmut" }, h("i", { class: "sw-lamp", "data-up": String(!!d.model?.up) }), ` Default model: ${esc(short(ctl.loaded)) || "not set"} · ${esc(d.model?.label)}`),
             sw?.busy ? h("div", { class: "sw-dswap" }, h("p", {}, `Swapping ${esc(sw.from) || "none"} for ${esc(sw.to)}, ${esc(sw.phase)}`), h("i", { style: `--f:${n0(sw.fraction)}` })) : "",
             !R ? h("p", { class: "sw-dmut" }, "Loading…") : R.error ? h("p", { class: "sw-dmut" }, "Could not read settings.") : h("form", { class: "sw-droles", onsubmit: (e) => { e.preventDefault(); act("save models", () => api("/settings", { method: "PATCH", body: JSON.stringify(R) }).then(() => "models saved")); } },
-              ...[["planner_model", "Planner"], ["chat_model", "Executor and replies"], ["judge_model", "Verifier and gate"]].map(([k, t]) => h("label", {}, t, h("input", { value: R[k], placeholder: "use the loaded model", oninput: (e) => { R[k] = e.target.value.trim(); } }))),
-              h("small", { class: "sw-dmut" }, "Use the exact id Unsloth reports. Empty means no swap."), h("button", { type: "submit", disabled: !!ctl.busy }, "Save models")))); },
+              ...[["planner_model", "Planner: picks its next steps"], ["chat_model", "Replies and steps: talks to you, writes its notes"], ["judge_model", "Verifier: checks notes and replies"]].map(([k, t]) => h("label", { class: "sw-aurad", style: `--aura:${auraOf(R[k] || ctl.loaded)}` }, t,
+                h("select", { onchange: (e) => { R[k] = e.target.value; } }, h("option", { value: "" }, `Default (${short(ctl.loaded) || "the loaded model"})`),
+                  ...[...new Set([...(ctl.models || []), ...(R[k] ? [R[k]] : [])])].map((id) => h("option", { value: id, selected: id === R[k] }, short(id)))))),
+              h("small", { class: "sw-dmut" }, "A role set to another model loads it for that role's turn. Swaps take a while and use memory."), h("button", { type: "submit", disabled: !!ctl.busy }, "Save models")))); },
     };
     const keep = [...panel.querySelectorAll(".sw-dlist, .sw-dsheet, .sw-dbody")].map((x) => x.scrollTop);
     panel.replaceChildren(h("div", { class: "sw-db" },
@@ -479,6 +505,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   async function pullReport(force) {
     if (!reporting || !root.isConnected) { clearInterval(rTimer); rTimer = 0; return; }
     const typing = panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+    if (rTab === "engines") loadRoles();
     if (rTab === "controls") { loadRoles(); try { ctl.swap = await api("/model/swap"); } catch { ctl.swap = null; } }
     if (rTab === "journal") { try { jPages = (await api("/char/journal")).pages; } catch { jPages = jPages || []; } }
     if (rTab === "chat") { try { const [m, c] = await Promise.all([api("/char/mesh"), api("/char")]); cMesh = m; cTurns = c.turns; cnet?.update(cMesh, cTurns); } catch { /* the next pull tries again */ } }
