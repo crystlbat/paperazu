@@ -32,6 +32,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     primer.reset_stale()
     jobs.start()
     yield
+    llm.stop_dory()  # the dory server this app started does not outlive it
 
 
 app = FastAPI(title="Paper Reading Workbench", lifespan=lifespan)

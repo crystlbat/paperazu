@@ -234,3 +234,75 @@ def test_a_step_the_planner_keeps_leaving_out_is_added_to_the_cycle():
     assert harness.starved([{"name": "reflect", "arg": ""}]) in harness.COMMANDS
     assert harness.starved([{"name": "reflect", "arg": ""}]) != "reflect"
     assert harness.starved([]) != "" and harness.starved([{"name": k, "arg": ""} for k in harness.COMMANDS]) == ""
+
+
+class _FakeProc:
+    def __init__(self, *a, **k):
+        self.alive, self.cmd = True, a[0]
+    def poll(self):
+        return None if self.alive else 0
+    def terminate(self):
+        self.alive = False
+    def wait(self, timeout=None):
+        return 0
+
+
+def _engines(monkeypatch, dory_starts=True):
+    """Unsloth with A loaded on 8888, and a dory llama-server that answers on 8080 once this app has started it."""
+    settings.update({"base_url": "http://127.0.0.1:8888/v1", "dory_cmd": "~/llama.cpp-dory/build/bin/llama-server -m dory.gguf --alias dory --port 8080"})
+    calls: list[tuple[str, str, Any]] = []
+    state = {"active": "A"}
+    def api(s, method, path, body=None, timeout=10):  # a stateful Unsloth: unload empties it, load makes the model active
+        calls.append((method, path, body))
+        if path == "unload":
+            state["active"] = ""
+        elif path == "load":
+            state["active"] = body["model_path"]
+        return {"active_model": state["active"], "loaded": [state["active"]] if state["active"] else [], "loading": []} if path == "status" else {}
+    monkeypatch.setattr(llm, "_api", api)
+    started: list[_FakeProc] = []
+    def popen(*a, **k):
+        p = _FakeProc(*a, **k)
+        p.alive = dory_starts
+        started.append(p)
+        return p
+    monkeypatch.setattr(llm.subprocess, "Popen", popen)
+    monkeypatch.setattr(llm, "_up", lambda url, timeout=3: url.startswith("http://127.0.0.1:8080") and any(p.alive for p in started))
+    llm._dory["proc"] = None
+    return calls, started
+
+
+def test_dory_swaps_unsloth_out_starts_its_server_and_takes_the_calls(monkeypatch):
+    calls, started = _engines(monkeypatch)
+    sent: list[tuple[str, str]] = []
+    def client(s, timeout=None, base_url=None):
+        from types import SimpleNamespace as NS
+        def create(model, **kw):
+            sent.append((base_url, model))
+            return NS(choices=[NS(message=NS(content="ok"))])
+        return NS(chat=NS(completions=NS(create=create)))
+    monkeypatch.setattr(llm, "client", client)
+    s = settings.get_all().model_copy(update={"model_name": "dory"})
+    assert llm.chat(s, [{"role": "user", "content": "hi"}]) == "ok"
+    assert ("POST", "unload", {"model_path": "A"}) in calls and len(started) == 1 and started[0].cmd[0].endswith("llama.cpp-dory/build/bin/llama-server")
+    assert sent == [("http://127.0.0.1:8080/v1", "dory")]  # the call went to the dory engine
+    llm.chat(s, [{"role": "user", "content": "again"}])
+    assert len(started) == 1  # up already: no second start
+    # back to Unsloth: our dory stops first, then Unsloth loads the model
+    u = s.model_copy(update={"model_name": "B"})
+    llm.chat(u, [{"role": "user", "content": "now B"}])
+    assert not started[0].alive and ("POST", "load", {"model_path": "B"}) in calls and sent[-1] == ("http://127.0.0.1:8888/v1", "B")
+    assert "dory engine stopped for Unsloth" in [json.loads(r["content"])["detail"] for r in _sheet("Run: model")]
+
+
+def test_a_dory_that_will_not_start_puts_unsloths_model_back(monkeypatch):
+    calls, started = _engines(monkeypatch, dory_starts=False)
+    sw = llm.ensure(settings.get_all(), "dory", poll=0)
+    assert sw["ok"] is False and ("POST", "load", {"model_path": "A"}) in calls
+    assert "the dory server exited" in char.ENGINES["model"]["detail"] and "A loaded back" in char.ENGINES["model"]["detail"]
+
+
+def test_without_a_dory_command_dory_is_just_a_name_on_unsloth(monkeypatch):
+    settings.update({"dory_cmd": ""})
+    s = settings.get_all()
+    assert not llm.is_dory(s, "dory") and llm.url_for(s, "dory") == s.base_url

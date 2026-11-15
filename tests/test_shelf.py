@@ -174,7 +174,7 @@ class _FakeChat:
 
 def _fake_llm(monkeypatch: pytest.MonkeyPatch, text: str | None, seen: dict[str, object]) -> None:
     from types import SimpleNamespace as NS
-    monkeypatch.setattr(llm, "client", lambda s, timeout=None: NS(chat=NS(completions=_FakeChat(text, seen))))
+    monkeypatch.setattr(llm, "client", lambda s, timeout=None, base_url=None: NS(chat=NS(completions=_FakeChat(text, seen))))
     monkeypatch.setattr(llm, "pick_model", lambda s: "m")
 
     def no_json(*a: object, **k: object) -> str:

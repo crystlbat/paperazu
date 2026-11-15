@@ -1,10 +1,14 @@
 """Talk to the Unsloth (llama-server) OpenAI-compatible endpoint."""
 import json
+import os
 import re
+import shlex
+import subprocess
 import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from openai import APIConnectionError, APIError, APIStatusError, AuthenticationError, OpenAI
@@ -13,14 +17,21 @@ from . import context
 from .settings import Settings
 
 
-def client(s: Settings, timeout: float | None = None) -> OpenAI:
-    return OpenAI(base_url=s.base_url, api_key=s.api_key or "none",
+def client(s: Settings, timeout: float | None = None, base_url: str | None = None) -> OpenAI:
+    return OpenAI(base_url=base_url or s.base_url, api_key=s.api_key or "none",
                   timeout=timeout or s.timeout_s, max_retries=0)
 
 
 def model_status(s: Settings) -> dict[str, Any]:
+    if is_dory(s, s.model_name):  # the dory engine starts on first use, so it counts as ready while Unsloth or its command is there
+        try:
+            models = [m.id for m in client(s, timeout=5).models.list()]
+        except APIError:
+            models = []
+        return {"status": "ready", "label": "dory engine" + (" running" if _up(s.dory_url, 2) else " (starts when needed)"), "models": [DORY, *models]}
     try:
         models = [m.id for m in client(s, timeout=5).models.list()]
+        models += [DORY] if s.dory_cmd.strip() else []
     except AuthenticationError:
         return {"status": "wrong_key", "label": "Wrong API key", "models": []}
     except APIConnectionError:  # also covers timeouts
@@ -53,8 +64,10 @@ def pick_model(s: Settings) -> str:
 def test_connection(s: Settings) -> dict[str, Any]:
     start = time.perf_counter()
     try:
-        r = client(s, timeout=min(s.timeout_s, 60)).chat.completions.create(
-            model=pick_model(s) or "default",
+        m = pick_model(s) or "default"
+        _engine_for(s, m)
+        r = client(s, timeout=min(s.timeout_s, 60), base_url=url_for(s, m)).chat.completions.create(
+            model=m,
             messages=[{"role": "user", "content": "Reply with the word OK."}],
             max_tokens=16, temperature=0, extra_body=NO_THINK,
         )
@@ -85,13 +98,106 @@ def _api(s: Settings, method: str, path: str, body: dict[str, Any] | None = None
         return raw
 
 
+DORY = "dory"  # the model name that means the dory engine, as its llama-server is started with --alias dory
+_dory: dict[str, Any] = {"proc": None}  # the dory llama-server this app started, so only that one is stopped
+
+
+def is_dory(s: Settings, model: str) -> bool:
+    return bool(s.dory_cmd.strip()) and model == DORY
+
+
+def url_for(s: Settings, model: str) -> str:
+    """The server that runs `model`: the dory engine for dory, Unsloth for the rest."""
+    return s.dory_url if is_dory(s, model) else s.base_url
+
+
+def _up(url: str, timeout: float = 3) -> bool:
+    try:
+        with urllib.request.urlopen(f"{url.rstrip('/')}/models", timeout=timeout):  # noqa: S310 — the user's own server
+            return True
+    except Exception:
+        return False
+
+
+def _dory_ours() -> bool:
+    p = _dory["proc"]
+    return p is not None and p.poll() is None
+
+
+def stop_dory() -> bool:
+    """Stop the dory llama-server this app started (never one you started yourself). True if one was stopped."""
+    p, _dory["proc"] = _dory["proc"], None
+    if p is None or p.poll() is not None:
+        return False
+    p.terminate()
+    try:
+        p.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait(timeout=5)
+    return True
+
+
+def _to_dory(s: Settings, timeout: float, poll: float) -> dict[str, Any] | None:
+    """The dory engine on: Unsloth's model unloaded to free the memory, the dory llama-server started, waited on until it answers."""
+    from . import char
+    if _up(s.dory_url):
+        return None
+    t0, cur, ok, why = time.time(), "", False, "timed out"
+    SWAP.update(busy=True, **{"from": "unsloth"}, to=DORY, phase="unloading", fraction=0.0, started=time.strftime("%H:%M:%S"))
+    try:
+        st = _api(s, "GET", "status")
+        cur = (st.get("active_model") or "") if isinstance(st, dict) else ""
+        if cur:
+            _api(s, "POST", "unload", {"model_path": cur}, timeout=timeout)
+    except Exception:
+        pass  # Unsloth down or busy: dory may still fit
+    SWAP["phase"] = "loading"
+    try:
+        log = open(Path(__file__).resolve().parent.parent / "data" / "dory.log", "ab")  # noqa: SIM115 — the child keeps it open
+        _dory["proc"] = subprocess.Popen(shlex.split(os.path.expanduser(s.dory_cmd)), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        while time.time() - t0 < timeout:
+            if _up(s.dory_url):
+                ok = True
+                break
+            if not _dory_ours():
+                why = "the dory server exited: see data/dory.log"
+                break
+            time.sleep(poll)
+    except Exception as e:
+        why = str(e)[:120]
+    if not ok:
+        stop_dory()
+        if cur:  # put Unsloth's model back rather than leave both engines empty
+            try:
+                _api(s, "POST", "load", {"model_path": cur}, timeout=timeout)
+                why += f"; {cur} loaded back"
+            except Exception as e:
+                why += f"; could not load {cur} back: {str(e)[:80]}"
+    secs = round(time.time() - t0, 1)
+    SWAP.update(busy=False, phase="ready" if ok else "failed", fraction=1.0 if ok else 0.0)
+    char._engine("model", "ok" if ok else "failed", f"unsloth ({cur or 'nothing'}) → dory engine in {secs:.0f}s" + ("" if ok else f" ({why})"))
+    return {"from": cur or "unsloth", "to": DORY, "seconds": secs, "ok": ok}
+
+
+def _engine_for(s: Settings, model: str) -> None:
+    """Before a call: swap engines only when the call crosses them (dory wanted and not up, or an Unsloth model while our dory runs)."""
+    if (is_dory(s, model) and not (_dory_ours() or _up(s.dory_url, 1))) or (not is_dory(s, model) and _dory_ours()):
+        ensure(s, model)
+
+
 def ensure(s: Settings, model: str, timeout: float = 600, poll: float = 1.0) -> dict[str, Any] | None:
-    """Make `model` the loaded one: unload the current, load it, poll until it is active. None when nothing had to change.
-    Every swap (and every skip) is a "model" engine row: from, to, seconds, ok/failed."""
+    """Make `model` the one that runs, on its engine. dory: Unsloth's model out, the dory llama-server up. Any other: the dory server
+    this app started stopped, then in Unsloth the current model unloaded and this one loaded, polled until active.
+    None when nothing had to change. Every swap (and every skip) is a "model" engine row: from, to, seconds, ok/failed."""
     from . import char  # char imports llm
     if not model:
         return None
     with _swap_lock:
+        if is_dory(s, model):
+            return _to_dory(s, timeout, poll)
+        if stop_dory():  # the two engines do not share the memory: dory leaves before Unsloth loads
+            char._engine("model", "ok", "dory engine stopped for Unsloth")
         try:
             st = _api(s, "GET", "status")
         except Exception as e:
@@ -345,8 +451,10 @@ def chat(s: Settings, messages: list[dict[str, Any]], *, max_tokens: int | None 
         messages = _trim(messages, window(s) - out - 64, min(context.CHARS_PER_TOKEN, learned[2] if learned else 99))
     extra: dict[str, Any] = {"response_format": response_format} if response_format else {}
     try:
-        r = client(s).chat.completions.create(
-            model=pick_model(s) or "default", messages=messages, max_tokens=out,  # type: ignore[arg-type]
+        m = pick_model(s) or "default"
+        _engine_for(s, m)
+        r = client(s, base_url=url_for(s, m)).chat.completions.create(
+            model=m, messages=messages, max_tokens=out,  # type: ignore[arg-type]
             temperature=s.temperature if temperature is None else temperature, extra_body=NO_THINK, **extra)
     except AuthenticationError:
         raise ModelError("Wrong API key. Check it in Settings.")

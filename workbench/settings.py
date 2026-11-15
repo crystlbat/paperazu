@@ -20,6 +20,9 @@ class Settings(BaseModel):
     planner_model: str = ""
     chat_model: str = ""
     judge_model: str = ""
+    # the dory engine: its own llama-server build, started on demand when a role picks "dory"; empty command = no dory engine
+    dory_cmd: str = ""
+    dory_url: str = "http://127.0.0.1:8080/v1"
     temperature: float = Field(0.2, ge=0, le=1)
     max_context_tokens: int = Field(32768, ge=2048, le=262144)
     max_output_tokens: int = Field(1024, ge=64, le=16384)
@@ -35,7 +38,7 @@ class Settings(BaseModel):
     # Dot's personality, in your words; used when Dot talks in the Library
     dot_persona: str = Field("", max_length=300)
 
-    @field_validator("base_url")
+    @field_validator("base_url", "dory_url")
     @classmethod
     def _url(cls, v: str) -> str:
         v = v.strip().rstrip("/")
