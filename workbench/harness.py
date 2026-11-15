@@ -59,7 +59,7 @@ def stale() -> set[str]:
 
 
 STUCK_AFTER = 3  # cycles in a row that kept nothing: it is going round in circles
-UNSTICK = ("goal", "plan", "ask", "wonder", "speculate", "extract")  # the steps that make new work on its own, in the order it tries them; none waits on you
+UNSTICK = ("reflect", "goal", "plan", "ask", "wonder", "speculate", "extract")  # answering what is open first, then the steps that make new work; none waits on you
 
 
 def notice(n: int, plan: list[dict[str, Any]], rejected: list[dict[str, str]], force: bool = False) -> dict[str, Any]:
@@ -83,7 +83,7 @@ def notice(n: int, plan: list[dict[str, Any]], rejected: list[dict[str, str]], f
     idle, have = stale(), {p["name"] for p in plan}
     nxt = next((k for k in UNSTICK if k not in idle and not blocked.get(k) and k not in have and k not in tried), "")
     said = (f"I keep hitting the same wall ({on}). " +
-            (f"So I will {DOES[nxt]} instead." if nxt else "I have speculated on everything I know and asked what would check it. I will rest until something new comes in."))
+            (f"So I will {DOES[nxt]} instead." if nxt else "I have tried every way to make new work on my own and none can run now. I will rest until something new comes in."))
     me = {"stuck": True, "on": on, "try": nxt, "said": said, "spent": not nxt}
     char.add_memory(f"Stuck: {n}", json.dumps(me), source="sheet")
     return me
@@ -292,6 +292,7 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         char.init_db()
         s = settings.get_all()
         n = len(_rows("Cycle: %", 10**9)) + 1
+        failed = ""
         swaps: list[dict[str, Any]] = []
         if sw := llm.ensure(s, s.planner_model):
             swaps.append(sw)
@@ -300,7 +301,7 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         try:
             text = jobs.complete(_role_settings(s, "planner"), msgs, max_tokens=120) or ""
         except Exception as e:
-            text = ""
+            text, failed = "", str(e)[:300]
             char._log("planner", msgs, f"(failed: {e})")
         else:
             char._log("planner", msgs, text)
@@ -320,7 +321,7 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         verdicts = [] if CANCEL.is_set() else verify(executed, s, swaps)
         out = {"cycle": n, "plan_text": text, "proposed": [_text(c) for c in proposed], "rejected": rejected,
                "executed": [{k: x[k] for k in ("cmd", "outcome", "detail")} for x in executed], "verdicts": verdicts,
-               "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps], "self": me}
+               "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps], "self": me, **({"planner_failed": failed} if failed else {})}
         char.add_memory(f"Feedback: {n}", json.dumps(verdicts), source="sheet")
         char.add_memory(f"Cycle: {n}", json.dumps(out), source="sheet")
         kept = sum(v["keep"] for v in verdicts)

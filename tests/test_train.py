@@ -111,7 +111,7 @@ def test_stopping_a_run_makes_the_cycle_in_hand_skip_what_it_has_not_started(mon
 def test_a_run_ends_in_its_own_words_when_it_has_nothing_left_to_try(monkeypatch):
     char.update_profile("Sagira", "You are Sagira.", [], "")
     char.add_memory("Resting: char Sagira", "0", source="sheet")
-    said = "I keep hitting the same wall (x). I have speculated on everything I know and asked what would check it. I will rest until something new comes in."
+    said = "I keep hitting the same wall (x). I have tried every way to make new work on my own and none can run now. I will rest until something new comes in."
     steps = iter([("ok", "reflect: a"), ("stuck", said), ("ok", "never runs")])
     run_id = _run(monkeypatch, [5.0], {"max_steps": 50, "hi": 1.0})
     assert train.status()["runs"][0]["why"] == "used all 50 steps"  # the plain run, for contrast

@@ -129,6 +129,8 @@ def _one_step() -> tuple[str, str]:
             return "skipped", "stopped while waiting its turn"
         c = harness.cycle(force=True, wait=5)
         did = [x for x in c.get("executed", []) if x.get("outcome") == "ok"]
+        if not did and c.get("planner_failed"):  # the model could not be reached or refused: say so, so FAIL_STOP ends the run with the real reason
+            raise RuntimeError(f"the planner's model call failed: {c['planner_failed']}")
         if not did and c.get("self", {}).get("spent"):  # it saw for itself there is nothing left to try
             return "stuck", c["self"]["said"]
         return ("ok" if did else "skipped"), " · ".join(x["cmd"] for x in did) or "cycle did nothing"
