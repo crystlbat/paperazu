@@ -508,7 +508,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     if (rTab === "engines") loadRoles();
     if (rTab === "controls") { loadRoles(); try { ctl.swap = await api("/model/swap"); } catch { ctl.swap = null; } }
     if (rTab === "journal") { try { jPages = (await api("/char/journal")).pages; } catch { jPages = jPages || []; } }
-    if (rTab === "chat") { try { const [m, c] = await Promise.all([api("/char/mesh"), api("/char")]); cMesh = m; cTurns = c.turns; cnet?.update(cMesh, cTurns); } catch { /* the next pull tries again */ } }
+    if (rTab === "chat") { try { const [m, c, t] = await Promise.all([api("/char/mesh"), api("/char"), api("/char/tools").catch(() => ({ nodes: [], edges: [] }))]);
+      cMesh = { nodes: [...m.nodes, ...t.nodes], edges: [...m.edges, ...t.edges] }; cTurns = c.turns; cnet?.update(cMesh, cTurns); } catch { /* the next pull tries again */ } } // its tools join the map here only: the 3D globe keeps to its own layers
     try { rData = await api("/char/report"); const ks = new Set((rData.trace || []).map(tkey)); rFresh = rSeen ? new Set([...ks].filter((k) => !rSeen.has(k))) : new Set(); rSeen = ks; if (force === true || !typing) paintReport(); }
     catch { if (!rData) panel.replaceChildren(h("p", { class: "sw-rh" }, "Report unavailable (the server may need a restart)")); else panel.prepend(h("p", { class: "sw-rh" }, "Report unavailable (the server may need a restart)")); }
   }
@@ -521,5 +522,5 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   // the page always opens on the mesh, so you see it grow; the report is one click away
   markTint(); refresh(); frame();
   function expand(on = !growTo) { growTo = on ? 1 : 0; if (on) Object.keys(seen).filter((k) => HOME[k]).forEach(agentOf); rings.push(0); status.textContent = on ? "Dot holds the whole net now. /expand-to-net again to gather it back." : "Dot gathers back to its centre."; }
-  return { expand, report, palette, data, say, heard, fire, stepped, refresh, busy: () => { busy = true; } };
+  return { expand, report, palette, data, say, heard, fire, stepped, refresh, reform: (c) => { if (c) form = c; }, busy: () => { busy = true; } };
 }

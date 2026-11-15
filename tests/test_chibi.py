@@ -63,3 +63,24 @@ def test_a_person_with_a_stray_robot_mention_stays_humanoid():
 def test_a_butler_gets_a_suit_bow_tie_and_moustache_not_a_hologram():
     f = chibi.spec_from("Alfred", "Alfred is the butler, with a moustache. Alfred wears a tailcoat. Alfred was once an artificial intelligence.")["features"]
     assert {"suit", "bowtie", "moustache"} <= set(f) and "holo" not in f and "cape" not in f
+
+
+def test_you_can_change_its_outfit_from_chat_and_back(monkeypatch):
+    from workbench import char, jobs
+    calls = []
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: calls.append(m) or "ok")
+    char.update_profile("Alfred", "You are Alfred.", [], "")
+    chibi._save("Alfred", {"name": "Alfred", "kind": "humanoid", "colours": ["#2a2d35"], "features": ["suit", "bowtie"]})
+    r = char.say("please wear a red cape")
+    assert r["reply"] == "Done: I'm wearing the cape, in red." and r["outfit"]["features"] == ["suit", "bowtie", "cape"] and r["outfit"]["colours"][0] == "#e5484d" and not calls
+    assert char.say("take off the bow tie")["outfit"]["features"] == ["suit", "cape"]
+    assert "nothing like that" in char.say("put on a banana")["reply"]
+    assert char.say("I wear glasses at work")["outfit"] is None  # you telling it about you is not an order
+    back = char.say("back to your usual look")["outfit"]
+    assert back["features"] == ["suit", "bowtie"] and back["colours"] == ["#2a2d35"]
+
+
+def test_a_machine_says_what_its_body_cannot_show():
+    chibi._save("Sagira", {"name": "Sagira", "kind": "mech", "colours": [], "features": ["optic"]})
+    got = chibi.dress("Sagira", "wear a suit and goggles")
+    assert got["spec"]["features"] == ["optic", "visor"] and "can't show suit" in got["said"]

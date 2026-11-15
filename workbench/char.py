@@ -15,7 +15,7 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from . import db, jobs, llm, settings, space, websearch
+from . import chibi, db, jobs, llm, settings, space, websearch
 from .space import fresh
 
 DEFAULT_PERSONA = (
@@ -1472,6 +1472,38 @@ def trust() -> dict[str, Any]:
     return {"kept": kept, "n": len(rows), "value": value, "trusted": len(rows) >= TRUST_AFTER and value >= HIGH}
 
 
+TOOL_MAKES = {"plan": ("plan", None), "goal": ("question", None), "ask": ("question", None), "wonder": ("question", None), "reflect": ("note", None),
+              "check": ("note", None), "extract": ("name", "name"), "ideas": ("name", "idea"), "fold": ("name", None), "reply": ("chat", "it"), "review": ("chat", "it"), "tune": ("trait", None)}
+TOOL_FLOW = [("plan", "goal"), ("goal", "reflect"), ("ask", "reflect"), ("wonder", "reflect"), ("want", "reflect"), ("reflect", "check"), ("reflect", "extract"),
+             ("extract", "ideas"), ("extract", "fold"), ("check", "journal"), ("reply", "review"), ("review", "tune"), ("bake", "plan")]  # which step feeds which
+
+
+def toolnet(mesh_nodes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Its tools as a graph: every step it has run, its record, the model it runs on, the steps it feeds, and the newest things it made."""
+    from . import harness  # harness imports char
+    con = db.connect()
+    runs = con.execute("SELECT title, content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Run: %' AND id > ? ORDER BY id", (_start(),)).fetchall()
+    con.close()
+    rec: dict[str, dict[str, Any]] = {}
+    for r in runs:
+        k, c = r["title"].removeprefix("Run: "), json.loads(r["content"] or "{}")
+        e = rec.setdefault(k, {"ok": 0, "n": 0, "last": ""})
+        e["n"] += 1; e["ok"] += c.get("outcome") == "ok"; e["last"] = c.get("detail", "")
+    kinds = [k for k in ENGINE_ORDER if k in rec and (k in SYS_OF or k == "reply")]
+    s = settings.get_all()
+    model = s.chat_model or s.model_name or "the loaded model"
+    nodes = [{"id": f"tool:{k}", "layer": "tool", "label": k, "kind": "step", "state": "ok" if rec[k]["ok"] else "idle",
+              "body": f"{harness.DOES.get(k, 'talks to you')}. {rec[k]['ok']} of {rec[k]['n']} runs did something. Last: {rec[k]['last'][:160]}"} for k in kinds]
+    nodes.append({"id": "tool:model", "layer": "tool", "label": model.split("/")[-1], "kind": "model", "state": "ok", "body": f"The model its steps and replies run on: {model}"})
+    edges = [["tool:model", f"tool:{k}"] for k in kinds if k not in NO_MODEL] + [[f"tool:{a}", f"tool:{b}"] for a, b in TOOL_FLOW if a in rec and b in rec]
+    for k in kinds:  # what each made: its newest few, so the map stays readable
+        if k in TOOL_MAKES:
+            layer, kind = TOOL_MAKES[k]
+            made = [n for n in (mesh_nodes or []) if n["layer"] == layer and (kind is None or n.get("kind") == kind)]
+            edges += [[f"tool:{k}", n["id"]] for n in made[-6:]]
+    return {"nodes": nodes, "edges": edges}
+
+
 def _hear(turn_id: int, text: str, told: list[str], lit: list[str], mem_rows: list[Any], up: str) -> bool:
     """Keep or let go: it keeps what tells it who you are, touches its world, pushes it on or says something long enough to matter; small talk drifts."""
     kept = bool(told or lit or mem_rows or up or len(text.split()) >= 12)
@@ -2423,6 +2455,10 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
             direct = got[0]
             extra_events += [{"var": v["id"], "name": v["name"], "trigger": "made", "say": ""} for v in got[1]]
 
+    outfit = None  # "wear a red cape": the app changes its chibi look itself and says so; no model to promise what it cannot draw
+    if direct is None and not become_match and (dr := chibi.dress(get_profile()["name"], text)):
+        direct, outfit = dr["said"], dr["spec"]
+
     # 4. The character's own moods
     _, moods = update_coupled_system(text)
     low = text.lower()  # "what is the count of mango?" asks about a variable: answered from its value, not researched
@@ -2615,6 +2651,7 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
         "questions": suggested_questions,
         "graph": graph(),
         "recall": _leaned({"notes": [{"id": str(r["id"]), "title": r["title"]} for r in mem_rows], "names": lit}),
+        "outfit": outfit,
     }
 
 

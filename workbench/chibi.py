@@ -145,3 +145,53 @@ def forget(name: str) -> None:
     with con:
         con.execute("DELETE FROM char_chibi WHERE name = ?", (name,))
     con.close()
+
+
+# ---------- outfits from chat: "wear a red cape", "put on goggles", "take off the helmet", "back to your usual look" ----------
+WEAR = {"cape": r"capes?|cloaks?|robes?|gowns?", "helmet": r"helmets?|hats?|caps?|hoods?", "visor": r"visors?|goggles|sunglasses|glasses|shades",
+        "suit": r"suits?|tuxedos?|tailcoats?|blazers?", "bowtie": r"bow ?ties?|ties?", "wings": r"wings?", "horns": r"horns?", "ears": r"(?:cat |fox |bunny )?ears",
+        "antenna": r"antennae?|antennas", "tail": r"tails?", "moustache": r"mo?ustaches?", "hair_long": r"long hair|ponytails?|braids?",
+        "hair_short": r"short hair", "grey_hair": r"gr[ae]y hair|white hair", "circuits": r"circuits?|glyphs?", "holo": r"holograms?|hologram look"}
+ON_MECH = {"cape", "helmet", "visor", "wings", "horns", "ears", "antenna", "tail", "circuits"}  # what a machine body can show (see drawChibi)
+ASK = re.compile(r"(?i)(?:^|[.!?]\s+|\b(?:please|can you|could you|would you|now|go|you should)\s+)(wear|put on|try on|dress (?:up )?(?:in|as|with)|take off|remove (?:your|the)|lose the)\s+(.{2,80})"
+                 r"|\b(change|switch) (?:your )?(?:outfit|clothes|look)(?: to| into)?\s*(.{0,80})|\b(back to your (?:usual|normal|old|own) (?:look|outfit|self|clothes))")
+NOUNS = "capes, hats, goggles, suits, bow ties, wings, horns, ears, antennae, tails, moustaches and hair"
+
+
+def dress(name: str, text: str) -> dict[str, Any] | None:
+    """Change the persona's chibi outfit when you ask it to; None when the message asks for no change. Pure on the stored look: no web, no model."""
+    m = ASK.search(text)
+    if not m or (spec := cached(name)) is None:
+        return None
+    base = spec.setdefault("base", {"features": list(spec.get("features", [])), "colours": list(spec.get("colours", []))})
+    verb, what = (m.group(1) or m.group(3) or "").lower(), (m.group(2) or m.group(4) or "")
+    if m.group(5) or re.search(r"(?i)\b(?:usual|normal|original|default|old)\b", what):
+        spec.update(features=list(base["features"]), colours=list(base["colours"]))
+        _save(name, spec)
+        return {"spec": spec, "said": "Back to my usual look."}
+    off = verb.startswith(("take", "remove", "lose"))
+    items = [f for f, p in WEAR.items() if re.search(rf"(?i)\b(?:{p})\b", what)]
+    cols = list(dict.fromkeys(hx for w, hx in COLOURS.items() if re.search(rf"(?i)\b{w}\b", what)))
+    if not items and not cols:
+        return {"spec": None, "said": f"I have nothing like that to wear. I can wear {NOUNS}, in any colour."}
+    shows = items if spec.get("kind") != "mech" else [f for f in items if f in ON_MECH]
+    cant = [f for f in items if f not in shows]
+    feats = [f for f in spec.get("features", []) if not (off and f in items)] + ([] if off else [f for f in shows if f not in spec.get("features", [])])
+    if "hair_short" in shows and not off:
+        feats = [f for f in feats if f != "hair_long"]
+    if "hair_long" in shows and not off:
+        feats = [f for f in feats if f != "hair_short"]
+    spec.update(features=feats, colours=(cols + [c for c in spec.get("colours", []) if c not in cols])[:2] if cols and not off else spec.get("colours", []))
+    _save(name, spec)
+    say = lambda fs: ", ".join({"bowtie": "bow tie", "hair_long": "long hair", "hair_short": "short hair", "grey_hair": "grey hair"}.get(f, f) for f in fs)
+    said = (f"Took off the {say(items)}." if off else (f"Done: I'm wearing the {say(shows)}" if shows else "Done: a new colour") + (f", in {' and '.join(w for w in COLOURS if re.search(rf'(?i)\b{w}\b', what))}" if cols else "") + ".")
+    if cant:
+        said += f" A body like mine can't show {say(cant)}."
+    return {"spec": spec, "said": said}
+
+
+def _save(name: str, spec: dict[str, Any]) -> None:
+    con = _con()
+    with con:
+        con.execute("INSERT OR REPLACE INTO char_chibi (name, data) VALUES (?, ?)", (name, json.dumps(spec)))
+    con.close()

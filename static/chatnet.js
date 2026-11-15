@@ -3,9 +3,9 @@
 // makeChatNet() builds it once and keeps it (the report repaints around it, the graph keeps its layout and keeps moving).
 // update(mesh, turns) feeds it /char/mesh and /char turns: new nodes pop in next to what they are wired to, so you watch it grow.
 // Subnets: chips pick which layers show, so the one web splits into its maps (names, notes, questions, traits, chat).
-const CN_LAYERS = { name: ["Entities", "#7dffa8"], note: ["Notes", "#6ff7ff"], question: ["Questions", "#ffd27a"], plan: ["Plans", "#b49cff"], trait: ["Traits", "#ff7ac6"], chat: ["Chat", "#8b93a7"] };
+const CN_LAYERS = { name: ["Entities", "#7dffa8"], note: ["Notes", "#6ff7ff"], question: ["Questions", "#ffd27a"], plan: ["Plans", "#b49cff"], trait: ["Traits", "#ff7ac6"], chat: ["Chat", "#8b93a7"], tool: ["Tools", "#ffb347"] };
 const CN_NETS = [["all", "Everything", Object.keys(CN_LAYERS)], ["world", "World map", ["name", "note"]], ["entities", "Entities", ["name"]],
-  ["mind", "What it wonders", ["question", "plan", "name"]], ["traits", "Traits", ["trait", "chat"]], ["notes", "Notes", ["note"]]];
+  ["mind", "What it wonders", ["question", "plan", "name"]], ["traits", "Traits", ["trait", "chat"]], ["notes", "Notes", ["note"]], ["tools", "Tools", ["tool", "plan", "question", "note", "name"]]];
 
 function makeChatNet() {
   const cv = h("canvas", { class: "cn-cv", "aria-label": "Map of what it knows. Hover a node to read it." }), g = cv.getContext("2d");
@@ -59,8 +59,10 @@ function makeChatNet() {
     const deg = {}; for (const [a, b] of edges) { deg[a] = (deg[a] || 0) + 1; deg[b] = (deg[b] || 0) + 1; }
     for (const n of list) { const [x, y] = P(n), c = CN_LAYERS[n.layer]?.[1] || "#8b93a7", r = (3 + Math.min(7, Math.sqrt(deg[n.id] || 0) * 1.6)) * (still ? 1 : .3 + .7 * n.born);
       if (n.born < 1 && !still) { g.strokeStyle = c; g.globalAlpha = 1 - n.born; g.beginPath(); g.arc(x, y, r + 14 * n.born, 0, 6.283); g.stroke(); g.globalAlpha = 1; } // a new one rings as it lands
-      g.fillStyle = c; g.globalAlpha = n.state === "dropped" ? .35 : 1; g.beginPath(); g.arc(x, y, r, 0, 6.283); g.fill(); g.globalAlpha = 1;
-      if (n === hover || (n.layer === "name" && (deg[n.id] || 0) >= 2) || n.layer === "trait") { g.font = "12px ui-sans-serif, system-ui, sans-serif"; g.fillStyle = n === hover ? "#fff" : "rgba(201,205,214,.85)"; g.textAlign = "center";
+      g.fillStyle = c; g.globalAlpha = n.state === "dropped" || n.state === "idle" ? .35 : 1; g.beginPath();
+      if (n.layer === "tool" && n.kind === "model") { g.lineWidth = 3; g.strokeStyle = c; g.arc(x, y, r + 4, 0, 6.283); g.stroke(); g.lineWidth = 1; } // the model: a ring every step hangs from
+      else if (n.layer === "tool") { g.rect(x - r, y - r, r * 2, r * 2); g.fill(); } else { g.arc(x, y, r, 0, 6.283); g.fill(); } g.globalAlpha = 1; // tools are squares, what it knows is dots
+      if (n === hover || (n.layer === "name" && (deg[n.id] || 0) >= 2) || n.layer === "trait" || n.layer === "tool") { g.font = "12px ui-sans-serif, system-ui, sans-serif"; g.fillStyle = n === hover ? "#fff" : "rgba(201,205,214,.85)"; g.textAlign = "center";
         g.fillText(n.label.length > 32 ? `${n.label.slice(0, 31)}…` : n.label, x, y - r - 6); }
       n.sx = x; n.sy = y; n.sr = r; }
     count.textContent = `${list.length} of ${nodes.size} shown · ${edges.filter(([a, b]) => on.has(a) && on.has(b)).length} wires`;

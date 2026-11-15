@@ -11,7 +11,9 @@ async function renderVerse() {
   const who = h("input", { name: "who", placeholder: "e.g. Alfred from Batman", "aria-label": "Who the new persona should be", maxlength: "80" }), err = h("small", { role: "alert" });
   const bar = h("div", { class: "vs-making", role: "status", hidden: "" }, h("i"), h("span"));
   const make = h("form", { class: "vs-new" }, h("span", {}, "New persona"), who, h("button", { type: "submit" }, "Create"), err, bar);
-  root.append(cv, h("header", { class: "vs-top" }, h("a", { href: "#library" }, "← Library"), h("h1", {}, "Verse"), h("p", {}, "The model at the centre, your personas around it. One is awake at a time.")), card, h("footer", { class: "vs-foot" }, list, make));
+  const track = h("section", { class: "vs-race", "aria-label": "The race: how far each persona has come", hidden: "" });
+  const raceBtn = h("button", { type: "button", class: "vs-racebtn", "aria-pressed": "false", onclick: () => { track.hidden = !track.hidden; raceBtn.setAttribute("aria-pressed", String(!track.hidden)); raceBtn.textContent = track.hidden ? "Race" : "Close race"; race(); } }, "Race");
+  root.append(cv, h("header", { class: "vs-top" }, h("a", { href: "#library" }, "← Library"), h("h1", {}, "Verse"), h("p", {}, "The model at the centre, your personas around it. One is awake at a time."), raceBtn), track, card, h("footer", { class: "vs-foot" }, list, make));
   view.append(root);
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
   let W = 1, H = 1, K = 1, ps = [], sel = "", model = { status: "", label: "Checking the model…", name: "" }, harness = { status: "", label: "Harness waits for the model", on: 0, n: 0 }, tick = 0, spin = 0, over = false, busy = false, beam = 0, hits = [], doing = "", making = "", made = 0, twin = 0, bornName = "", bornAt = 0;
@@ -32,8 +34,18 @@ async function renderVerse() {
       h("div", { class: "vs-acts" }, h("button", { type: "button", class: "vs-enter", onclick: () => p.live ? (location.hash = "#char") : go("/verse/enter", { method: "POST", body: JSON.stringify({ name: p.name }) }, () => { location.hash = "#char"; }) }, p.live ? "Enter" : "Wake and enter"),
         ...(p.live ? [h("small", {}, "To delete it, enter another persona first.")] : [del])), msg);
   }
+  function race() { // every persona on one track: distance is what it learned and let in; the leader sets the finish line
+    if (track.hidden) return;
+    const rs = [...ps].sort((a, b) => (b.race?.distance || 0) - (a.race?.distance || 0)), top = Math.max(1, rs[0]?.race?.distance || 1);
+    track.replaceChildren(h("header", {}, h("h2", {}, "The race"), h("small", {}, "Distance: notes let in count 3, notes 1, names ½, journal pages 5. Pace: steps that did something, per hour.")),
+      h("ol", {}, ...rs.map((p, i) => { const r = p.race || {}, st = !p.live ? "in the garage" : p.mode === "sleeping" ? "asleep" : p.tired ? "resting" : "racing";
+        return h("li", { style: `--c:${vsLite(p.tint)}`, "data-st": st },
+          h("b", { class: "vs-pos" }, `P${i + 1}`), h("span", { class: "vs-who" }, p.name, h("small", {}, st)),
+          h("div", { class: "vs-lane" }, h("i", { class: "vs-car", style: `left:${Math.round(92 * (r.distance || 0) / top)}%` }), h("i", { class: "vs-flag" })),
+          h("p", { class: "vs-stats" }, `${r.distance || 0} m · ${r.verified || 0} let in · ${r.names || 0} names · lap ${r.laps || 0} · ${r.pits || 0} pit stop${r.pits === 1 ? "" : "s"} · pace ${r.pace || 0}/h`)); })));
+  }
   function apply(d) { const was = Object.fromEntries(ps.map((p) => [p.name, p])); ps = d.personas; ps.forEach((p) => { p.k = was[p.name]?.k || 0; p.chibi ||= was[p.name]?.chibi; p.asked = was[p.name]?.asked; });
-    if (!ps.some((p) => p.name === sel)) sel = ps[0]?.name || ""; ps.forEach((p, i) => { p.r = 200 + i * 78; p.a0 = i * 2.3; p.w = .0016 / (1 + i * .45); }); show(); }
+    if (!ps.some((p) => p.name === sel)) sel = ps[0]?.name || ""; ps.forEach((p, i) => { p.r = 200 + i * 78; p.a0 = i * 2.3; p.w = .0016 / (1 + i * .45); }); show(); race(); }
   make.addEventListener("submit", async (e) => { e.preventDefault(); err.textContent = ""; const name = who.value.trim();
     if (!name) { err.textContent = "Say who it should be first."; return; }
     const b = make.querySelector("button"); b.disabled = true; b.textContent = "Looking them up…"; busy = true; // the model reads up on them: this takes a while
@@ -100,6 +112,6 @@ async function renderVerse() {
   frame();
   api("/model/status").then((m) => { model = { status: m.status, label: m.label, name: "" };
     if (m.status === "ready") { harness = { status: "", label: "Checking the harness…" }; api("/char/systems").then((r) => { const on = r.systems.filter((x) => x.on).length; harness = { status: "ready", label: `Harness checked · ${on} of ${r.systems.length} systems on` }; }).catch(() => { harness = { status: "down", label: "Harness check failed" }; }); }
-    return api("/settings"); }).then((s) => { model.name = (s.model || "").split("/").pop(); }).catch(() => { if (!model.status) model = { status: "down", label: "Model not reachable", name: "" }; });
+    return api("/settings"); }).then((s) => { model.name = (s.model_name || "").split("/").pop(); }).catch(() => { if (!model.status) model = { status: "down", label: "Model not reachable", name: "" }; });
   setTimeout(learn, 8000); const loop = setInterval(() => root.isConnected ? learn() : clearInterval(loop), 30000);
 }

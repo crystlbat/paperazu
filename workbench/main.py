@@ -1036,6 +1036,12 @@ def char_journal() -> dict[str, Any]:
     return {"pages": char.journal()}
 
 
+@app.get("/char/tools")
+def char_tools() -> dict[str, Any]:
+    """Its tools as a graph, wired into its mesh: what each step made, which feeds which, and the model they run on."""
+    return char.toolnet(char.mesh()["nodes"])
+
+
 @app.get("/char/life")
 def char_life() -> dict[str, Any]:
     """Its needs, mood shifts, wants and trust."""

@@ -816,6 +816,7 @@ async function renderSpace(base = "/space") {
     const found = (r.events || []).filter((e) => e.results); // the last search a rule ran comes up as a card
     const opened = (r.events || []).find((e) => e.open); // a rule opened a paper: Dot takes you there
     const sheetEv = (r.events || []).find((e) => e.trigger === "set" && e.sheet); // Dot became someone: show who
+    if (r.outfit) web?.reform(r.outfit); // it changed its chibi outfit: the new look shows at once
     if (r.card) showCard(r.card);
     else if (sheetEv) showCard({ kind: "job", title: `${sheetEv.name}'s sheet`, status: "Character sheet",
       result: Object.entries(sheetEv.sheet).map(([k, v]) => `${k}: ${v || "learns this while asleep"}`).join("\n") });

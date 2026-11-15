@@ -1469,3 +1469,16 @@ def test_asleep_it_neither_answers_nor_learns_but_a_step_you_run_still_runs(monk
     char.set_mode("curious")
     char.say("hello")
     assert calls
+
+
+def test_its_tools_are_a_graph_wired_to_what_they_made_and_the_model():
+    char.update_profile("Alfred", "You are Alfred.", [], "")
+    char.add_memory("Resting: char Alfred", "0", source="sheet")
+    n = char.add_memory("Reflection: Wayne Manor", "The manor.", source="reflection")["id"]
+    char._engine("reflect", "ok", "Wayne Manor: The manor.")
+    char._engine("check", "skipped", "no new note to check")
+    t = char.toolnet(char.mesh()["nodes"])
+    ids = {x["id"]: x for x in t["nodes"]}
+    assert {"tool:reflect", "tool:check", "tool:model"} <= set(ids) and ids["tool:check"]["state"] == "idle"
+    assert ["tool:reflect", f"m{n}"] in t["edges"] and ["tool:reflect", "tool:check"] in t["edges"] and ["tool:model", "tool:reflect"] in t["edges"]
+    assert "1 of 1 runs did something" in ids["tool:reflect"]["body"]

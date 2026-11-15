@@ -137,3 +137,17 @@ def test_a_command_is_not_a_persona_name():
     c = TestClient(app)
     assert c.post("/verse/new", json={"who": "/step"}).status_code == 422
     assert c.post("/verse/new", json={"who": "123"}).status_code == 422
+
+
+def test_the_race_counts_distance_pace_laps_and_pit_stops_from_its_own_rows():
+    from workbench import verse
+    rows = [{"title": "Reflection: a", "content": "x", "source": "reflection", "created_at": "2026-11-14 10:00:00"},
+            {"title": "Checked: 1", "content": "keep", "source": "sheet", "created_at": "2026-11-14 10:10:00"},
+            {"title": "Entity: Osiris", "content": "1", "source": "entity", "created_at": "2026-11-14 10:20:00"},
+            {"title": "Journal: 2026-11-14", "content": "{}", "source": "sheet", "created_at": "2026-11-14 10:30:00"},
+            {"title": "Answered: 9", "content": "{}", "source": "sheet", "created_at": "2026-11-14 10:40:00"},
+            {"title": "Run: reflect", "content": '{"outcome": "ok"}', "source": "sheet", "created_at": "2026-11-14 11:00:00"},
+            {"title": "Run: check", "content": '{"outcome": "skipped"}', "source": "sheet", "created_at": "2026-11-14 12:00:00"}]
+    r = verse.race(rows)
+    assert r == {"distance": 9.5, "verified": 1, "notes": 1, "names": 1, "laps": 1, "pits": 1, "steps": 2, "ok": 1, "pace": 0.5}
+    assert verse.personas()["personas"][0]["race"]["steps"] >= 0

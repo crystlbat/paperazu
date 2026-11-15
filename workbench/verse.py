@@ -7,6 +7,7 @@ learned is lost and nothing leaks between personas. Only the live one learns.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 from . import char, chibi, db
@@ -107,19 +108,39 @@ def delete(name: str) -> None:
     chibi.forget(name)  # its look goes with it
 
 
+def race(mems: list[dict[str, Any]]) -> dict[str, Any]:
+    """How far a persona has come, from its own rows: what it learned and let in is distance, steps that did something per hour is pace,
+    journal pages are laps, and corrections it took are pit stops."""
+    t = lambda p: [m for m in mems if m["source"] == "sheet" and m["title"].startswith(p)]
+    runs = [json.loads(m["content"] or "{}").get("outcome") for m in t("Run: ")]
+    notes = sum(m["source"] == "reflection" for m in mems)
+    verified = sum(m["content"] == "keep" for m in t("Checked: "))
+    names = sum(m["source"] == "entity" and m["title"].startswith("Entity: ") for m in mems)
+    laps, pits = len(t("Journal: ")), len(t("Answered: "))
+    when = sorted(m["created_at"] for m in mems if m.get("created_at"))
+    hours = max(0.25, (datetime.fromisoformat(when[-1]) - datetime.fromisoformat(when[0])).total_seconds() / 3600) if len(when) > 1 else 0.25
+    ok = runs.count("ok")
+    return {"distance": round(verified * 3 + notes + names * 0.5 + laps * 5, 1), "verified": verified, "notes": notes, "names": names,
+            "laps": laps, "pits": pits, "steps": len(runs), "ok": ok, "pace": round(ok / hours, 1)}
+
+
 def personas() -> dict[str, Any]:
     """Every persona for the /verse screen: the live one with what it is doing right now, the stored ones as they were left."""
     w = char.wiring()
     live = char.get_profile()
     tr = w["trace"][0] if w["trace"] else None
-    out = [{"name": live["name"], "tint": char.readable(live["tint"]), "live": True, "mode": w["mode"], "vars": [{"name": s["name"], "value": s["value"]} for s in w["signals"]],
+    con = _con()
+    m = _marker(con)
+    live_rows = [dict(r) for r in con.execute("SELECT title, content, source, created_at FROM char_memories WHERE id >= ?", (m["id"] if m else 0,))]
+    con.close()
+    out = [{"name": live["name"], "tint": char.readable(live["tint"]), "live": True, "race": race(live_rows), "tired": char.tired(), "mode": w["mode"], "vars": [{"name": s["name"], "value": s["value"]} for s in w["signals"]],
             "chibi": chibi.cached(live["name"]), "doing": f"{tr['kind']} · {tr['topic']}" if tr else "idle", "at": tr["at"] if tr else "", "holds": w["memory"][1]["holds"], "next": w["next"]}]
     con = _con()
     for row in con.execute("SELECT name, data, updated_at FROM verse ORDER BY updated_at DESC"):
         d = json.loads(row["data"])
         notes = sum(m["source"] == "reflection" for m in d["memories"])
         names = sum(m["source"] == "entity" for m in d["memories"])
-        out.append({"name": row["name"], "tint": char.readable(d["profile"]["tint"]), "live": False, "mode": "asleep",
+        out.append({"name": row["name"], "tint": char.readable(d["profile"]["tint"]), "live": False, "mode": "asleep", "race": race(d["memories"]),
                     "vars": [{"name": v["name"], "value": v["value"]} for v in d["vars"]] + [{"name": r["name"], "value": r["value"]} for r in d["rules"]],
                     "chibi": chibi.cached(row["name"]), "doing": "asleep", "at": row["updated_at"], "holds": f"{notes} notes · {names} names", "next": ""})
     con.close()
