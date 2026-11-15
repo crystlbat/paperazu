@@ -1310,3 +1310,14 @@ body:has(.st) .sp-ear { position: fixed; z-index: 70; }
 .f1-verdict :is(p, ol li) { max-width: none !important; display: block; -webkit-line-clamp: unset !important; line-clamp: none; overflow: visible !important; white-space: normal !important; text-overflow: clip !important; width: auto !important; }
 .f1-verdict .f1-vnext { max-width: 80ch !important; }
 .f1-vrows ol { width: 100%; max-width: none !important; min-width: 0; }
+.st-modes { display: grid; gap: 8px; } .st-modes div { display: flex; flex-wrap: wrap; border: 1px solid rgb(255 255 255 / .16); width: max-content; max-width: 100%; }
+.st-modes button { background: none; border: 0; border-right: 1px solid rgb(255 255 255 / .16); color: rgb(255 255 255 / .55); padding: 8px 12px; font: 11px var(--mono, monospace); letter-spacing: .14em; text-transform: uppercase; cursor: pointer; }
+.st-modes button:last-child { border-right: 0; } .st-modes button:hover { color: #fff; }
+.st-modes button[aria-checked="true"] { background: var(--sig); color: #000; }
+.st-modes small { font: 12px/1.5 var(--mono, monospace); color: rgb(255 255 255 / .6); max-width: 46ch; }
+/* what it knows: the flow it grows along, this run's part in yellow */
+.kg { border-top: 1px solid rgb(255 255 255 / .16); margin-top: 28px; padding-top: 22px; display: grid; gap: 12px; font-family: var(--mono, monospace); }
+.kg h3 { margin: 0; font: 400 clamp(28px, 3.4vw, 52px)/1 var(--mono, monospace); letter-spacing: -.04em; text-transform: uppercase; color: #fff; }
+.kg-counts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 28px; font-size: 12px; color: rgb(255 255 255 / .6); }
+.kg-counts b { color: #fff; font-weight: 400; } .kg-counts i { color: #ffe600; font-style: normal; }
+.kg-plot svg { display: block; width: 100%; height: auto; font-family: var(--mono, monospace); overflow: visible; }

@@ -358,7 +358,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
         st((n.names || []).length ? "yes" : "wait", "Joined the mesh", h("p", {}, (n.names || []).length ? n.names.map(esc).join(", ") : "No names taken from it yet.")))); };
   const TABS = [["story", "Story"], ["letter", "Letter"], ["chat", "Chat"], ["journal", "Journal"], ["notes", "Notes"], ["activity", "Activity"], ["engines", "Engines"], ["controls", "Controls"]];
   const MODE_DOES = { sleeping: "Asleep: no replies and no learning, so nothing you type reaches the model. Swap models and test with Run one step.", quiet: "Only answers you. Never learns by itself.", curious: "Learns by itself while you are away.", proactive: "Learns, then tells you what it found.", planner: "Idle time runs harness cycles: planner, controller, executor, Verifier." };
-  const ctl = { budget: 4, roles: null, busy: "", last: null, swap: null }; let rCyc = null, jPages = null, cnet = null, cMesh = null, cTurns = null; // its study journal, pulled while that tab is open
+  const ctl = { budget: 4, roles: null, busy: "", last: null, swap: null }; let rCyc = null, jPages = null, cnet = null, cMesh = null, cTurns = null, sMesh = null; // its study journal, pulled while that tab is open
   try { rTab = localStorage.getItem("sw-rtab") || "story"; } catch { rTab = "story"; }
   if (!TABS.some(([k]) => k === rTab)) rTab = "story";
   const go = (k) => { if (rTab !== "story") ctl.lastTab = rTab; rTab = k; try { localStorage.setItem("sw-rtab", k); } catch { /* not remembered */ } if (k === "controls" || k === "engines") loadRoles(); paintReport(); };
@@ -495,6 +495,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
           onchange: (e) => { const v = e.target.value; act(`model ${v}`, () => api("/settings", { method: "PATCH", body: JSON.stringify({ model_name: v }) }).then(() => `now thinking on ${v}`)); } },
           ...d.models.map((m) => h("option", { value: m, selected: m === d.model_name }, m.split("/").pop())))
           : h("strong", { title: "The only model this server lists. Load another in your model server to pick it here." }, esc((d.model_name || "no model set").split("/").pop())))),
+        h("div", { class: "st-modes" }, h("div", { role: "radiogroup", "aria-label": "Learning mode" }, ...Object.keys(MODE_DOES).map((m) => h("button", { type: "button", role: "radio", "aria-checked": String(d.mode === m), title: MODE_DOES[m], disabled: !!ctl.busy,
+          onclick: () => act(`mode ${m}`, () => api("/char/wiring", { method: "POST", body: JSON.stringify({ mode: m }) }).then(() => `now ${m}`)) }, m))), h("small", {}, MODE_DOES[d.mode] || "")),
         newRun, rows([["curiosity", r2(d.disposition?.curiosity)], ["cycles", `${n0(HL.cycles_run)} · ${n0(HL.executed)} of ${n0(HL.proposed)} proposed steps ran`], stuck ? ["mostly stuck on", `${stuck[0]} (${stuck[1]}×)`, "#ffe600"] : null].filter(Boolean)));
       fill(1, "The dot is just a body.", ["Four systems inside it. What each is doing now:"],
         rows([[2, "S2 plans"], [1, "S1 asks"], [0, "S0 reads"], [3, "V checks"]].map(([n, t]) => { const s = loop.find((x) => x.system === n), stt = s ? stageOf(s).state : ["idle", ""]; return [t, D.now?.sys === n ? `working: ${DOING[D.now.kind] || D.now.kind}` : stt[1] || stt[0], SC[n]]; })));
@@ -511,10 +513,35 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       for (const key of ["minutes", "max_steps", "lo", "hi"]) { const inp = inputs[key]; inp.disabled = live; if (document.activeElement !== inp) inp.value = live ? run.config[key] : C[key]; }
       play.textContent = !live || run.status === "paused" ? "▶" : "❚❚"; play.setAttribute("aria-label", !live ? "Start" : run.status === "paused" ? "Resume" : "Pause"); play.disabled = !live && (!!ctl.busy || !d.model?.up); stop.disabled = !live;
       runSay.textContent = ctl.busy ? "…" : live ? `${run.status === "paused" ? "Paused" : "Running"} · step ${n0(run.log?.at(-1)?.step)} · ${mmss(run.clock)}` : run ? `Run ${run.id} ${run.status === "done" ? "finished" : run.status}${run.why ? `: ${run.why}` : ""}.` : "Ready.";
-      watchBody.replaceChildren(nowCard(d, who), f1(d, loop));
+      watchBody.replaceChildren(nowCard(d, who), f1(d, loop), grown(d, sMesh));
       const lines = (turns || []).filter((x) => x.role === "dot").slice(-2); // what it said last, beside it, newest at the bottom
       say.replaceChildren(...lines.map((x) => h("li", {}, esc(x.text.replace(/^A wish: /, "")).slice(0, 180))));
     } };
+  };
+  const grown = (d, mesh) => { // what it knows, as the flow it grows along: focal plans → the questions they raise → the notes that answer them → the names those notes meet; this run's part in yellow
+    if (!mesh?.nodes?.length) return "";
+    const run = d.train?.runs?.[0], live = !!d.train?.active, c = run?.config || {}, lo = c.mem0 ?? Infinity, hi = live ? Infinity : c.mem1 ?? Infinity;
+    const COLS = [["plan", "focal points", "S2"], ["question", "questions", "S1"], ["note", "notes", "S0"], ["name", "names", "V kept"]], rid = (n) => +String(n.id).replace(/^m/, "") || 0;
+    const nodes = mesh.nodes.filter((n) => COLS.some(([l]) => l === n.layer)), byId = new Map(nodes.map((n) => [n.id, n])), edges = mesh.edges.filter(([a, b]) => byId.has(a) && byId.has(b));
+    for (const n of nodes) n.fresh = n.layer !== "name" && rid(n) > lo && rid(n) <= hi;
+    for (const n of nodes) if (n.layer === "name") { const nb = edges.filter((e) => e.includes(n.id)).map((e) => byId.get(e[0] === n.id ? e[1] : e[0])); n.fresh = nb.length > 0 && nb.every((x) => x.fresh); } // a name is new if only new notes meet it
+    const W = 1000, H = 380, pos = new Map();
+    COLS.forEach(([l], ci) => { const col = nodes.filter((n) => n.layer === l).sort((a, b) => rid(a) - rid(b)); col.forEach((n, i) => pos.set(n.id, [70 + ci * 287, 30 + (col.length < 2 ? .5 : i / (col.length - 1)) * (H - 60)])); });
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("role", "img");
+    const added = nodes.filter((n) => n.fresh), cut = (t, k) => esc(t).length > k ? `${esc(t).slice(0, k - 1)}…` : esc(t), xml = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    svg.setAttribute("aria-label", `${nodes.length} things it knows, ${added.length} from the last run`);
+    svg.innerHTML = edges.map(([a, b]) => { const [x1, y1] = pos.get(a), [x2, y2] = pos.get(b), f = byId.get(a).fresh && byId.get(b).fresh, m = (x1 + x2) / 2;
+        return `<path d="M${x1},${y1}C${m},${y1} ${m},${y2} ${x2},${y2}" fill="none" stroke="${f ? "#ffe600" : "#fff"}" stroke-opacity="${f ? .7 : .1}" stroke-width="${f ? 1.4 : 1}"/>`; }).join("")
+      + nodes.map((n) => { const [x, y] = pos.get(n.id), s = n.fresh ? 9 : 6, dead = /drop|dropped/.test(n.state || "");
+        return `<rect x="${x - s / 2}" y="${y - s / 2}" width="${s}" height="${s}" fill="${n.fresh ? "#ffe600" : dead ? "none" : "#fff"}" stroke="${dead ? "#ff6b6b" : "none"}" opacity="${n.fresh ? 1 : .55}"><title>${xml(`${n.layer}: ${n.label}`)}</title></rect>`
+          + (n.fresh ? `<text x="${x + 9}" y="${y + 4}" font-size="11" fill="#ffe600">${xml(cut(n.label, 34))}</text>` : ""); }).join("")
+      + COLS.map(([l, name, sys], ci) => `<text x="${70 + ci * 287}" y="${H - 4}" font-size="10" letter-spacing="1.4" fill="rgba(255,255,255,.55)" text-anchor="middle">${sys} · ${name.toUpperCase()}</text>`).join("");
+    const counts = COLS.map(([l, name]) => [name, nodes.filter((n) => n.layer === l).length, added.filter((n) => n.layer === l).length]);
+    return h("section", { class: "kg" }, h("p", { class: "f1-vno" }, live ? "what it knows · growing now" : run ? `what it knows · after run ${run.id}` : "what it knows"),
+      h("h3", {}, c.mem0 == null ? "What it knows." : added.length ? `+${added.length} from ${live ? "this" : "the last"} run.` : live ? "Nothing new yet." : "The last run added nothing."),
+      h("ul", { class: "kg-counts" }, ...counts.map(([name, n, a]) => h("li", {}, h("b", {}, String(n)), ` ${name}`, a ? h("i", {}, ` +${a}`) : ""))),
+      h("div", { class: "kg-plot" }, svg));
   };
   const verdict = (run) => { // a finished run, in plain words: did it work, what each step did, what failed and why, what to do next
     const steps = (run.log || []).filter((x) => x.step > 0), by = (k) => steps.filter((x) => x.kind === k), ok = by("ok"), sk = by("skipped"), bad = by("failed");
@@ -539,8 +566,10 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   const f1 = (d, loop) => { // the run as it happens, on one clock: every variable on top, which system is working in lanes under it, the flow counts last
     const run = d.train?.runs?.[0], live = !!d.train?.active && run && ["running", "paused"].includes(run.status), cfg = run?.config, log = run?.log || [], last = log.at(-1), tint = d.tint || "#6ff7ff";
     const tc = live ? cfg : (ctl.tcfg ||= { minutes: 20, lo: 0, hi: 1, max_steps: 60 }); // idle: the band is the next run's target, and you drag it
-    const pts = log.length > 1 || live ? log : (() => { const S = Object.fromEntries((d.series || []).map((x) => [x.name, x.points || []])), n = Math.max(0, ...Object.values(S).map((p) => p.length)); return [...Array(n)].map((_, i) => Object.fromEntries([["t", i], ...Object.entries(S).map(([k, p]) => [k, p[i] ?? 0])])); })();
-    const clock = run?.clock ?? last?.t ?? 0, T = Math.max(10, clock, pts.at(-1)?.t || 0), byClock = !!log.length;
+    const pts = log.length > 1 || live ? [...log] : (() => { const S = Object.fromEntries((d.series || []).map((x) => [x.name, x.points || []])), n = Math.max(0, ...Object.values(S).map((p) => p.length)); return [...Array(n)].map((_, i) => Object.fromEntries([["t", i], ...Object.entries(S).map(([k, p]) => [k, p[i] ?? 0])])); })();
+    if (live && log.length) { const D = d.disposition || {}, L = d.life || {}; // a live "now" point from the report itself, so a line moves inside a long cycle, not only when a step lands
+      pts.push({ t: run.clock ?? 0, step: last?.step, curiosity: D.curiosity, maturity: D.maturity, ...(typeof D.frontier?.term === "number" ? { frontier: D.frontier.term } : {}), ...(L.needs || {}), ...(typeof L.trust?.value === "number" ? { trust: L.trust.value } : {}), now: true }); }
+    const clock = run?.clock ?? last?.t ?? 0, T = Math.max(10, clock, pts.at(-1)?.t || 0), byClock = !!log.length || live; // live: the clock and the lanes from the first second, before the first step lands
     const C = { curiosity: tint, maturity: "#ffb347", frontier: "#c79bff", ...NEED_C, trust: "#e4e4e7" };
     const has = pts.length ? Object.keys(C).filter((k) => pts.some((p) => typeof p[k] === "number")) : [], moved = (k) => new Set(pts.map((p) => r2(+p[k] || 0))).size > 1;
     const keys = has.filter((k) => moved(k) || k === "curiosity"), still = has.filter((k) => !keys.includes(k)); // a variable that never moved is a fact, not a line
@@ -555,7 +584,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     svg.setAttribute("viewBox", "0 0 1000 200"); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("aria-hidden", "true");
     const cb = sc.curiosity?.band, yHi = cb && sc.curiosity.Y(cb[1]), yLo = cb && sc.curiosity.Y(cb[0]);
     svg.innerHTML = `<defs><linearGradient id="f1fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${tint}" stop-opacity=".2"/><stop offset="1" stop-color="${tint}" stop-opacity="0"/></linearGradient></defs>`
-      + (byClock ? pts.slice(1).map((p) => `<line x1="${X(p.t).toFixed(1)}" x2="${X(p.t).toFixed(1)}" y1="0" y2="200" stroke="#fff" opacity=".05" vector-effect="non-scaling-stroke"/>`).join("") : "") // a hairline where each step ended
+      + (byClock ? pts.slice(1).filter((p) => !p.now).map((p) => `<line x1="${X(p.t).toFixed(1)}" x2="${X(p.t).toFixed(1)}" y1="0" y2="200" stroke="#fff" opacity=".05" vector-effect="non-scaling-stroke"/>`).join("") : "") // a hairline where each step ended
       + (cb ? `<rect data-band x="0" width="800" y="${yHi.toFixed(1)}" height="${Math.max(1, yLo - yHi).toFixed(1)}" fill="#7dffa8" opacity=".06"/>`
         + [yHi, yLo].map((y) => `<line data-edge x1="0" x2="800" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#7dffa8" opacity=".45" stroke-dasharray="5 5" vector-effect="non-scaling-stroke"/>`).join("") : "")
       + (sc.curiosity ? `<path d="${path("curiosity")}L${X(live ? clock : pts.at(-1).t || 0).toFixed(1)},200L0,200Z" fill="url(#f1fill)" data-k="curiosity"/>` : "")
@@ -572,7 +601,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       ...(sc.curiosity ? pts.map((p) => p.snap ? at(p.t || 0, sc.curiosity.Y(+p.curiosity || 0), "f1-bead") : null).filter(Boolean) : []),
       live && sc.curiosity ? at(clock, sc.curiosity.Y(sc.curiosity.vs.at(-1)), "f1-nowdot") : "",
       cb ? h("span", { class: "f1-target", style: `top:${yHi / 2}%` }, `target ${r2(cb[0])} – ${r2(cb[1])}${live ? "" : " · drag up or down on the graph to set it"}`) : "",
-      ...(byClock ? pts.slice(1).map((p) => h("span", { class: "f1-stepno", style: `left:${X(p.t) / 10}%` }, String(p.step))) : []), ...labels);
+      ...(byClock ? pts.slice(1).filter((p) => !p.now).map((p) => h("span", { class: "f1-stepno", style: `left:${X(p.t) / 10}%` }, String(p.step))) : []), ...labels);
     if (!live && sc.curiosity) { // draw the target instead of typing it: press, drag over the curiosity range you want, let go
       const yOf = (e) => { const r = plot.getBoundingClientRect(); return Math.max(0, Math.min(200, (e.clientY - r.top) / r.height * 200)); };
       let y0 = null;
@@ -588,13 +617,14 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const lanes = run?.lanes || [], showLanes = byClock && (live || lanes.length);
     const lanesEl = showLanes ? h("div", { class: "f1-lanes" }, ...LANE.map(([n, name]) => h("div", { class: "f1-lane", style: `--c:${SC[n]}` },
       h("div", { class: "f1-track" }, ...lanes.filter((l) => l[0] === n).map((l) => { const w = X(l[3]) - X(l[2]), on = live && l[3] >= clock - 1.6;
-        return h("span", { class: `f1-bar${on ? " on" : ""}`, style: `left:${X(l[2]) / 10}%;width:${Math.max(.4, w / 10)}%`, title: `${l[1]}: ${tLabel(l[2], T)} to ${tLabel(l[3], T)}` }, w > 50 ? l[1] : ""); })),
+        return h("span", { class: `f1-bar${on ? " on" : ""}`, style: `left:${X(l[2]) / 8}%;width:${Math.max(.5, w / 8)}%`, title: `${l[1]}: ${tLabel(l[2], T)} to ${tLabel(l[3], T)}` }, w > 50 ? l[1] : ""); })),
       h("b", {}, name, live && lanes.at(-1)?.[0] === n && lanes.at(-1)[3] >= clock - 1.6 ? h("small", {}, ` · ${lanes.at(-1)[1]}`) : "")))) : "";
-    const axis = h("div", { class: "f1-time" }, ...grid.map((t) => h("span", { style: `left:${X(t) / 10}%` }, byClock ? tLabel(t, T) : `step ${t}`)));
-    const gridEl = h("div", { class: "f1-grid" }, ...grid.map((t) => h("i", { style: `left:${X(t) / 10}%` })), live ? h("i", { class: "f1-nowline", style: `left:${X(clock) / 10}%` }) : "");
+    const axis = h("div", { class: "f1-time" }, ...grid.map((t) => h("span", { style: `left:${X(t) / 8}%` }, byClock ? tLabel(t, T) : `step ${t}`)));
+    const gridEl = h("div", { class: "f1-grid" }, ...grid.map((t) => h("i", { style: `left:${X(t) / 8}%` })), live ? h("i", { class: "f1-nowline", style: `left:${X(clock) / 8}%` }) : "") // grid, axis and lanes span the clock's 800 of 1000 units;
     const held = still.length ? h("p", { class: "f1-still" }, "Held steady: ", ...still.map((k) => h("span", { style: `--c:${C[k]}` }, k, h("b", {}, String(r2(+pts.at(-1)?.[k] || 0)))))) : "";
     const head = live ? h("div", { class: "f1-head" }, h("i"), h("span", {}, run.status === "paused" ? "Paused" : "Training"), h("strong", {}, mmss(clock)), h("small", {}, `of ${mmss(cfg?.minutes * 60)}`),
-        h("strong", {}, String(n0(last?.step))), h("small", {}, `of ${n0(cfg?.max_steps)} steps`), h("strong", {}, String(n0(run.snaps))), h("small", {}, "checkpoints"))
+        h("strong", {}, String(n0(last?.step))), h("small", {}, `of ${n0(cfg?.max_steps)} steps`), h("strong", {}, String(n0(run.snaps))), h("small", {}, "checkpoints"),
+        !last?.step ? h("small", { class: "f1-first" }, "· a step is one whole cycle (plan, then each command), so the first takes a while: watch the lanes") : "")
       : run ? verdict(run) : h("div", { class: "f1-head" }, h("i"), h("span", {}, "No run yet: press ▶ new run, then watch it here"));
     const L = d.learned || {}, st = (n) => { const s = loop.find((x) => x.system === n); return s ? stageOf(s).state : ["idle", ""]; }, gate = (d.trace || []).find((t) => t.kind === "evaluate");
     const S = [{ n: L.plans, k: "plan lines", c: SC[2], s: st(2), to: () => { rSys = 2; go("activity"); } }, { n: L.questions, k: "questions", c: SC[1], s: st(1), sub: `${n0(L.answered)} answered`, to: () => { rSys = 1; go("activity"); } },
@@ -760,7 +790,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     if (rTab === "engines") loadRoles();
     if (rTab === "controls") { loadRoles(); try { ctl.swap = await api("/model/swap"); } catch { ctl.swap = null; } }
     if (rTab === "journal") { try { jPages = (await api("/char/journal")).pages; } catch { jPages = jPages || []; } }
-    if (rTab === "story") { try { cTurns = (await api("/char")).turns; } catch { /* the next pull tries again */ } } // its last words, beside Dot
+    if (rTab === "story") { try { [cTurns, sMesh] = await Promise.all([api("/char").then((x) => x.turns), api("/char/mesh")]); } catch { /* the next pull tries again */ } } // its last words, beside Dot
     if (rTab === "chat") { try { const [m, c, t] = await Promise.all([api("/char/mesh"), api("/char"), api("/char/tools").catch(() => ({ nodes: [], edges: [] }))]);
       cMesh = { nodes: [...m.nodes, ...t.nodes], edges: [...m.edges, ...t.edges] }; cTurns = c.turns; cnet?.update(cMesh, cTurns); } catch { /* the next pull tries again */ } } // its tools join the map here only: the 3D globe keeps to its own layers
     try { rData = await api("/char/report"); const ks = new Set((rData.trace || []).map(tkey)); rFresh = rSeen ? new Set([...ks].filter((k) => !rSeen.has(k))) : new Set(); rSeen = ks; if (force === true || !typing) paintReport(); }

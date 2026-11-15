@@ -173,10 +173,16 @@ def _role_settings(s: settings.Settings, role: str) -> settings.Settings:
     return s.model_copy(update={"model_name": m}) if m else s
 
 
+CANCEL = threading.Event()  # a training run being stopped: the cycle drops the commands it has not started
+
+
 def execute(plan: list[dict[str, Any]], s: settings.Settings, swaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Run each command through char.rest's own step code; each run writes its "Run: <kind>" row as before."""
     out = []
     for p in plan:
+        if CANCEL.is_set():
+            out.append({"cmd": _text(p), "name": p["name"], "outcome": "skipped", "detail": "stopped before it ran", "made": []})
+            continue
         if p["role"] and (sw := llm.ensure(s, getattr(s, f"{p['role']}_model"))):
             swaps.append(sw)
         e = char.ENGINES.get(p["name"]) or {}
@@ -264,7 +270,7 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         plan, rejected = validate(proposed, budget, force)
         rejected += [{"cmd": b, "why": "could not read it as a command"} for b in bad]
         executed = execute(plan, s, swaps)
-        verdicts = verify(executed, s, swaps)
+        verdicts = [] if CANCEL.is_set() else verify(executed, s, swaps)
         out = {"cycle": n, "plan_text": text, "proposed": [_text(c) for c in proposed], "rejected": rejected,
                "executed": [{k: x[k] for k in ("cmd", "outcome", "detail")} for x in executed], "verdicts": verdicts,
                "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps]}

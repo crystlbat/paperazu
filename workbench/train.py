@@ -40,6 +40,14 @@ def active() -> bool:
     return bool(RUN.get("thread") and RUN["thread"].is_alive())
 
 
+def _top() -> int:
+    con = db.connect()
+    try:
+        return con.execute("SELECT COALESCE(MAX(id), 0) AS m FROM char_memories").fetchone()["m"]
+    finally:
+        con.close()
+
+
 def _set(run_id: int, **cols: Any) -> None:
     con = _con()
     with con:
@@ -108,7 +116,12 @@ def _one_step() -> tuple[str, str]:
     """One learning step, the way idle time runs them: a harness cycle in planner mode, else the Verifier's pick. Forced: a run ignores tiredness and quiet."""
     if char.mode() == "planner":
         from . import harness  # harness imports char
-        c = harness.cycle(force=True, wait=WAIT_TURN)  # idle learning may be mid-cycle when the run starts: wait for it, do not count it as a failure
+        until = time.time() + WAIT_TURN  # idle learning may be mid-cycle when the run starts: wait for it (stop still works), do not count it as a failure
+        while harness._lock.locked() and time.time() < until and not RUN["stop"].is_set():
+            time.sleep(0.5)
+        if RUN["stop"].is_set():
+            return "skipped", "stopped while waiting its turn"
+        c = harness.cycle(force=True, wait=5)
         did = [x for x in c.get("executed", []) if x.get("outcome") == "ok"]
         return ("ok" if did else "skipped"), " · ".join(x["cmd"] for x in did) or "cycle did nothing"
     r = char.rest(True, None, force=True)
@@ -124,6 +137,7 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
     peaked = d["curiosity"] > cfg["hi"]  # "came down into the range": a fresh persona starts low, rises as it meets names, then settles
     log.append({"step": 0, "t": 0, "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": "start", "outcome": "", "snap": True})
     snapshot(run_id, 0, "start")
+    _set(run_id, log=json.dumps(log))  # the start point shows at once, not after the first whole cycle
     status, why = "done", ""
     while True:
         now = time.time()
@@ -173,11 +187,14 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
             mark = {"curiosity": d["curiosity"], "maturity": d["maturity"]}
         log.append({"step": steps, "t": round(spent), "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": outcome, "outcome": detail[:120], "snap": bool(snap)})
         _set(run_id, log=json.dumps(log))
+    from . import harness
+    harness.CANCEL.clear()  # idle learning after the run is not cancelled
     snapshot(run_id, steps, f"end: {why}")
+    cfg["mem1"] = _top()
     char.prune_questions()  # the letter that follows asks you only what is left
     if log:
         log[-1]["snap"] = True  # the closing checkpoint shows on the trace too
-    _set(run_id, status=status, why=why, log=json.dumps(log), ended_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
+    _set(run_id, status=status, why=why, log=json.dumps(log), config=json.dumps(cfg), ended_at=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
 
 
 def start(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -189,6 +206,7 @@ def start(cfg: dict[str, Any]) -> dict[str, Any]:
             c["lo"], c["hi"] = c["hi"], c["lo"]
         c["minutes"], c["max_steps"] = max(0.5, min(c["minutes"], 600)), max(1, min(c["max_steps"], 2000))
         char._since(True, char.get_profile()["name"])
+        c["mem0"] = _top()  # what it knew before: every mesh node past this id was made by this run
         con = _con()
         with con:
             run_id = con.execute("INSERT INTO train_runs (persona, config, status) VALUES (?, ?, 'running')", (char.get_profile()["name"], json.dumps(c))).lastrowid
@@ -224,6 +242,9 @@ def _sample(every: float = 1.0) -> None:
 def control(action: str) -> dict[str, Any]:
     if not active():
         raise RuntimeError("No run is going.")
+    from . import harness  # harness imports char
+    if action == "stop":
+        harness.CANCEL.set()  # the cycle in hand skips what it has not started, so stop lands within one command
     {"pause": RUN["pause"].set, "resume": RUN["pause"].clear, "stop": RUN["stop"].set}[action]()
     return status()
 

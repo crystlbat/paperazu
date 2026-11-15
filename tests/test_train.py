@@ -94,3 +94,15 @@ def test_sampler_draws_a_lane_while_a_system_works(monkeypatch):
     lanes = train.RUN["lanes"]
     assert len(lanes) == 1 and lanes[0][:2] == [2, "planner"] and lanes[0][3] > lanes[0][2]
     assert train.RUN["clock"] > 0.3
+
+
+def test_stopping_a_run_makes_the_cycle_in_hand_skip_what_it_has_not_started(monkeypatch):
+    from workbench import harness
+    ran = []
+    monkeypatch.setattr(harness.char, "rest", lambda *a, **k: ran.append(k.get("only")))
+    harness.CANCEL.set()
+    try:
+        out = harness.execute([{"name": "reflect", "arg": "", "role": ""}], None, [])
+    finally:
+        harness.CANCEL.clear()
+    assert ran == [] and out[0]["outcome"] == "skipped" and out[0]["detail"] == "stopped before it ran"
