@@ -1036,7 +1036,8 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   const selLayer = h("div", { class: "sel-layer", "aria-hidden": "true" }); // the paragraph outline and the chosen box
   const trackLayer = h("div", { class: "track-layer" }); // Proactive: where you are reading, and what you have read
   const sideLayer = h("div", { class: "side-notes" }); // Dot's answers in the empty space beside the page, when the canvas is shut
-  const stage = h("div", { class: "pdf-stage" }, sheet);
+  const textView = h("article", { class: "pdf-text", hidden: true }); // the page as words, in the app's own face
+  const stage = h("div", { class: "pdf-stage" }, sheet, textView);
   const closed = h("div", { class: "pdf-closed", hidden: true },
     h("div", { class: "closed-card" },
       h("p", { class: "closed-title" }, "Paper closed"),
@@ -1056,13 +1057,36 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
   try { darkPage = localStorage.getItem("pdf-dark") === "1"; } catch { /* private window */ }
   const darkBtn = h("button", { type: "button", class: "btn ghost tool", "aria-pressed": String(darkPage), title: "Dark page: easier on the eyes",
     onclick: () => { darkPage = !darkPage; el.classList.toggle("pdf-dark", darkPage); darkBtn.setAttribute("aria-pressed", String(darkPage));
+      const face = document.querySelector(".buddy-face")?.getBoundingClientRect(); // the page's dots spawn out of Dot
+      if (darkPage && face && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        const x = face.left + face.width / 2, y = face.top + face.height / 2;
+        el.style.setProperty("--dox", `${x}px`); el.style.setProperty("--doy", `${y}px`);
+        el.animate([{ "--dr": "0px" }, { "--dr": `${Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y))}px` }], { duration: 900, easing: "cubic-bezier(.6,0,.2,1)" });
+      }
       try { localStorage.setItem("pdf-dark", darkPage ? "1" : "0"); } catch { /* this visit only */ } } }, icon("moon"), "Dark page");
   el.classList.toggle("pdf-dark", darkPage);
+  // Text view: the page as headings and paragraphs; equations, tables and figures come as pictures cut from the page
+  let textMode = false;
+  try { textMode = localStorage.getItem("pdf-text") === "1"; } catch { /* private window */ }
+  const setText = (on) => { textMode = on; el.classList.toggle("text-mode", on); textView.hidden = !on; textBtn.setAttribute("aria-pressed", String(on)); };
+  const textBtn = h("button", { type: "button", class: "btn ghost tool", "aria-pressed": "false", title: "Read the page as text",
+    onclick: () => { setText(!textMode); try { localStorage.setItem("pdf-text", textMode ? "1" : "0"); } catch { /* this visit only */ } if (textMode) showText(v.page); } }, "Text");
+  setText(textMode);
+  let textSeq = 0;
+  async function showText(n) {
+    const seq = ++textSeq;
+    const r = await api(`/papers/${paperId}/text/${n}`).catch(() => null);
+    if (seq !== textSeq) return;
+    textView.replaceChildren(...(r?.items.length ? r.items.map((it) => it.kind === "img"
+      ? h("figure", { class: it.w > 300 ? "wide" : "" }, h("img", { src: it.src, alt: it.text, style: `width:${it.w * (it.w > 300 ? 2.2 : 1.5)}px` /* PDF points to px: 10pt type meets the 15px text; figures larger */ }))
+      : h(it.kind === "h" ? "h3" : "p", {}, it.text)) : [h("p", { class: "pdf-msg" }, r ? "There is no text on this page." : "This page could not be read as text.")]));
+    stage.scrollTop = 0;
+  }
   const search = circleSearch({ v, go, ink, hits, pane: el, paperId });
   el.append(
     h("div", { class: "pdf-tools" }, prev, pageIn, total, next, search.button, h("span", { class: "spacer" }),
       tool(icon("minus"), "Zoom out", () => zoom(1 / 1.2)), zoomLbl, tool(icon("plus"), "Zoom in", () => zoom(1.2)),
-      h("button", { type: "button", class: "btn ghost tool", onclick: () => { v.fit = true; draw(); } }, icon("fit"), "Fit width"), darkBtn),
+      h("button", { type: "button", class: "btn ghost tool", onclick: () => { v.fit = true; draw(); } }, icon("fit"), "Fit width"), textBtn, darkBtn),
     h("div", { class: "pdf-view" }, stage, closed, search.panel, penHint));
 
   async function draw() {
@@ -1071,6 +1095,7 @@ function pdfViewer(url, hideBtn, paperId, startPage = 1, saveToNote = null) {
     const page = await v.doc.getPage(v.page);
     if (seq !== v.seq) return;
     hooks.onPage?.(v.page); // creatures that wake on a page turn; they skip a redraw of the same page
+    if (textMode) showText(v.page);
     if (v.fit) v.scale = Math.max(0.25, (stage.clientWidth - 48) / page.getViewport({ scale: 1 }).width);
     const vp = page.getViewport({ scale: v.scale });
     const dpr = window.devicePixelRatio || 1;

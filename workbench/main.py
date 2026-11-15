@@ -320,6 +320,15 @@ def get_blocks(paper_id: str, page: int) -> dict[str, Any]:
     return out
 
 
+@app.get("/papers/{paper_id}/text/{page}")
+def get_page_text(paper_id: str, page: int) -> dict[str, Any]:
+    """The page as headings, paragraphs and cut-out pictures, in reading order, for the text view."""
+    out = marks.reflow(paper_id, page)
+    if out is None:
+        raise HTTPException(404, detail="This page is not in the library.")
+    return out
+
+
 @app.get("/papers/{paper_id}/section")
 def get_section(paper_id: str, heading: str = Query(..., max_length=300), page: int = Query(1, ge=1)) -> dict[str, Any]:
     out = sections.find(paper_id, heading, page)

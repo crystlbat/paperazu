@@ -101,6 +101,72 @@ def blocks(paper_id: str, page: int) -> dict[str, Any] | None:
         return {"w": got[1].rect.width, "h": got[1].rect.height, "blocks": _layout(got[1])}
 
 
+def _inside(a: list[float], b: list[float]) -> bool:
+    """Most of box a lies within box b."""
+    w, h = min(a[2], b[2]) - max(a[0], b[0]), min(a[3], b[3]) - max(a[1], b[1])
+    return w > 0 and h > 0 and w * h >= .6 * (a[2] - a[0]) * (a[3] - a[1])
+
+
+def _side_by_side(boxes: list[list[float]]) -> list[list[float]]:
+    """Merge pictures that sit side by side (mostly the same height band, under 40pt apart): one figure's panels."""
+    out: list[list[float]] = []
+    for b in sorted(boxes, key=lambda r: r[0]):
+        hit = next((o for o in out if min(o[3], b[3]) - max(o[1], b[1]) >= .5 * min(o[3] - o[1], b[3] - b[1]) and b[0] - o[2] < 40), None)
+        if hit:
+            hit[:] = [min(hit[0], b[0]), min(hit[1], b[1]), max(hit[2], b[2]), max(hit[3], b[3])]
+        else:
+            out.append(b[:])
+    return out
+
+
+def reflow(paper_id: str, page: int) -> dict[str, Any] | None:
+    """A page as reading-order items for the text view: {"kind": "h"|"p", "text"} for headings and paragraphs, and
+    {"kind": "img", "src", "text"} for what does not survive as text (equations, tables, figures), cut from the page.
+    None if there is no such page."""
+    got = _page(paper_id, page)
+    if not got:
+        return None
+    with got[0]:
+        pg = got[1]
+        spans = [s for b in pg.get_text("dict")["blocks"] if b["type"] == 0 for ln in b["lines"] for s in ln["spans"] if s["text"].strip()]
+        body = sorted(s["size"] for s in spans)[len(spans) // 2] if spans else 10
+        h = pg.rect.height
+        text = [(list(b[:4]), " ".join(str(b[4]).split())) for b in pg.get_text("blocks")
+                if b[6] == 0 and str(b[4]).strip() and h * .09 < (b[1] + b[3]) / 2 < h * .95]  # running heads and page numbers go
+
+        def head(r: list[float], t: str) -> bool:
+            inn = [s for s in spans if _inside(list(s["bbox"]), r)]
+            big, bold = max((s["size"] for s in inn), default=body), all(s["flags"] & 16 for s in inn) and bool(inn)
+            return len(t) < 90 and not t.endswith(".") and (big > body * 1.12 or bold)
+
+        heads = [head(r, t) for r, t in text]
+        # short blocks are equation and table pieces, a line ending in "(n)" is a displayed equation, and a block that
+        # is mostly numbers is a table: they join
+        # each other and any figure they touch, and are shown as pictures
+        eq = [(len(t) < 25 and (len(t) <= 3 or re.search(r"[=+−∑Õ∫λ<>≤≥^_|\d]", t)) or len(t) < 140 and re.search(r"\(\d{1,3}\)$", t)
+               or len(re.findall(r"(?<!\w)[\d.,%±]+(?!\w)", t)) > .3 * len(t.split()) > 3) and not hd for (r, t), hd in zip(text, heads)]
+        figs = [list(i["bbox"]) for i in pg.get_image_info()] + [list(r) for r in pg.cluster_drawings()]
+        figs = [r for r in figs if r[2] - r[0] >= 40 and r[3] - r[1] >= 30]
+        long = [r for (r, t), e in zip(text, eq) if not e and len(t) >= 25]
+        pics = _join(figs + [r for (r, t), e in zip(text, eq) if e and not any(_inside(r, x) for x in long)])
+        pics = [r for r in pics if r[2] - r[0] >= 30 and r[3] - r[1] >= 8]
+        pics = _side_by_side(pics)
+        items: list[tuple[list[float], dict[str, Any]]] = []
+        for (r, t), hd in zip(text, heads):
+            if any(_inside(r, x) for x in pics):
+                continue
+            t = " ".join(re.sub(r"(?<=[a-z])-\n(?=[a-z])", "", pg.get_text("text", clip=pymupdf.Rect(*r))).split()) or t
+            items.append((r, {"kind": "h" if hd else "p", "text": t}))
+        for r in pics:
+            clip = pymupdf.Rect(*r) & pg.rect
+            png = pg.get_pixmap(clip=clip, dpi=150).tobytes("png")
+            items.append((r, {"kind": "img", "src": "data:image/png;base64," + base64.b64encode(png).decode(),
+                              "text": " ".join(pg.get_text("text", clip=clip).split()), "w": round(clip.width)}))
+        half = pg.rect.width / 2
+        items.sort(key=lambda it: (it[0][0] >= half - 10, it[0][1]))  # left column, then right; a full-width row stays in the left run
+        return {"page": page, "items": [it[1] for it in items]}
+
+
 def paragraphs(paper_id: str, page: int) -> list[tuple[list[float], str]] | None:
     """The same boxes as blocks(), each with its text. None if there is no such page."""
     got = _page(paper_id, page)

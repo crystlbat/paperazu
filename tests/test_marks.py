@@ -28,6 +28,18 @@ def test_blocks_are_the_paragraphs() -> None:
     assert marks.blocks(pid, 2) is None and marks.blocks("nope", 1) is None
 
 
+def test_text_view_reads_in_order_and_cuts_out_equations() -> None:
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "1 Introduction", fontsize=14)
+    page.insert_text((72, 130), "A first paragraph with enough words to count as text.", fontsize=10)
+    page.insert_text((150, 170), "x = y + z   (1)", fontsize=10)
+    pid = library.create(doc.tobytes(), "p.pdf")
+    items = TestClient(main.app).get(f"/papers/{pid}/text/1").json()["items"]
+    assert [i["kind"] for i in items] == ["h", "p", "img"] and items[2]["src"].startswith("data:image/png")
+    assert TestClient(main.app).get(f"/papers/{pid}/text/2").status_code == 404
+
+
 def test_margin_notes_round_trip_and_export() -> None:
     pid = _paper()
     c = TestClient(main.app)

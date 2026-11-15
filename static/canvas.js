@@ -42,7 +42,8 @@ function canvasPanel(host, paperId, pdf) {
   const editBtn = h("button", { type: "button", "aria-pressed": "false", onclick: () => showView("editor") }, "Editor");
   const views = h("div", { class: "cv-views", role: "group", "aria-label": "Canvas view" }, boardBtn, editBtn);
   let editing = false, editHooks = null, onViewChange = null;
-  host.append(board, field, editor, bar, views, grip);
+  const wave = h("div", { class: "cv-wave", "aria-hidden": "true" }); // dark page: the grid's dots light up as they spawn out of Dot
+  host.append(wave, board, field, editor, bar, views, grip);
   const setW = (w) => {
     const max = desk.clientWidth - 360, px = Math.round(Math.max(300, Math.min(max, w)));
     desk.style.setProperty("--cv-w", `${px}px`); desk.style.setProperty("--cv-p", "minmax(0, 1fr)");
@@ -429,6 +430,11 @@ function canvasPanel(host, paperId, pdf) {
       const lx = ox - hb.left, ly = oy - hb.top, R = reach(hb, lx, ly);
       pending.push(play(host, [{ clipPath: circle(lx, ly, 0) }, { clipPath: circle(lx, ly, R) }], { duration: 800, easing: "cubic-bezier(.6,0,.2,1)" }));
       tail.push(ring(ox, oy, 0)); // one soft ring; the blobs do the rest
+      if (pdf.el.classList.contains("pdf-dark")) {
+        wave.style.setProperty("--ox", `${lx}px`); wave.style.setProperty("--oy", `${ly}px`);
+        tail.push(play(wave, [{ "--r": "0px", opacity: 1 }, { "--r": `${R}px`, opacity: 1, offset: .85 }, { "--r": `${R + 90}px`, opacity: 0 }],
+          { duration: 1000, easing: "cubic-bezier(.6,0,.2,1)" }).then(() => wave.getAnimations().forEach((a) => a.cancel())));
+      }
     }
     updateEmpty();
     await Promise.all(pending);

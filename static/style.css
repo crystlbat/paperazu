@@ -1966,8 +1966,14 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 
 /* Dark page: the PDF's own picture is inverted, then turned back round the colour wheel so figures keep their hues.
    .9 keeps the paper a soft charcoal, not pure black, and the ink a warm light grey, not glaring white. */
-.pdf-pane.pdf-dark .pdf-page > canvas:first-child { filter: invert(.9) hue-rotate(180deg) contrast(.92); }
-.pdf-pane.pdf-dark .pdf-page { box-shadow: 0 0 0 1px rgb(255 255 255 / .06), 0 20px 40px -20px #000; }
+/* Dark page: the whole stage turns black with the story's fine dot grid, the page's edge gone so the paper fills it; the inverted page is laid on
+   with "lighten", so only the ink and figures sit over the dots. --dr grows from Dot (--dox/--doy) when it is switched on. */
+@property --dr { syntax: "<length>"; inherits: true; initial-value: 9999px; }
+.pdf-pane.pdf-dark .pdf-stage { background:
+  radial-gradient(circle at var(--dox, 100vw) var(--doy, 100vh), transparent var(--dr), #000 calc(var(--dr) + 1px)) fixed,
+  radial-gradient(rgb(255 255 255 / .1) 1px, transparent 1.3px) 0 0 / 6px 6px fixed, #000; }
+.pdf-pane.pdf-dark .pdf-page > canvas:first-child { filter: invert(1) hue-rotate(180deg) brightness(.86); mix-blend-mode: lighten; }
+.pdf-pane.pdf-dark .pdf-page, .pdf-pane.pdf-dark .pdf-sheet canvas { box-shadow: none; }
 .pdf-pane.pdf-dark .pdf-tools [aria-pressed="true"] { color: var(--marker); }
 .pdf-pane.pdf-dark .mk-dots { stroke: #c9cdd6; }
 
@@ -2013,3 +2019,15 @@ fieldset.nb-field > legend { margin-bottom: 8px; }
 .rp-toc button[aria-pressed="true"] { background: var(--surf2); color: var(--ink); box-shadow: inset 0 -2px 0 var(--k); }
 .rp-who { margin: 22px 0 6px; font: 600 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--soft); }
 .rp-who:first-child { margin-top: 4px; }
+
+/* Text view: the page read as words in the app's mono face; the canvas page still renders underneath for the tools that need it */
+.pdf-pane.text-mode .pdf-sheet { position: absolute; visibility: hidden; pointer-events: none; }
+.pdf-text { max-width: 72ch; margin: 0 auto; padding: 24px 8px 120px; color: var(--ink); font: 400 15px/1.75 var(--mono); }
+.pdf-text[hidden] { display: none; }
+.pdf-text h3 { margin: 28px 0 10px; font: 600 13px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.pdf-text p { margin: 0 0 14px; }
+.pdf-text figure { margin: 18px 0; text-align: center; }
+.pdf-text img { max-width: 100%; min-width: 120px; background: #fff; border-radius: 4px; }
+.pdf-text figure.wide { width: min(1100px, calc(100vw - 96px)); margin: 28px 0 28px 50%; translate: -50% 0; } /* figures break out of the text column */
+.pdf-pane.pdf-dark .pdf-text { color: #d6d8dd; }
+.pdf-pane.pdf-dark .pdf-text img { filter: invert(1) hue-rotate(180deg); mix-blend-mode: lighten; background: transparent; }
