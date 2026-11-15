@@ -33,7 +33,8 @@ def _no_real_network(monkeypatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _fresh_engine_memory() -> None:
-    from workbench import graph
+    from workbench import graph, websearch
+    websearch._down.clear()  # a provider one test knocked out is back for the next
     graph._working.clear()
     graph._broken.clear()
     llm._dory["proc"] = None

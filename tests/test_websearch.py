@@ -168,3 +168,42 @@ def test_html_snippet_keeps_text_after_bold_words() -> None:
     page = ('<a class="result__a" href="https://en.wikipedia.org/wiki/T">T</a> '
             '<a class="result__snippet" href="x"><b>Transformers</b> is a series of films.</a>')
     assert websearch.pages_from_html(page)[0]["snippet"] == "Transformers is a series of films."
+
+
+def test_a_blocked_provider_falls_through_to_the_next_and_is_skipped_while_it_cools(monkeypatch) -> None:
+    import base64
+    import urllib.error
+    real = "https://www.bungie.net/osiris"
+    bing = ('<li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&amp;u=a1' + base64.urlsafe_b64encode(real.encode()).decode().rstrip("=")
+            + '&amp;ntb=1">Osiris <b>lore</b></a></h2><div><p>The Warlock who walked the Infinite Forest.</p></div></li>')
+    seen: list[str] = []
+
+    def get(url, timeout):
+        seen.append(url.split("/")[2])
+        if "duckduckgo" in url:
+            raise urllib.error.URLError("timed out")
+        return bing if "bing" in url else '{"query": {"search": []}}'
+
+    monkeypatch.setattr(websearch, "_get", get)
+    out = websearch._web("Osiris")
+    assert out["via"] == "bing" and out["results"] == [{"title": "Osiris lore", "url": real, "snippet": "The Warlock who walked the Infinite Forest."}]
+    websearch._web("Osiris again")
+    assert seen == ["html.duckduckgo.com", "www.bing.com", "www.bing.com"]  # duckduckgo is not tried again while it cools
+
+
+def test_wikipedia_answers_when_the_others_find_nothing(monkeypatch) -> None:
+    wiki = '{"query": {"search": [{"title": "Destiny 2", "snippet": "Named Curse of <span class=\\"searchmatch\\">Osiris</span>"}]}}'
+    monkeypatch.setattr(websearch, "_get", lambda url, timeout: wiki if "wikipedia" in url else "<html>no hits</html>")
+    out = websearch._web("Osiris")
+    assert out["via"] == "wikipedia" and out["results"] == [{"title": "Destiny 2", "url": "https://en.wikipedia.org/wiki/Destiny_2", "snippet": "Named Curse of Osiris"}]
+
+
+def test_no_provider_reachable_says_so(monkeypatch) -> None:
+    import urllib.error
+    monkeypatch.setattr(websearch, "_get", lambda url, timeout: (_ for _ in ()).throw(urllib.error.URLError("down")))
+    try:
+        websearch._web("Osiris")
+    except RuntimeError as e:
+        assert "could not reach the web" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError")
