@@ -1530,3 +1530,13 @@ def test_prune_questions_lets_go_of_repeats_and_off_world_ones(monkeypatch):
         char.add_memory(f"Question: {q}"[:80], q, source="question")
     assert char.prune_questions() == 2
     assert char._open_questions(0) == ["Who is Osiris?", "Where do the Vex come from?"]
+
+
+def test_sleep_keeps_the_newest_24_open_questions(monkeypatch):
+    monkeypatch.setattr(char, "world_words", lambda: set())
+    monkeypatch.setattr(char, "_start", lambda: 0)
+    for i in range(30):
+        char.add_memory(f"Question: q{i}", f"Where is place {i}?", source="question")
+    assert char.prune_questions() == 6
+    assert char._open_questions(0)[0] == "Where is place 6?" and len(char._open_questions(0)) == 24
+    assert char.letter()["let_go"] == 6

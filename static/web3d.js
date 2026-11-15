@@ -410,6 +410,76 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
           mind.length ? h("p", { class: "pn-why" }, `Loudest: a ${mind[0].kind}. “${esc(mind[0].ask).slice(0, 140)}”`) : h("p", { class: "pn-why" }, "Nothing open. It asks you here when it needs something."),
           mind.length ? h("button", { type: "button", class: "pn-link", onclick: () => go("letter") }, "answer in the letter →") : "")));
   };
+  // ---------- the scroll story: Dot as a wireframe on the right, one slide per system on the left, then the run, live ----------
+  const KEYS = [ // one keyframe per slide; scroll eases every number between the two slides on screen
+    { yaw: .55, pitch: .22, dist: 7.02, ty: .05, rot: .3, spin: 1, split: 0, organs: 0, eyes: 1, plinth: 1, brain: 0, quest: 0, hands: 0, heart: 0, memory: 0 },
+    { yaw: .35, pitch: .2, dist: 7.28, ty: .05, rot: .1, spin: .2, split: 1, organs: 1, eyes: 0, plinth: 1, brain: 0, quest: 0, hands: 0, heart: 0, memory: 0 },
+    { yaw: .5, pitch: .5, dist: 4.42, ty: .45, rot: .1, spin: .2, split: .4, organs: 1, eyes: 0, plinth: .4, brain: 1, quest: 0, hands: 0, heart: 0, memory: 0 },
+    { yaw: .75, pitch: .4, dist: 4.55, ty: .08, rot: .1, spin: .2, split: .4, organs: 1, eyes: 0, plinth: .4, brain: 0, quest: 1, hands: 0, heart: 0, memory: 0 },
+    { yaw: 1.0, pitch: .25, dist: 7.8, ty: -.15, rot: .1, spin: .2, split: .4, organs: 1, eyes: 0, plinth: .4, brain: 0, quest: 0, hands: 1, heart: 0, memory: 0 },
+    { yaw: .45, pitch: .12, dist: 3.77, ty: -.45, rot: .1, spin: .2, split: .4, organs: 1, eyes: 0, plinth: .4, brain: 0, quest: 0, hands: 0, heart: 1, memory: 0 },
+    { yaw: .6, pitch: .55, dist: 7.28, ty: .45, rot: .1, spin: .3, split: .15, organs: .5, eyes: 0, plinth: .6, brain: .3, quest: 0, hands: 0, heart: 0, memory: 1 },
+    { yaw: .6, pitch: .25, dist: 7.02, ty: .05, rot: .3, spin: 2.5, split: 0, organs: .2, eyes: 1, plinth: 1, brain: 0, quest: 0, hands: 0, heart: 0, memory: 0 },
+  ];
+  let sty = null; // built once and kept between repaints, so the canvas keeps drawing and the inputs keep what you typed
+  const makeStory = () => {
+    const cv = h("canvas", { class: "st-cv", "aria-hidden": "true" }), scene = makeDotScene(cv), say = h("ol", { class: "st-say", "aria-live": "polite" });
+    const rail = h("div", { class: "st-rail", "aria-hidden": "true" }, ...KEYS.map(() => h("i"))), count = h("span", { class: "st-count" });
+    const S = KEYS.map((_, n) => { const t = h("h2", { class: "st-h" }), sub = h("p", { class: "st-sub" }), live = h("div", { class: "st-live" });
+      return { el: h("section", { class: "st-slide", "data-n": String(n) }, h("span", { class: "st-no" }, `${String(n + 1).padStart(2, "0")} / ${String(KEYS.length).padStart(2, "0")}`), t, sub, live), t, sub, live }; });
+    // the run form lives on its slide and is never rebuilt, so what you type stays while the numbers around it move
+    const C = (ctl.tcfg ||= { minutes: 20, lo: 0, hi: 1, max_steps: 60 }), inputs = {};
+    const num = (k, label, step) => h("label", { class: "st-in" }, h("span", {}, label), inputs[k] = h("input", { type: "number", step, min: 0, value: C[k], oninput: (e) => { C[k] = +e.target.value; } }));
+    const play = h("button", { type: "button", class: "st-play" }), stop = h("button", { type: "button", class: "st-stop", "aria-label": "Stop" }, "■"), runSay = h("p", { class: "st-runsay" });
+    const send = (action, extra = {}) => act(`training ${action}`, () => api("/char/train", { method: "POST", body: JSON.stringify({ action, ...extra }) }).then((r) => r.status || action));
+    play.onclick = () => { const run = rData?.train?.runs?.[0], live = !!rData?.train?.active;
+      if (!live) send("start", { minutes: C.minutes, max_steps: C.max_steps, lo: Math.min(C.lo, C.hi), hi: Math.max(C.lo, C.hi) }); else send(run?.status === "paused" ? "resume" : "pause");
+      setTimeout(() => watch.scrollIntoView({ behavior: "smooth", block: "start" }), 400); }; // pressing play takes you to the graph
+    stop.onclick = () => send("stop");
+    S[7].live.append(h("div", { class: "st-form" }, num("minutes", "minutes", 1), num("max_steps", "steps", 1), num("lo", "curiosity from", .05), num("hi", "to", .05)),
+      h("div", { class: "st-deck" }, play, stop, runSay));
+    const watchBody = h("div", { class: "st-watchbody" }), watch = h("section", { class: "st-watch" }, h("span", { class: "st-no" }, "live"), h("h2", { class: "st-h" }, "Watch it learn."), watchBody);
+    const stage = h("div", { class: "st-stage" }, h("div", { class: "st-top" }, rail, count), cv, say);
+    const el = h("div", { class: "st" }, h("div", { class: "st-grid" }, h("div", { class: "st-left" }, ...S.map((x) => x.el)), stage), watch);
+    let D = { now: {} }, k = { ...KEYS[0] }, shown = -1;
+    const progress = () => { const r = stage.getBoundingClientRect(), mid = r.top + Math.min(r.height, innerHeight) / 2, c = S.map((x) => { const b = x.el.getBoundingClientRect(); return (b.top + b.bottom) / 2; });
+      if (mid <= c[0]) return 0; for (let i = 0; i < c.length - 1; i++) if (mid < c[i + 1]) return i + (mid - c[i]) / (c[i + 1] - c[i]); return c.length - 1; };
+    const frame = (now) => {
+      if (!el.isConnected) { setTimeout(() => requestAnimationFrame(frame), 400); return; } // off the Story tab: idle, cheaply
+      const box = el.closest(".sw-dbody"), hgt = box ? `${box.clientHeight}px` : ""; if (hgt && el.style.getPropertyValue("--stage") !== hgt) el.style.setProperty("--stage", hgt); // one slide is one screen of the report
+      const p = progress(), i = Math.min(KEYS.length - 2, Math.floor(p)), f = Math.min(1, p - i), e = f * f * (3 - 2 * f), A = KEYS[i], B = KEYS[i + 1];
+      for (const key in A) k[key] += ((A[key] + (B[key] - A[key]) * e) - k[key]) * .12; // eased towards the scroll, so a fast flick still glides
+      const L = D.learned || {};
+      scene.draw(now, k, { sys: D.now?.sys, plans: L.plans, questions: L.questions, answered: L.answered, notes: L.notes, verified: L.verified, rejected: L.rejected, open: D.letter?.open });
+      const on = Math.round(p); if (on !== shown) { shown = on; [...rail.children].forEach((x, n) => x.toggleAttribute("data-on", n <= on)); count.textContent = `${String(on + 1).padStart(2, "0")} / ${String(KEYS.length).padStart(2, "0")}`; S.forEach((x, n) => x.el.toggleAttribute("data-on", n === on)); }
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+    const b = (v) => h("b", {}, String(n0(v)));
+    const tag = (n, loop) => { const s = loop.find((x) => x.system === n), stt = s ? stageOf(s).state : ["", ""];
+      return D.now?.sys === n ? h("p", { class: "st-now", "data-live": "true" }, h("i"), `working now: ${DOING[D.now.kind] || D.now.kind}`) : stt[1] ? h("p", { class: "st-now" }, h("i"), esc(stt[0] && stt[0] !== "working" ? `${stt[0]}: ${stt[1]}` : stt[1]).slice(0, 140)) : ""; };
+    return { el, update(d, loop, turns) {
+      D = d; const L = d.learned || {}, who = (d.who || "").split(" ")[0], world = (d.who || "").split(/ from /i)[1] || "its world", run = d.train?.runs?.[0], live = !!d.train?.active;
+      const plan = (d.trace || []).find((t) => t.kind === "plan" && t.outcome === "ok");
+      const fill = (n, title, sub, ...live) => { S[n].t.textContent = title; S[n].sub.replaceChildren(...sub); S[n].live.replaceChildren(...live); };
+      fill(0, `${who}.`, [`The mind under the dot. It plans, asks, reads and checks itself, and it lives in ${world}.`], h("p", { class: "st-now" }, h("i"), `${d.mode || "idle"} · ${n0(d.totals?.ok)} of ${n0(d.totals?.steps)} steps did something`));
+      fill(1, "The dot is just a body.", [`Open it up and there are four systems inside that make it ${who}.`],
+        h("ul", { class: "st-key" }, ...[[2, "S2 plans"], [1, "S1 asks"], [0, "S0 reads"], [3, "V checks"]].map(([n, t]) => h("li", { style: `--c:${SC[n]}` }, h("i"), t))));
+      fill(2, "A planner.", ["S2 decides what to learn next. It has written ", b(L.plans), " plan lines."], plan ? h("p", { class: "st-quote" }, `“${esc(plan.detail).slice(0, 160)}”`) : "", tag(2, loop));
+      fill(3, "Questions.", ["S1 turns each plan into questions. ", b(L.questions), " asked, ", b(L.answered), " answered."], tag(1, loop));
+      fill(4, "Hands.", ["S0 looks each question up on the web and writes a note. ", b(L.notes), " notes so far."], tag(0, loop));
+      fill(5, "A gate.", ["The Verifier reads every note before it is kept. ", b(L.verified), " let in, ", b(L.rejected), " turned away."], tag(3, loop));
+      fill(6, "A memory that sleeps.", ["At the end of every run it sleeps: it keeps the newest ", b(24), " open questions about its world and lets the rest go. ", b(d.letter?.let_go), " let go so far, ", b(d.letter?.open), " open now."],
+        d.letter?.items?.length ? h("button", { type: "button", class: "pn-link", onclick: () => go("letter") }, `what is left becomes your letter (${d.letter.items.length}) →`) : "");
+      S[7].t.textContent = "Set it running."; S[7].sub.replaceChildren("It learns on its own and stops when the minutes or the steps run out, or when curiosity settles in the target.");
+      for (const key of ["minutes", "max_steps", "lo", "hi"]) { const inp = inputs[key]; inp.disabled = live; if (live && document.activeElement !== inp) inp.value = run.config[key]; }
+      play.textContent = !live || run.status === "paused" ? "▶" : "❚❚"; play.setAttribute("aria-label", !live ? "Start" : run.status === "paused" ? "Resume" : "Pause"); play.disabled = !live && (!!ctl.busy || !d.model?.up); stop.disabled = !live;
+      runSay.textContent = ctl.busy ? "…" : live ? `${run.status === "paused" ? "Paused" : "Running"} · step ${n0(run.log?.at(-1)?.step)} · ${mmss(run.clock)}` : run ? `Run ${run.id} ${run.status === "done" ? "finished" : run.status}${run.why ? `: ${run.why}` : ""}.` : "Ready.";
+      watchBody.replaceChildren(nowCard(d, who), f1(d, loop));
+      const lines = (turns || []).filter((x) => x.role === "dot").slice(-2); // what it said last, beside it, newest at the bottom
+      say.replaceChildren(...lines.map((x) => h("li", {}, esc(x.text.replace(/^A wish: /, "")).slice(0, 180))));
+    } };
+  };
   const LANE = [[2, "S2 Plan"], [1, "S1 Goals"], [0, "S0 Execute"], [3, "V Verify"]];
   const niceStep = (T) => [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200].find((x) => T / x <= 8) || 7200;
   const tLabel = (t, T) => T < 120 ? `${Math.round(t)}s` : mmss(t);
@@ -525,7 +595,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
               h("dt", {}, "Talked with you"), h("dd", {}, `${p.chats} time${p.chats === 1 ? "" : "s"}`))))); },
       letter: () => letterBox(d) || h("p", { class: "sw-dmut" }, "Nothing to answer. After a run, what it needs from you shows up here."),
       story: () => { const done = trace.filter((t) => t.outcome === "ok").slice(0, 6), old = n0(D.curiosity) - n0(F.term);
-        return h("div", { class: "sw-story" }, nowCard(d, who), f1(d, loop),
+        sty ||= makeStory(); sty.update(d, loop, cTurns);
+        return h("div", { class: "sw-story" }, sty.el,
           h("div", { class: "sw-story2" },
             h("section", {}, h("h4", {}, "Just now"), done.length ? h("ol", { class: "sw-feed" }, ...done.map((t) => h("li", {}, h("button", { type: "button", onclick: () => { rSel = { step: tkey(t), note: t.ref }; go("activity"); } },
               h("time", {}, local(t.at)), h("p", {}, h("b", { style: `color:${SC[t.system] || "#d4d4d8"}` }, `${who} ${VERB[t.kind] || t.kind}`), ` ${esc(t.detail.split(":")[0])}`)))))
@@ -621,6 +692,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     if (rTab === "engines") loadRoles();
     if (rTab === "controls") { loadRoles(); try { ctl.swap = await api("/model/swap"); } catch { ctl.swap = null; } }
     if (rTab === "journal") { try { jPages = (await api("/char/journal")).pages; } catch { jPages = jPages || []; } }
+    if (rTab === "story") { try { cTurns = (await api("/char")).turns; } catch { /* the next pull tries again */ } } // its last words, beside Dot
     if (rTab === "chat") { try { const [m, c, t] = await Promise.all([api("/char/mesh"), api("/char"), api("/char/tools").catch(() => ({ nodes: [], edges: [] }))]);
       cMesh = { nodes: [...m.nodes, ...t.nodes], edges: [...m.edges, ...t.edges] }; cTurns = c.turns; cnet?.update(cMesh, cTurns); } catch { /* the next pull tries again */ } } // its tools join the map here only: the 3D globe keeps to its own layers
     try { rData = await api("/char/report"); const ks = new Set((rData.trace || []).map(tkey)); rFresh = rSeen ? new Set([...ks].filter((k) => !rSeen.has(k))) : new Set(); rSeen = ks; if (force === true || !typing) paintReport(); }

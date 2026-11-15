@@ -1478,13 +1478,18 @@ def _want_from() -> tuple[str, str, str] | None:
     return None
 
 
+KEEP_OPEN = 24  # like Pino's 24 short-term slots: the open questions it carries out of a run
+
+
 def prune_questions() -> int:
-    """At the end of a run: open questions off its world, or asked twice in other words, are let go, so the letter asks only what matters. No model."""
-    words, seen, gone = world_words(), set(), 0
-    for q in _open_questions(_start()):
+    """Its sleep, at the end of a run: open questions off its world, asked twice in other words, or past the newest 24 are let go, so the letter asks only what matters. No model."""
+    words, seen, gone, kept = world_words(), set(), 0, 0
+    for q in _open_questions(_start())[::-1]:  # newest first: past KEEP_OPEN, the oldest go
         key = " ".join(re.findall(r"[a-z0-9]+", q.lower()))
-        why = "off its world" if not on_world(q, words) else "asked before" if key in seen else ""
-        seen.add(key)
+        why = "off its world" if not on_world(q, words) else "asked before" if key in seen else "past the 24 it keeps" if kept >= KEEP_OPEN else ""
+        if not why:
+            seen.add(key)  # only a question it keeps makes a later wording a repeat
+            kept += 1
         if why:
             add_memory(f"Reflection: {q}"[:80], f"(pruned: {why})", source="sheet")
             gone += 1
@@ -1497,7 +1502,10 @@ def letter() -> dict[str, Any]:
     who = get_profile()["name"]
     items = [{"id": f"w{w['id']}", "kind": "wish", "ask": w["said"] if in_voice(w.get("said"), who) else f"Could you find me {w['thing']}?"} for w in wants() if w["status"] == "waiting" and on_world(f"{w['thing']} {w['topic']}", words)]
     items += [{"id": f"q:{q}", "kind": "question", "ask": q} for q in _open_questions(_start()) if on_world(q, words)][:max(0, 6 - len(items))]
-    return {"who": get_profile()["name"], "items": items}
+    con = db.connect()
+    gone = con.execute("SELECT COUNT(*) FROM char_memories WHERE id > ? AND content LIKE '(pruned: %'", (_start(),)).fetchone()[0]
+    con.close()
+    return {"who": get_profile()["name"], "items": items, "let_go": gone, "open": len(_open_questions(_start()))}
 
 
 def answer_letter(answers: list[dict[str, Any]]) -> dict[str, Any]:
