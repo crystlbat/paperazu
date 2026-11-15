@@ -1270,3 +1270,8 @@ body:has(.st) .sp-ear { position: fixed; z-index: 70; }
 .st-model[data-up="true"] i { background: var(--sig); animation: pn-beat 1.8s ease-in-out infinite; }
 .st-model strong { font: 800 clamp(26px, 3vw, 44px)/1 "Doto", var(--mono, monospace); letter-spacing: .02em; color: var(--sig); overflow-wrap: anywhere; }
 .st-model[data-up="false"] strong { color: rgb(255 255 255 / .35); }
+.st-pick { justify-self: start; appearance: none; background: transparent; border: 0; border-bottom: 1px dashed rgb(255 230 0 / .5); padding: 0 22px 4px 0; cursor: pointer;
+  font: 800 clamp(26px, 3vw, 44px)/1 "Doto", var(--mono, monospace); color: var(--sig);
+  background: linear-gradient(45deg, transparent 50%, var(--sig) 50%) right 4px center / 7px 7px no-repeat; }
+.st-pick option { font: 14px var(--mono, monospace); color: #000; }
+.pn-drag { cursor: ew-resize; touch-action: none; user-select: none; }

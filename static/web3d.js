@@ -388,11 +388,21 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       h("div", { class: "sw-wbtns" }, h("button", { type: "button", disabled: !!ctl.busy, onclick: send }, "Submit")));
   };
   const DOING = { planner: "Planning what to learn next", plan: "Writing a plan", reflect: "Looking it up, writing a note", extract: "Pulling names out of its notes", ideas: "Finding ideas in its notes", ask: "Asking itself questions", wonder: "Wondering", goal: "Setting goals", fill: "Filling in its sheet", want: "Working out what it needs from you", journal: "Writing in its journal", check: "Checking a note", review: "Rereading a reply", tune: "Tuning a prompt", bake: "Consolidating", fold: "Folding notes together", sort: "Sorting", practise: "Practising its voice" };
+  const dragBand = (m, tc, max) => { if (!tc) return m; // idle: press on the line and drag across the range you want; the next run takes it
+    const line = m.querySelector(".pn-line"), band = line.querySelector("b"), cap = () => m.nextElementSibling;
+    const at = (e) => { const r = line.getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); };
+    let x0 = null; m.classList.add("pn-drag");
+    const show = (a, b) => { const lo = Math.min(a, b), hi = Math.max(a, b); tc.lo = r2(lo * max); tc.hi = r2(hi * max); band.style.left = `${lo * 100}%`; band.style.width = `${(hi - lo) * 100}%`;
+      if (cap()) cap().textContent = `curiosity · target ${tc.lo} – ${tc.hi}`; };
+    m.onpointerdown = (e) => { x0 = at(e); ctl.dragging = true; m.setPointerCapture(e.pointerId); show(x0, x0); };
+    m.onpointermove = (e) => { if (x0 != null) show(x0, at(e)); };
+    m.onpointerup = m.onpointercancel = () => { if (x0 == null) return; x0 = null; ctl.dragging = false; paintReport(); };
+    return m; };
   const nowCard = (d, who) => { // after Pino's "right now": one sentence of what it is doing this second, then how it feels, what it needs, what is on its mind
     const run = d.train?.runs?.[0], live = !!d.train?.active, N = d.now || {}, L = d.life || {}, D = d.disposition || {}, last = run?.log?.at(-1), t0 = (d.trace || [])[0];
     const doing = N.kind ? DOING[N.kind] || N.kind : live ? "Between steps" : d.mode === "sleeping" ? "Asleep" : L.tired ? "Resting until its energy comes back" : "Waiting for you";
     const why = live && last?.outcome ? `Step ${n0(last.step)}: ${last.outcome}` : t0 ? `Last, it ${VERB[t0.kind] || t0.kind} ${t0.detail}` : "";
-    const cfg = run?.config, cmax = Math.max(12, (cfg?.hi || 0) * 2), cur = n0(D.curiosity), tr = L.trust?.value ?? 0;
+    const cfg = live ? run?.config : (ctl.tcfg ||= { minutes: 20, lo: 0, hi: 1, max_steps: 60 }), cmax = Math.max(12, (cfg?.hi || 0) * 2), cur = n0(D.curiosity), tr = L.trust?.value ?? 0;
     const meter = (lo, hi, v, at, band) => h("div", { class: "pn-meter" }, h("div", { class: "pn-line" }, band ? h("b", { style: `left:${band[0] * 100}%;width:${(band[1] - band[0]) * 100}%` }) : "", h("i", { style: `left:${Math.max(0, Math.min(1, at)) * 100}%` })),
       h("div", { class: "pn-ends" }, h("span", {}, lo), h("span", { class: "pn-num" }, v), h("span", {}, hi)));
     const cells = (v) => h("span", { class: "pn-cells" }, ...[...Array(12)].map((_, i) => h("i", i < Math.round(v * 12) ? { "data-on": v < .3 ? "hot" : "on" } : {})));
@@ -402,7 +412,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       h("p", { class: "pn-doing" }, doing), why ? h("p", { class: "pn-why" }, esc(why).slice(0, 220)) : "",
       h("div", { class: "pn-grid" },
         h("div", {}, h("span", { class: "pn-label" }, "how it feels"),
-          meter("settled", "restless", r2(cur), cur / cmax, cfg ? [cfg.lo / cmax, Math.min(1, cfg.hi / cmax)] : null), h("small", { class: "pn-cap" }, "curiosity" + (cfg ? ", target band marked" : "")),
+          dragBand(meter("settled", "restless", r2(cur), cur / cmax, [cfg.lo / cmax, Math.min(1, cfg.hi / cmax)]), live ? null : cfg, cmax),
+          h("small", { class: "pn-cap" }, live ? "curiosity, this run's target marked" : `curiosity · drag along the line to set the next run's target (${r2(cfg.lo)} – ${r2(cfg.hi)})`),
           meter("wary", "open", (tr >= .5 ? "+" : "") + r2(tr * 2 - 1), tr), h("small", { class: "pn-cap" }, "trust in you")),
         h("div", {}, h("span", { class: "pn-label" }, "what it needs"), h("ul", { class: "pn-needs" }, ...Object.entries(L.needs || {}).map(([k, v]) => h("li", { title: L.about?.[k] || "" }, h("span", {}, k), cells(v))))),
         h("div", {}, h("span", { class: "pn-label" }, "on its mind"),
@@ -480,7 +491,10 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
         return st.length ? h("div", { class: "st-cells", style: `--c:${SC[n]}` }, h("div", {}, ...st.map((t) => h("i", { "data-o": t.outcome, title: `${t.kind} · ${local(t.at)}: ${t.detail}` }))), h("small", {}, `last ${st.length} steps: ${did} did something`)) : ""; };
       const newRun = h("button", { type: "button", class: "st-new", onclick: () => to(7) }, live ? `a run is going · watch it →` : "▶ new run");
       fill(0, `${who}.`, [b(T.steps), " steps since ", local(d.since), ". ", b(T.ok), " did something, ", b(T.skipped), " found nothing to do."],
-        h("div", { class: "st-model", "data-up": String(!!d.model?.up) }, h("span", {}, h("i"), d.model?.up ? (d.now?.sys != null ? "thinking on" : "running on") : "model down"), h("strong", {}, esc((d.model_name || "no model set").split("/").pop()))),
+        h("div", { class: "st-model", "data-up": String(!!d.model?.up) }, h("span", {}, h("i"), d.model?.up ? (d.now?.sys != null ? "thinking on" : "running on") : "model down"), (d.models?.length > 1 ? h("select", { class: "st-pick", "aria-label": "Model it thinks on", disabled: live || !!ctl.busy,
+          onchange: (e) => { const v = e.target.value; act(`model ${v}`, () => api("/settings", { method: "PATCH", body: JSON.stringify({ model_name: v }) }).then(() => `now thinking on ${v}`)); } },
+          ...d.models.map((m) => h("option", { value: m, selected: m === d.model_name }, m.split("/").pop())))
+          : h("strong", { title: "The only model this server lists. Load another in your model server to pick it here." }, esc((d.model_name || "no model set").split("/").pop())))),
         newRun, rows([["curiosity", r2(d.disposition?.curiosity)], ["cycles", `${n0(HL.cycles_run)} · ${n0(HL.executed)} of ${n0(HL.proposed)} proposed steps ran`], stuck ? ["mostly stuck on", `${stuck[0]} (${stuck[1]}×)`, "#ffe600"] : null].filter(Boolean)));
       fill(1, "The dot is just a body.", ["Four systems inside it. What each is doing now:"],
         rows([[2, "S2 plans"], [1, "S1 asks"], [0, "S0 reads"], [3, "V checks"]].map(([n, t]) => { const s = loop.find((x) => x.system === n), stt = s ? stageOf(s).state : ["idle", ""]; return [t, D.now?.sys === n ? `working: ${DOING[D.now.kind] || D.now.kind}` : stt[1] || stt[0], SC[n]]; })));
