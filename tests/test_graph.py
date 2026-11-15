@@ -90,3 +90,30 @@ def test_key_ideas_parses_list(monkeypatch: pytest.MonkeyPatch) -> None:
         choices=[SimpleNamespace(message=SimpleNamespace(content=reply))]))))
     monkeypatch.setattr(graph.llm, "client", lambda *a, **k: fake)
     assert graph.llm.key_ideas(Settings(model_name="m"), "T", ["p"]) == ["Group privacy", "Contextual integrity", "Traditional anonymization methods", "Dashcam data"]
+
+
+def test_the_map_never_loads_a_model_and_a_broken_one_is_tried_once(lib, monkeypatch):
+    from types import SimpleNamespace
+    from openai import APIError
+    s = Settings(model_name="m", base_url="http://x/v1")
+    tried: list[str] = []
+    monkeypatch.setattr(graph.llm, "model_status", lambda s: {"models": ["embeddinggemma-300m", "nomic-embed-text"]})
+    def create(model, input):
+        tried.append(model)
+        if model.startswith("embeddinggemma"):
+            raise APIError("Some Ollama models do not work with llama.cpp", request=SimpleNamespace(), body=None)
+    monkeypatch.setattr(graph.llm, "client", lambda *a, **k: SimpleNamespace(embeddings=SimpleNamespace(create=create)))
+    graph._working.clear(); graph._broken.clear()
+    with pytest.raises(graph.GraphError):
+        graph.embed_model(s, probe=False)  # a page load: no server call, so the chat model stays loaded
+    assert tried == []
+    assert graph.embed_model(s) == "nomic-embed-text" and tried == ["embeddinggemma-300m", "nomic-embed-text"]
+    graph._working.clear()
+    assert graph.embed_model(s) == "nomic-embed-text" and tried.count("embeddinggemma-300m") == 1  # the broken one is not loaded again
+
+
+def test_the_model_the_papers_were_indexed_with_wins_without_a_probe(lib, monkeypatch):
+    graph.index_missing(S)
+    graph._working.clear()
+    monkeypatch.setattr(graph.llm, "model_status", lambda s: (_ for _ in ()).throw(AssertionError("no probe")))
+    assert graph.embed_model(Settings(model_name="m", base_url="http://y/v1"), probe=False) == "fake-embed"

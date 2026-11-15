@@ -69,7 +69,7 @@ def test_map_groups_and_names(lib: dict[str, str], monkeypatch: pytest.MonkeyPat
 
 
 def test_map_without_embeddings(lib: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    def boom(s: Settings) -> str:
+    def boom(s: Settings, probe: bool = True) -> str:
         raise graph.GraphError("No embedding model.")
     monkeypatch.setattr(graph, "embed_model", boom)
     out = shelf.library_map(S)

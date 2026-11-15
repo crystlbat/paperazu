@@ -168,6 +168,19 @@ def test_ensure_swaps_and_records(monkeypatch):
     assert llm.ensure(settings.get_all(), "B", poll=0) is None  # already active: nothing to do
 
 
+def test_a_failed_load_puts_the_old_model_back(monkeypatch):
+    calls = _server(monkeypatch, [{"active_model": "A", "loaded": ["A"], "loading": []}])
+    real = llm._api
+    def api(s, method, path, body=None, timeout=10):
+        if path == "load" and body == {"model_path": "dory"}:
+            raise RuntimeError("Some Ollama models do not work with llama.cpp")
+        return real(s, method, path, body, timeout)
+    monkeypatch.setattr(llm, "_api", api)
+    sw = llm.ensure(settings.get_all(), "dory", poll=0)
+    assert sw["ok"] is False and ("POST", "load", {"model_path": "A"}) in calls  # not left with nothing loaded
+    assert "A loaded back" in char.ENGINES["model"]["detail"]
+
+
 def test_ensure_noop_and_unknown_shape(monkeypatch):
     assert llm.ensure(settings.get_all(), "") is None  # empty setting: whatever is loaded, and no HTTP (the fixture would raise)
     _server(monkeypatch, [{"model": "x"}])

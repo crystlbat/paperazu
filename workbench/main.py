@@ -1105,7 +1105,7 @@ def char_want(want_id: int, body: dict[str, Any] = Body(default={})) -> dict[str
 def char_report() -> dict[str, Any]:
     return {**char.report(*_model()), "harness_loop": harness.totals(), "cycles": harness.cycles(30), "mode": char.mode(), "tracker": char.tracker(),
             "race": verse.live_race(), "train": train.status(), "letter": char.letter(), "now": dict(char.NOW),
-            "model_name": (lambda c: c.chat_model or c.model_name or "")(settings.get_all()), "models": _model_seen.get("models", [])}
+            "model_name": (lambda c: c.chat_model or c.model_name or "")(settings.get_all()), "models": [m for m in _model_seen.get("models", []) if "embed" not in m.lower()]}  # an embedding model cannot think: picking one breaks every reply
 
 
 @app.post("/char/cycle")

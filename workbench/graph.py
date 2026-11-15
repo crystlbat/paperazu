@@ -66,17 +66,31 @@ def _vec(b: bytes) -> array:
 
 # ---------- embedding ----------
 
-def embed_model(s: Settings) -> str:
-    """The embedding model to use: the setting, else the first listed one with "embed" that works."""
+_broken: dict[str, set[str]] = {}  # base_url -> embed models that failed a probe: never tried again, each try costs a model load
+
+
+def embed_model(s: Settings, probe: bool = True) -> str:
+    """The embedding model to use: the setting, else the one the papers were indexed with, else the first listed one with "embed" that works.
+    probe=False never calls the server: on a one-model server (Unsloth) a probe loads the model and evicts the chat model, so a page load must not."""
     if s.embed_model:
         return s.embed_model
     if s.base_url in _working:
         return _working[s.base_url]
-    models = sorted((m for m in llm.model_status(s)["models"] if "embed" in m.lower()), key=lambda m: "embeddinggemma" not in m.lower())
+    con = db.connect()
+    r = con.execute("SELECT model, COUNT(*) AS n FROM chunks WHERE model != '' GROUP BY model ORDER BY n DESC LIMIT 1").fetchone()
+    con.close()
+    if r:  # its vectors only compare with the same model, so this is the one to use
+        _working[s.base_url] = r["model"]
+        return r["model"]
+    if not probe:
+        raise GraphError("No papers are indexed yet. Search once, or set an embedding model in Settings.")
+    bad = _broken.setdefault(s.base_url, set())
+    models = sorted((m for m in llm.model_status(s)["models"] if "embed" in m.lower() and m not in bad), key=lambda m: "embeddinggemma" not in m.lower())
     for m in models:
         try:
             llm.client(s, timeout=60).embeddings.create(model=m, input=["test"])
         except APIError:
+            bad.add(m)
             continue
         _working[s.base_url] = m
         return m

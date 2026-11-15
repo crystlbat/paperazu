@@ -122,6 +122,12 @@ def ensure(s: Settings, model: str, timeout: float = 600, poll: float = 1.0) -> 
                 time.sleep(poll)
         except Exception as e:
             why = str(e)[:120]
+        if not ok and cur:  # the old one is already unloaded: put it back, or the server is left with no model at all
+            try:
+                _api(s, "POST", "load", {"model_path": cur}, timeout=timeout)
+                why += f"; {cur} loaded back"
+            except Exception as e:
+                why += f"; could not load {cur} back: {str(e)[:80]}"
         secs = round(time.time() - t0, 1)
         SWAP.update(busy=False, phase="ready" if ok else "failed", fraction=1.0 if ok else SWAP["fraction"])
         _picked.clear()  # the cached pick may name the model that just left
