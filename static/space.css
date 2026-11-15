@@ -1294,3 +1294,19 @@ body:has(.st) .sp-ear { position: fixed; z-index: 70; }
 .sw-db .sw-dl button[aria-current="true"] { background: rgb(255 255 255 / .06) !important; box-shadow: inset 2px 0 0 var(--sig); }
 .sw-db .sw-tplay { background: var(--sig) !important; color: #000 !important; box-shadow: none !important; }
 .sw-db .sw-droles :is(select, i) { box-shadow: none !important; }
+/* a finished run, judged in plain words */
+.f1-verdict { --tone: rgb(255 255 255 / .6); border-top: 1px solid rgb(255 255 255 / .16); padding: 22px 0 8px; margin-bottom: 18px; display: grid; gap: 12px; font-family: var(--mono, monospace); }
+.f1-verdict[data-tone="bad"] { --tone: #ff6b6b; } .f1-verdict[data-tone="good"] { --tone: #7dffa8; }
+.f1-vno { margin: 0; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: rgb(255 255 255 / .5); }
+.f1-verdict h3 { margin: 0; font: 400 clamp(32px, 4vw, 60px)/1 var(--mono, monospace); letter-spacing: -.04em; text-transform: uppercase; color: var(--tone); }
+.f1-vwhy { margin: 0; font-size: 14px; color: #fff; }
+.f1-vcells { display: flex; flex-wrap: wrap; gap: 3px; } .f1-vcells i { width: 12px; height: 12px; box-sizing: border-box; border: 1px solid rgb(255 255 255 / .25); }
+.f1-vcells i[data-o="ok"] { background: #7dffa8; border-color: #7dffa8; } .f1-vcells i[data-o="failed"] { background: #ff6b6b; border-color: #ff6b6b; }
+.f1-vrows { list-style: none; margin: 0; padding: 0; max-width: 80ch; border-top: 1px solid rgb(255 255 255 / .16); }
+.f1-vrows > li { display: grid; grid-template-columns: 22ch 1fr; gap: 14px; padding: 9px 0; border-bottom: 1px solid rgb(255 255 255 / .16); font-size: 13px; }
+.f1-vrows > li > span { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--c, rgb(255 255 255 / .5)); padding-top: 2px; }
+.f1-vrows ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; } .f1-vrows p { margin: 0; } .f1-vrows b { color: var(--c); font-weight: 400; }
+.f1-vnext { margin: 0; font-size: 13px; color: rgb(255 255 255 / .85); } .f1-vnext b { color: #ffe600; font-weight: 400; text-transform: uppercase; letter-spacing: .14em; font-size: 11px; }
+.f1-verdict :is(p, ol li) { max-width: none !important; display: block; -webkit-line-clamp: unset !important; line-clamp: none; overflow: visible !important; white-space: normal !important; text-overflow: clip !important; width: auto !important; }
+.f1-verdict .f1-vnext { max-width: 80ch !important; }
+.f1-vrows ol { width: 100%; max-width: none !important; min-width: 0; }

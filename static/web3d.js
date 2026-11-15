@@ -516,6 +516,23 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       say.replaceChildren(...lines.map((x) => h("li", {}, esc(x.text.replace(/^A wish: /, "")).slice(0, 180))));
     } };
   };
+  const verdict = (run) => { // a finished run, in plain words: did it work, what each step did, what failed and why, what to do next
+    const steps = (run.log || []).filter((x) => x.step > 0), by = (k) => steps.filter((x) => x.kind === k), ok = by("ok"), sk = by("skipped"), bad = by("failed");
+    const reasons = (xs) => Object.entries(xs.reduce((m, x) => (m[x.outcome] = (m[x.outcome] || 0) + 1, m), {})).sort((a, b) => b[1] - a[1]);
+    const c0 = run.log?.[0]?.curiosity, c1 = run.log?.at(-1)?.curiosity, cfg = run.config || {}, hit = /reached the target/.test(run.why || "");
+    const word = run.status === "failed" ? "Failed" : run.status === "stopped" ? "Stopped" : hit ? "Reached the target" : ok.length ? "Finished" : "Finished, learned nothing";
+    const tone = run.status === "failed" ? "bad" : hit || ok.length ? "good" : "flat";
+    const next = run.status === "failed" ? (bad.some((x) => /already running/.test(x.outcome)) ? "Its own idle learning was mid-cycle when the run started. Runs now wait their turn, so press play again." : "Look at the failures below, fix what they name, then press play again.")
+      : run.status === "stopped" ? "You stopped it. Press play to start again." : hit ? "Curiosity settled where you wanted it." : !ok.length ? "Every step found nothing to do. Answer the open questions in the letter to give it something new." : "Press play to keep it going, or move the target.";
+    const row = (k, xs, c) => xs.length ? h("li", { style: `--c:${c}` }, h("span", {}, `${xs.length} ${k}`), h("ol", {}, ...reasons(xs).slice(0, 4).map(([why, n]) => h("li", {}, esc(why), n > 1 ? h("b", {}, ` ×${n}`) : "")))) : "";
+    return h("section", { class: "f1-verdict", "data-tone": tone },
+      h("p", { class: "f1-vno" }, `run ${run.id} · ${local(run.started)}${run.clock != null ? ` · ${mmss(run.clock)}` : ""}`),
+      h("h3", {}, word + "."), h("p", { class: "f1-vwhy" }, esc(run.why || "")),
+      h("div", { class: "f1-vcells", "aria-label": `${steps.length} steps` }, ...steps.map((x) => h("i", { "data-o": x.kind, title: `step ${x.step}: ${x.kind} · ${x.outcome}` }))),
+      h("ul", { class: "f1-vrows" }, row("did something", ok, "#7dffa8"), row("found nothing to do", sk, "rgb(255 255 255 / .5)"), row("failed", bad, "#ff6b6b"),
+        typeof c0 === "number" ? h("li", {}, h("span", {}, "curiosity"), h("p", {}, `${r2(c0)} → ${r2(c1)} · target ${r2(cfg.lo)} – ${r2(cfg.hi)}: ${hit ? "reached" : "not reached"}`)) : ""),
+      h("p", { class: "f1-vnext" }, h("b", {}, "Next: "), next));
+  };
   const LANE = [[2, "S2 Plan"], [1, "S1 Goals"], [0, "S0 Execute"], [3, "V Verify"]];
   const niceStep = (T) => [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200].find((x) => T / x <= 8) || 7200;
   const tLabel = (t, T) => T < 120 ? `${Math.round(t)}s` : mmss(t);
@@ -578,7 +595,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const held = still.length ? h("p", { class: "f1-still" }, "Held steady: ", ...still.map((k) => h("span", { style: `--c:${C[k]}` }, k, h("b", {}, String(r2(+pts.at(-1)?.[k] || 0)))))) : "";
     const head = live ? h("div", { class: "f1-head" }, h("i"), h("span", {}, run.status === "paused" ? "Paused" : "Training"), h("strong", {}, mmss(clock)), h("small", {}, `of ${mmss(cfg?.minutes * 60)}`),
         h("strong", {}, String(n0(last?.step))), h("small", {}, `of ${n0(cfg?.max_steps)} steps`), h("strong", {}, String(n0(run.snaps))), h("small", {}, "checkpoints"))
-      : h("div", { class: "f1-head" }, h("i"), h("span", {}, run ? `Run ${run.id} ${run.status === "done" ? "finished" : run.status}${run.why ? `: ${run.why}` : ""}` : "No run yet: start one on Controls, then watch it here"));
+      : run ? verdict(run) : h("div", { class: "f1-head" }, h("i"), h("span", {}, "No run yet: press ▶ new run, then watch it here"));
     const L = d.learned || {}, st = (n) => { const s = loop.find((x) => x.system === n); return s ? stageOf(s).state : ["idle", ""]; }, gate = (d.trace || []).find((t) => t.kind === "evaluate");
     const S = [{ n: L.plans, k: "plan lines", c: SC[2], s: st(2), to: () => { rSys = 2; go("activity"); } }, { n: L.questions, k: "questions", c: SC[1], s: st(1), sub: `${n0(L.answered)} answered`, to: () => { rSys = 1; go("activity"); } },
       { n: L.notes, k: "notes written", c: SC[0], s: st(0), to: () => go("notes") }, { n: L.verified, k: "let in", c: SC[3], s: gate ? [gate.outcome === "ok" ? "working" : gate.outcome, gate.detail] : st(3), sub: `${n0(L.rejected)} turned away`, gate: true, to: () => go("notes") },

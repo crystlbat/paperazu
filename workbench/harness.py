@@ -233,9 +233,10 @@ def verify(executed: list[dict[str, Any]], s: settings.Settings, swaps: list[dic
     return [{"cmd": x["cmd"], **v} for x, v in zip(executed, verdicts)]  # type: ignore[dict-item]
 
 
-def cycle(budget: int = BUDGET, force: bool = False) -> dict[str, Any]:
-    """One full cycle: planner → controller → executor → Verifier. Persisted as "Cycle: n" and "Feedback: n" sheet rows."""
-    if not _lock.acquire(blocking=False):
+def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[str, Any]:
+    """One full cycle: planner → controller → executor → Verifier. Persisted as "Cycle: n" and "Feedback: n" sheet rows.
+    wait: seconds to wait for a cycle already running (a training run waits its turn; a click does not)."""
+    if not (_lock.acquire(timeout=wait) if wait > 0 else _lock.acquire(blocking=False)):
         raise RuntimeError("a cycle is already running")
     try:
         char.init_db()

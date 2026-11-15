@@ -101,11 +101,14 @@ def _vars(d: dict[str, Any]) -> dict[str, float]:
     return {**{k: round(v, 3) for k, v in char.needs().items()}, "trust": char.trust()["value"], **({"frontier": round(d["frontier"]["term"], 3)} if isinstance(d.get("frontier"), dict) and "term" in d["frontier"] else {})}
 
 
+WAIT_TURN = 300.0  # seconds a run step waits for a cycle already running
+
+
 def _one_step() -> tuple[str, str]:
     """One learning step, the way idle time runs them: a harness cycle in planner mode, else the Verifier's pick. Forced: a run ignores tiredness and quiet."""
     if char.mode() == "planner":
         from . import harness  # harness imports char
-        c = harness.cycle(force=True)
+        c = harness.cycle(force=True, wait=WAIT_TURN)  # idle learning may be mid-cycle when the run starts: wait for it, do not count it as a failure
         did = [x for x in c.get("executed", []) if x.get("outcome") == "ok"]
         return ("ok" if did else "skipped"), " · ".join(x["cmd"] for x in did) or "cycle did nothing"
     r = char.rest(True, None, force=True)
