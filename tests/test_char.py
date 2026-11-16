@@ -1625,11 +1625,18 @@ def test_the_bandit_favours_the_step_that_raised_j_lately_and_the_drive_cools_wi
         char.add_memory("Tick", json.dumps({"what": what, "score": j}), source="sheet")
     A = char.arms()
     assert A["reflect"][0] > A["speculate"][0] and A["speculate"] == (1.0, round(1 + char.STILL * (1 + char.DISCOUNT), 3))
+    char.add_memory("Tick", json.dumps({"what": "extract", "score": 0.25}), source="sheet")  # new names: J dips until they are answered
+    char.add_memory("Tick", json.dumps({"what": "check", "score": 0.2}), source="sheet")
+    A = char.arms()
+    assert A["extract"] == (2.0, 1.0) and A["check"] == (1.0, 2.0)  # finding a gap pays an explore step; lowering J does not pay a check step
     monkeypatch.setattr(char.random, "betavariate", lambda a, b: a / (a + b))  # the mean in place of a draw
     assert char.thompson(["speculate", "reflect", "check"]) == "reflect"  # check is untried at a half; reflect has paid more than that
     d = {"curiosity": 1.0, "maturity": 0.0, "score": {"surprise": 0.8}}
     hot, cold = char.drive(d), char.drive({**d, "maturity": 0.9})
-    assert hot["tau"] > cold["tau"] and (hot["E"], hot["C"]) == (0.5, 0.0)  # nothing open: nothing to check, so it explores
+    assert hot["tau"] > cold["tau"] == char.TAU_MIN and (hot["E"], hot["C"]) == (0.5, 0.0)  # nothing open: nothing to check, so it explores
+    char.add_memory("Question: Who is Alfred?", "Who is Alfred? (from 0)", source="question")
+    young, old = char.drive({**d, "curiosity": 1.86}), char.drive({**d, "curiosity": 1.86, "maturity": 0.9})
+    assert young["p_explore"] > 0.5 > old["p_explore"]  # the same pulls: young it reaches out, mature it checks what is open (run 18 sat at P explore 1.0 once mature)
 
 
 def test_compression_falls_when_unfolded_ideas_pile_up_and_that_wakes_curiosity():

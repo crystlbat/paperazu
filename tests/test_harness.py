@@ -366,3 +366,11 @@ def test_the_reason_carries_the_drive_numbers_even_when_the_planner_gives_none(m
     _models(monkeypatch, 'reflect "fog"')  # a planner that skips the why line
     r = harness.cycle()
     assert r["reason"] == "explore: explore 0.6 vs check 0.2 at τ 0.3, P explore 0.79" and r["why"] == ""
+
+
+def test_the_controller_turns_away_other_work_and_drops_a_copied_description(monkeypatch):
+    monkeypatch.setattr(char, "world_words", lambda: {"Sagira", "Osiris", "Vex", "Destiny"})
+    plan, rejected = harness.validate([{"name": "reflect", "arg": "Vex in *Mass Effect*"}, {"name": "reflect", "arg": "Osiris in ancient Egyptian mythology"},
+                                       {"name": "reflect", "arg": "Where is Sagira in Destiny?"}, {"name": "goal", "arg": "turn the oldest open plan line into one question"}])
+    assert [r["why"].startswith("off its world") for r in rejected] == [True, True]  # run 18 searched both, and the gate had to throw one away
+    assert [(p["name"], p["arg"]) for p in plan] == [("reflect", "Where is Sagira in Destiny?"), ("goal", "")]  # its own description is not a topic

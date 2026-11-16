@@ -561,10 +561,20 @@ def world_words() -> set[str]:
     return words if len(words - own) >= 3 else set()  # too little known of its world to judge by: no gate rather than no learning
 
 
+OTHER_WORK = re.compile(r"(?i)\b(?:mytholog\w*|ancient (?:egypt\w*|greek|greece|rome|roman|norse)|real[- ]world)\b")  # a world word reused by myth or history: Osiris the god, not the Warlock
+SET_IN = re.compile(r"\bin \*?([A-Z][\w'-]+(?: [A-Z0-9][\w'-]*)*)\*?")  # "Vex in *Mass Effect*": a title it is set in
+
+
 def on_world(text: str, words: set[str] | None = None) -> bool:
-    """A topic the model made up belongs to its world only if it names something from it: no model, so a small one can't drift it to "the political landscape"."""
+    """A topic the model made up belongs to its world only if it names something from it, and does not set it in another work or in myth:
+    no model, so a small one can't drift it to "the political landscape", or carry a name off to another game.
+    shortcut: a set phrase list and "in <Title>", not a judgement; the intake gate's model check still catches what this lets by."""
     words = world_words() if words is None else words
-    return not words or any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
+    if not words:
+        return True
+    if OTHER_WORK.search(text) or any(not set(t.split()) & words for t in SET_IN.findall(text)):
+        return False
+    return any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
 
 
 def in_voice(said: str | None, who: str) -> bool:
@@ -1188,12 +1198,15 @@ STILL = 0.25  # a step that left J where it was counts as a quarter of a miss: i
 
 
 def arms(last: int = 200) -> dict[str, tuple[float, float]]:
-    """A Beta(a, b) per kind of step over 'it raised J', newest evidence weighted most. Untried steps sit at Beta(1, 1), so they still get picked."""
+    """A Beta(a, b) per kind of step, newest evidence weighted most. Untried steps sit at Beta(1, 1), so they still get picked.
+    A check step pays when it raised J. An explore step pays when it moved J either way (MAGELLAN's absolute learning progress):
+    new names lower J until they are answered, and that is the gap it was sent to find."""
     out = {}
     for k, ds in _deltas(last).items():
         a = b = 1.0
         for i, x in enumerate(reversed(ds)):
             w = DISCOUNT ** i
+            x = abs(x) if k in EXPLORE else x
             a, b = (a + w, b) if x > 1e-4 else (a, b + w) if x < -1e-4 else (a, b + STILL * w)
         out[k] = (round(a, 3), round(b, 3))
     return out
@@ -1212,7 +1225,8 @@ def judge_trust() -> dict[str, float]:
 
 EXPLORE = ("speculate", "wonder", "goal", "ask", "extract", "ideas", "plan", "want")  # System 1: reach for the new
 CHECK = ("reflect", "check", "fold")  # System 2: answer, verify, compress what it has
-TAU0 = 0.5  # softmax temperature at maturity 0; it cools as maturity rises, so it explores early and checks later
+TAU0 = 0.5  # softmax temperature at maturity 0; it cools as maturity rises, so a mature character picks more firmly
+TAU_MIN = 0.1  # never colder: at 0.05 a small lead won every draw and the other side never ran
 REST_AT = 0.05  # driving force under this: nothing pulls it, it rests (Reddin's deterministic silence)
 
 
@@ -1226,9 +1240,10 @@ def drive(d: dict[str, Any] | None = None) -> dict[str, Any]:
                             "(SELECT substr(title, 10) FROM char_memories WHERE source = 'sheet' AND title LIKE 'Checked: %')", (start,)).fetchone()["c"]
     con.close()
     u, jt = len(_open_questions(start)) + unchecked, judge_trust()  # check-side work: questions to answer and notes to verify
-    E = d["curiosity"] / (1 + d["curiosity"])
-    C = u / (u + 1) * max(d["score"]["surprise"], 1 - jt["value"])
-    tau = round(max(0.05, TAU0 * (1 - d["maturity"])), 3)
+    m = d["maturity"]
+    E = d["curiosity"] / (1 + d["curiosity"]) * (1 - m / 2)  # maturity tips the balance, explore early and check later: the temperature only sets how sharp the pick is
+    C = u / (u + 1) * max(d["score"]["surprise"], 1 - jt["value"]) * (0.5 + m / 2)
+    tau = round(max(TAU_MIN, TAU0 * (1 - m)), 3)
     p = 1 / (1 + math.exp(-(E - C) / tau))
     df = p * E + (1 - p) * C
     return {"E": round(E, 3), "C": round(C, 3), "tau": tau, "p_explore": round(p, 3), "DF": round(df, 3), "rest": df < REST_AT, "open": u, "unchecked": unchecked, "judge": jt}

@@ -222,6 +222,8 @@ def validate(cmds: list[dict[str, str]], budget: int = BUDGET, force: bool = Fal
     cmds = sorted(cmds, key=lambda c: c["name"] not in ready)  # a small planner recites the catalogue in order; work that can happen now goes first
     for c in cmds:
         spec, arg = COMMANDS.get(c["name"]), re.split(r"[\"']\s*:\s", c.get("arg", ""))[0].strip("\"' ")  # repair: a small planner glues the catalogue text after the topic
+        if len(arg) > 12 and any(arg.lower() in x["does"].lower() for x in COMMANDS.values()):  # or hands a step its own description as the topic
+            arg = ""
         why = ""
         if not spec:
             why = "unknown command"
@@ -234,6 +236,8 @@ def validate(cmds: list[dict[str, str]], budget: int = BUDGET, force: bool = Fal
         elif spec["args"] == "note id" and arg:
             arg = re.sub(r"\D", "", arg)
             why = "" if arg in notes else f"no unchecked note {c['arg']} in the live persona"
+        elif c["name"] == "reflect" and arg and not char.on_world(arg):
+            why = "off its world: sets it in another work or names nothing from it"
         elif spec["args"] == "name" and arg:
             arg = names.get(arg.lower(), "")
             why = "" if arg else f"no name {c['arg']} in its graph"
