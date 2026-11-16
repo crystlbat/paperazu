@@ -383,7 +383,8 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         verdicts = [] if CANCEL.is_set() else verify(executed, s, swaps)
         out = {"cycle": n, "plan_text": text, "proposed": [_text(c) for c in proposed], "rejected": rejected,
                "executed": [{k: x[k] for k in ("cmd", "outcome", "detail")} for x in executed], "verdicts": verdicts,
-               "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps], "self": me, "why": why, "drive": dv, **({"planner_failed": failed} if failed else {})}
+               "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps], "self": me, "why": why, "drive": dv,
+               "reason": "; ".join(x for x in ((f"{dv['mode']}: explore {dv['E']} vs check {dv['C']} at τ {dv['tau']}, P explore {dv['p_explore']}" if dv.get("mode") else ""), (f"planner: {why}" if why else "")) if x), **({"planner_failed": failed} if failed else {})}
         char.add_memory(f"Feedback: {n}", json.dumps(verdicts), source="sheet")
         char.add_memory(f"Cycle: {n}", json.dumps(out), source="sheet")
         kept = sum(v["keep"] for v in verdicts)

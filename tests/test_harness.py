@@ -127,6 +127,7 @@ def test_full_cycle_runs_records_and_feeds_back(monkeypatch):
     calls = _models(monkeypatch, f'why: 1 unchecked note, so check first\ncheck {note}\nreflect "Baker Street"\nteleport now')
     r = client.post("/char/cycle", json={}).json()
     assert r["why"] == "1 unchecked note, so check first"  # its reason, kept with the cycle and never run as a command
+    assert r["reason"] == "planner: 1 unchecked note, so check first"  # steering is off in this test: no numbers of its own to give
     assert r["cycle"] == 1 and r["proposed"] == [f'check "{note}"', 'reflect "Baker Street"', 'teleport "now"']
     assert r["rejected"] == [{"cmd": 'teleport "now"', "why": "unknown command"}]
     assert [(x["cmd"], x["outcome"]) for x in r["executed"]] == [(f'check "{note}"', "ok"), ('reflect "Baker Street"', "ok")]
@@ -356,3 +357,12 @@ def test_the_judge_is_shown_one_settled_step_blind_and_its_agreement_is_its_trus
     v = harness.verify(executed, settings.get_all(), [])
     assert [x["keep"] for x in v] == [True, True]  # the probe never changes the settled verdict
     assert char.judge_trust() == {"value": round(1 / 3, 3), "probes": 1}  # it said DROP to a step the exact check kept: one miss
+
+
+def test_the_reason_carries_the_drive_numbers_even_when_the_planner_gives_none(monkeypatch):
+    monkeypatch.setattr(harness, "steer", _steer)
+    monkeypatch.setattr(char, "drive", lambda d=None: {"E": 0.6, "C": 0.2, "tau": 0.3, "p_explore": 0.79, "DF": 0.5, "rest": False, "open": 0, "unchecked": 0, "judge": {"value": 0.5, "probes": 0}})
+    monkeypatch.setattr(harness.random, "random", lambda: 0.1)  # explore
+    _models(monkeypatch, 'reflect "fog"')  # a planner that skips the why line
+    r = harness.cycle()
+    assert r["reason"] == "explore: explore 0.6 vs check 0.2 at τ 0.3, P explore 0.79" and r["why"] == ""
