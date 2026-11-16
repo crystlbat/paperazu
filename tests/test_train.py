@@ -148,13 +148,15 @@ def test_a_late_tick_does_not_split_one_stretch_of_work_into_two_lanes(monkeypat
 def test_a_sampler_stops_with_its_own_run_not_the_next_one(monkeypatch):
     import threading, time as _t
     from workbench import char, train
-    done = threading.Thread(target=lambda: None); done.start(); done.join()
-    old = {"thread": done, "pause": threading.Event(), "lanes": [], "clock": 0.0}
+    mine = threading.Thread(target=_t.sleep, args=(0.5,)); mine.start()  # still alive when the next run takes RUN over
+    old = {"thread": mine, "pause": threading.Event(), "lanes": [], "clock": 0.0}
     monkeypatch.setattr(train, "RUN", old)
     nxt = threading.Thread(target=_t.sleep, args=(0.3,)); nxt.start()
     monkeypatch.setattr(char, "NOW", {"sys": 2, "kind": "planner"})
     sampler = threading.Thread(target=train._sample, kwargs={"every": 0.05}); sampler.start()
-    train.RUN = {"thread": nxt, "pause": threading.Event(), "lanes": [], "clock": 0.0}  # a new run starts while the old sampler is about
+    old.clear(); old.update(thread=nxt, pause=threading.Event())  # a new run starts while the old sampler is about: start() refills the same dict
+    _t.sleep(0.1)
+    old.update(lanes=[], clock=0.0)
     sampler.join(1)
-    assert not sampler.is_alive() and train.RUN["lanes"] == [] and old["lanes"] == []  # its run had ended: it drew nothing, in either
+    assert not sampler.is_alive() and old["lanes"] == []  # its run had ended: it drew nothing into the next one, and did not crash on the half-filled dict
     nxt.join()

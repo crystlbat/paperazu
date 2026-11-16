@@ -71,6 +71,14 @@ def test_a_skipped_command_stays_off_the_plan_until_something_new_comes_in():
     assert "tune" not in harness.stale()
 
 
+def test_the_planner_is_not_offered_a_step_it_would_be_turned_away_from():
+    char._engine("tune", "skipped", "no grown traits to meet")
+    cat = harness.prompt()[1]["content"].split("State:")[0]
+    assert "- tune:" not in cat and "- reflect" in cat
+    char._engine("review", "ok", "a reply judged")  # something feeds tune: it is back on offer
+    assert "- tune:" in harness.prompt()[1]["content"].split("State:")[0]
+
+
 def test_a_step_that_reads_the_chat_waits_for_a_new_turn():
     char._engine("review", "skipped", "no new reply to review")
     char._engine("reflect", "ok", "a note")  # busy elsewhere: still nothing for review
@@ -374,3 +382,21 @@ def test_the_controller_turns_away_other_work_and_drops_a_copied_description(mon
                                        {"name": "reflect", "arg": "Where is Sagira in Destiny?"}, {"name": "goal", "arg": "turn the oldest open plan line into one question"}])
     assert [r["why"].startswith("off its world") for r in rejected] == [True, True]  # run 18 searched both, and the gate had to throw one away
     assert [(p["name"], p["arg"]) for p in plan] == [("reflect", "Where is Sagira in Destiny?"), ("goal", "")]  # its own description is not a topic
+
+
+def test_its_own_open_question_is_not_turned_away_as_off_world(monkeypatch):
+    monkeypatch.setattr(char, "world_words", lambda: {"Sagira", "Destiny"})
+    char.set_system(1, False)  # marks the persona's start, so the question comes after it
+    char.add_memory("Question", "How did unfreezing Panoptes start?", source="question")
+    plan, rejected = harness.validate([{"name": "reflect", "arg": "How did unfreezing Panoptes start?"}])
+    assert [p["arg"] for p in plan] == ["How did unfreezing Panoptes start?"] and not rejected  # run 20 turned this away eight times
+
+
+def test_a_starved_step_is_not_one_that_would_be_turned_away():
+    for k in harness.COMMANDS:
+        char._engine(k, "ok", "ran")
+    char._engine("review", "skipped", "no new reply to review")
+    for _ in range(12):
+        char.add_memory("Run: reflect", '{"outcome": "ok"}', source="sheet")
+    assert "review" in harness.unavailable()
+    assert harness.starved([{"name": k, "arg": ""} for k in harness.COMMANDS if k != "review"]) == ""  # run 20 put a stale review up front every cycle

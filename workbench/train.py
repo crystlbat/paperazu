@@ -245,6 +245,8 @@ def _sample(every: float = 1.0) -> None:
     last, prev = time.time(), {}
     while th is not None and th.is_alive():
         time.sleep(every)
+        if run.get("thread") is not th:  # RUN is cleared and refilled in place for the next run: same dict, not our run any more
+            return
         now = time.time()
         if run["pause"].is_set():
             last, prev = now, {}

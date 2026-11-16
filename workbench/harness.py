@@ -120,21 +120,32 @@ def notice(n: int, plan: list[dict[str, Any]], rejected: list[dict[str, str]], f
     return me
 
 
-def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
+def _ready() -> set[str]:
+    """Steps with work waiting for them now: these run even after a skip."""
+    return ({"reflect"} if char._open_questions(char._start()) else set()) | ({"check"} if _unchecked() else set())
+
+
+def unavailable(force: bool = False) -> set[str]:
+    """Steps the controller would turn away right now: skipped with nothing new for them, or blocked."""
+    _, blocked = char._blocks(True, force)
+    ready = _ready()
+    return {k for k in stale() if k not in ready} | {k for k in COMMANDS if blocked.get(k)}
+
+
+def prompt(budget: int = BUDGET, force: bool = False) -> list[dict[str, str]]:
     """The planner's messages: goal (open plan lines), the command catalogue, a state summary and the last Verifier feedback."""
     who = char.get_profile()["name"]
     d = char.disposition()
     plans = [r["content"] for r in _rows("Plan: %", 5)]
     names = [n["name"] for n in char.graph()["nodes"] if n["kind"] == "concrete"][:12]
     fb = _rows("Feedback: %")
-    cat = "\n".join(f"- {c['name']}{' <' + c['args'] + '>' if c['args'] else ''}: {c['does']}" for c in COMMANDS.values())
+    hide = unavailable(force)  # left out of the catalogue: a small planner kept picking steps the state line told it not to
+    cat = "\n".join(f"- {c['name']}{' <' + c['args'] + '>' if c['args'] else ''}: {c['does']}" for c in COMMANDS.values() if c["name"] not in hide)
     state = [f"curiosity {d['curiosity']}, maturity {d['maturity']}, frontier per layer {json.dumps(d['frontier']['layers'])}",
              "open questions: " + ("; ".join(char._open_questions(char._start())[:5]) or "none"),
              "unchecked notes: " + (", ".join(f"{r['id']} ({r['title'].removeprefix('Reflection: ')[:50]})" for r in _unchecked()[:5]) or "none"),
              "names in its graph: " + (", ".join(names) or "none"),
              "needs (0 to 1; a low one says what to do first): " + ", ".join(f"{k} {v:.2f}" for k, v in char.needs().items())]
-    if idle := sorted(stale()):  # in plain words, not command syntax: a small planner copied "cmd: drop (why)" lines back as its next commands
-        state.append("nothing to do for these until something new comes in (do not pick them): " + ", ".join(idle))
     if fb:
         vs = json.loads(fb[0]["content"])
         if worked := sorted({v["cmd"].split()[0] for v in vs if v["keep"]}):
@@ -145,7 +156,8 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
         state.append("what each command did to J on average (pick the ones that raised it): " + ", ".join(f"{k} {v['gain']:+.3f} over {v['runs']}" for k, v in list(g.items())[:8]))
     useful = [f'reflect "{qs[0]}"' for qs in [char._open_questions(char._start())] if qs] + \
              [f"check {u[0]['id']}" for u in [_unchecked()] if u]
-    state.append("most useful now: " + ("; ".join(useful) or "plan, then goal, to make new questions"))
+    makers = [k for k in ("plan", "goal", "ask", "wonder", "speculate") if k not in hide]
+    state.append("most useful now: " + ("; ".join(useful) or (", ".join(makers[:2]) + ", to make new questions" if makers else "none")))
     if sp := char.speculations():
         state.append(f"its speculations: {sum(x['held'] for x in sp)} of {len(sp)} held up when checked" + "".join(f"; held: {x['guess'][:90]}" for x in sp if x["held"])[:400])
     if (last := cycles(1)) and last[0].get("self", {}).get("stuck"):
@@ -153,7 +165,7 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
     dv = char.drive(d)
     state.append(f"drive: explore {dv['E']} vs check {dv['C']} ({dv['open']} questions and notes waiting, judge trusted {dv['judge']['value']}); it {'explores' if dv['p_explore'] >= 0.5 else 'checks'} with chance {max(dv['p_explore'], 1 - dv['p_explore']):.2f}")
     return [{"role": "system", "content": f"You plan the next steps of {who}'s learning. Pick at most {budget} commands from the catalogue. "
-                                          "First line: why: then one short reason that names the numbers you went by. Then commands only, one per line, like: reflect \"a topic\" or check 12. No other text." + char._fix("planner")},
+                                          "First line: why: then one short reason that names the numbers you went by. Then commands only, one per line, like: reflect \"a topic\". No other text." + char._fix("planner")},
             {"role": "user", "content": "Goal:\n" + ("\n".join(f"- {p}" for p in plans) or f"- learn about {who}'s world") +
                                         f"\n\nCommands:\n{cat}\n\nState:\n" + "\n".join(f"- {x}" for x in state)}]
 
@@ -201,9 +213,8 @@ def starved(proposed: list[dict[str, str]], force: bool = False) -> str:
     runs = [r["title"].removeprefix("Run: ") for r in _rows("Run: %", 12)]
     if len(runs) < 12:
         return ""
-    _, blocked = char._blocks(True, force)
-    asked = {c["name"] for c in proposed}
-    waiting = [k for k in COMMANDS if k not in asked and k not in runs and not blocked.get(k)]
+    asked, off = {c["name"] for c in proposed}, unavailable(force)
+    waiting = [k for k in COMMANDS if k not in asked and k not in runs and k not in off]  # a step that would be turned away is not starved, just idle
     order = ("check", "extract", "review", "sort", "fold", "ideas", "wonder", "fill", "practise", "tune", "journal", "want")  # checking and reading for names first: the rest builds on them
     return next((k for k in order if k in waiting), waiting[0] if waiting else "")
 
@@ -217,8 +228,8 @@ def validate(cmds: list[dict[str, str]], budget: int = BUDGET, force: bool = Fal
     plan: list[dict[str, Any]] = []
     rejected: list[dict[str, str]] = []
     idle = stale()
-    ready = {"reflect"} if char._open_questions(char._start()) else set()
-    ready |= {"check"} if _unchecked() else set()
+    ready = _ready()
+    asked = set(char._open_questions(char._start()))
     cmds = sorted(cmds, key=lambda c: c["name"] not in ready)  # a small planner recites the catalogue in order; work that can happen now goes first
     for c in cmds:
         spec, arg = COMMANDS.get(c["name"]), re.split(r"[\"']\s*:\s", c.get("arg", ""))[0].strip("\"' ")  # repair: a small planner glues the catalogue text after the topic
@@ -236,7 +247,7 @@ def validate(cmds: list[dict[str, str]], budget: int = BUDGET, force: bool = Fal
         elif spec["args"] == "note id" and arg:
             arg = re.sub(r"\D", "", arg)
             why = "" if arg in notes else f"no unchecked note {c['arg']} in the live persona"
-        elif c["name"] == "reflect" and arg and not char.on_world(arg):
+        elif c["name"] == "reflect" and arg and arg not in asked and not char.on_world(arg):  # its own question came from its notes: it is about its world even when it names nothing the check knows
             why = "off its world: sets it in another work or names nothing from it"
         elif spec["args"] == "name" and arg:
             arg = names.get(arg.lower(), "")
@@ -360,7 +371,7 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         swaps: list[dict[str, Any]] = []
         if sw := llm.ensure(s, s.planner_model):
             swaps.append(sw)
-        msgs = prompt(budget)
+        msgs = prompt(budget, force)
         char.NOW.update(sys=2, kind="planner")
         try:
             text = jobs.complete(_role_settings(s, "planner"), msgs, max_tokens=120) or ""
