@@ -9,30 +9,59 @@ function chibiShade(c, f) { const m = /^#?([0-9a-f]{6})$/i.exec(c || ""); if (!m
 // The picture's figure is cut from its background (its own transparency, or a flood from the edges), Dot's liquid fills it from the
 // bottom up while the picture stays faint over it, and the eyes ride the rising surface until it passes the face, then spring into place.
 const chibiCuts = new Map(); // picture url -> {img, mask, w, h, eye: {x, y, gap}} once loaded; null while loading
-function chibiCut(src) {
-  if (chibiCuts.has(src)) return chibiCuts.get(src);
-  chibiCuts.set(src, null); const img = new Image();
+function chibiCut(src, outline) { // outline: the figure as traced with /trace, [[x, y], ...] in fractions of the picture
+  const key = outline?.length > 2 ? src + "#" + outline.join(";") : src;
+  if (chibiCuts.has(key)) return chibiCuts.get(key);
+  chibiCuts.set(key, null); const img = new Image();
   img.onload = () => { const S = 256 / Math.max(img.width, img.height), w = Math.max(1, Math.round(img.width * S)), h = Math.max(1, Math.round(img.height * S));
     const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d", { willReadFrequently: true }); x.drawImage(img, 0, 0, w, h);
     const px = x.getImageData(0, 0, w, h), d = px.data, fg = new Uint8Array(w * h).fill(1), at = (i) => [d[i * 4], d[i * 4 + 1], d[i * 4 + 2], d[i * 4 + 3]];
     const clear = [0, w - 1, (h - 1) * w, h * w - 1].some((i) => at(i)[3] < 40);
-    if (clear) for (let i = 0; i < w * h; i++) fg[i] = d[i * 4 + 3] > 40 ? 1 : 0; // it has its own transparency: use it
+    if (key !== src) { const m = document.createElement("canvas"); m.width = w; m.height = h; const mx = m.getContext("2d", { willReadFrequently: true }); mx.beginPath(); outline.forEach(([a, b]) => mx.lineTo(a * w, b * h)); mx.fill();
+      const md = mx.getImageData(0, 0, w, h).data, q = []; for (let i = 0; i < w * h; i++) fg[i] = md[i * 4 + 3] > 127 && (!clear || d[i * 4 + 3] > 40) ? 1 : 0; // inside your outline is the figure
+      for (let i = 0; i < w * h; i++) if (fg[i]) { const X = i % w; for (const j of [X > 0 ? i - 1 : -1, X < w - 1 ? i + 1 : -1, i - w, i + w]) if (j >= 0 && j < w * h && !fg[j]) { q.push(i, j); break; } } // then the background still inside it, where it runs smoothly in from the outline, goes too
+      while (q.length) { const from = q.pop(), i = q.pop(); if (!fg[i] || Math.abs(d[i * 4] - d[from * 4]) + Math.abs(d[i * 4 + 1] - d[from * 4 + 1]) + Math.abs(d[i * 4 + 2] - d[from * 4 + 2]) > 24) continue; fg[i] = 0; const X = i % w;
+        if (X > 0) q.push(i - 1, i); if (X < w - 1) q.push(i + 1, i); if (i >= w) q.push(i - w, i); if (i < w * (h - 1)) q.push(i + w, i); } }
+    else if (clear) for (let i = 0; i < w * h; i++) fg[i] = d[i * 4 + 3] > 40 ? 1 : 0; // it has its own transparency: use it
     else { const diff = (i, j) => Math.abs(d[i * 4] - d[j * 4]) + Math.abs(d[i * 4 + 1] - d[j * 4 + 1]) + Math.abs(d[i * 4 + 2] - d[j * 4 + 2]), q = []; // grow the background in from the edges, step by step, so a gradient goes too
       for (let i = 0; i < w; i++) q.push(i, i, (h - 1) * w + i, (h - 1) * w + i); for (let j = 0; j < h; j++) q.push(j * w, j * w, j * w + w - 1, j * w + w - 1);
       while (q.length) { const from = q.pop(), i = q.pop(); if (!fg[i] || diff(i, from) > 24) continue; fg[i] = 0; const X = i % w;
         if (X > 0) q.push(i - 1, i); if (X < w - 1) q.push(i + 1, i); if (i >= w) q.push(i - w, i); if (i < w * (h - 1)) q.push(i + w, i); } }
     let top = h, bot = 0; const rows = []; for (let j = 0; j < h; j++) { let a = w, b = -1; for (let i = 0; i < w; i++) if (fg[j * w + i]) { a = Math.min(a, i); b = i; } rows.push([a, b]); if (b >= 0) { top = Math.min(top, j); bot = j; } }
-    if (bot <= top) { chibiCuts.set(src, { img, mask: null, w, h }); return; }
+    if (bot <= top) { chibiCuts.set(key, { img, mask: null, w, h }); return; }
     const H = bot - top; let neck = Math.round(top + H * .55), nw = w; // a chibi's head is its widest part up top; the neck is the narrowest row below it
     for (let j = Math.round(top + H * .3); j < top + H * .7; j++) { const r = rows[j]; if (r[1] >= 0 && r[1] - r[0] < nw) { nw = r[1] - r[0]; neck = j; } }
     const ey = Math.round(top + (neck - top) * .58), er = rows[ey][1] >= 0 ? rows[ey] : [0, w]; // eyes a little below the middle of the head
     for (let i = 0; i < w * h; i++) d[i * 4 + 3] = fg[i] ? d[i * 4 + 3] : 0; x.putImageData(px, 0, 0); // c is now the figure alone, background gone
-    chibiCuts.set(src, { img: c, mask: c, w, h, top, bot, eye: { x: (er[0] + er[1]) / 2, y: ey, gap: Math.max(6, (er[1] - er[0]) * .2) } }); };
-  img.onerror = () => chibiCuts.set(src, { img: null, mask: null });
+    const eye = chibiEyes(d, fg, w, h, top, bot) || { x: (er[0] + er[1]) / 2, y: ey, gap: Math.max(6, (er[1] - er[0]) * .2) }; // its own painted eyes if it has them, else a guess from its head
+    chibiCuts.set(key, { img: c, mask: c, w, h, top, bot, eye }); };
+  img.onerror = () => chibiCuts.set(key, { img: null, mask: null });
   img.src = src; return null;
 }
+// the picture's own eyes: two dark blobs inside the figure, level with each other, alike in size, a little apart; null when there aren't two
+function chibiEyes(d, fg, w, h, top, bot, glow = false) {
+  const H = bot - top, dark = (i) => { if (!fg[i]) return false; const l = d[i * 4] * .3 + d[i * 4 + 1] * .59 + d[i * 4 + 2] * .11; return glow ? l > 200 : l < 70; }, seen = new Uint8Array(w * h), blobs = [];
+  for (let j = top; j < top + H * .5; j++) for (let i = 0; i < w; i++) { const k0 = j * w + i; if (seen[k0] || !dark(k0)) continue;
+    let n = 0, sx = 0, sy = 0, edge = false; const q = [k0]; seen[k0] = 1;
+    while (q.length) { const k = q.pop(), X = k % w, Y = (k / w) | 0; n++; sx += X; sy += Y;
+      for (const m of [X > 0 ? k - 1 : -1, X < w - 1 ? k + 1 : -1, k - w, k + w]) { if (m < 0 || m >= w * h) continue; if (!fg[m]) edge = true; else if (!seen[m] && dark(m)) { seen[m] = 1; q.push(m); } } }
+    if (!edge && n >= H * H * .0015 && n < H * H * .03) blobs.push({ x: sx / n, y: sy / n, n }); } // an outline touches the background; an eye sits inside
+  let best = null;
+  for (const a of blobs) for (const b of blobs) { const dx = b.x - a.x; if (dx < w * .05 || dx > w * .5 || Math.abs(a.y - b.y) > H * .05 || Math.max(a.n, b.n) > 3 * Math.min(a.n, b.n)) continue;
+    const sc = a.n + b.n - Math.abs(a.y - b.y); if (!best || sc > best.sc) best = { sc, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, gap: dx / 2 }; }
+  return best ? { x: best.x, y: best.y, gap: best.gap } : glow ? null : chibiEyes(d, fg, w, h, top, bot, true); // no dark eyes: try glowing ones (a visor, a mask's lenses)
+}
+// the picture in its own colours at Dot's size, for the dot cloud to sample; its face where its eyes are. null while it loads
+function drawFlat(g, x, y, R, spec) {
+  const cut = chibiCut(spec.silhouette, spec.cuts?.[spec.silhouette]); if (!cut?.mask) return null;
+  const sc = (R * 2.7) / (cut.bot - cut.top), ox = x - cut.eye.x * sc, oy = y + R - cut.bot * sc;
+  g.drawImage(cut.img, ox, oy, cut.w * sc, cut.h * sc);
+  const mk = spec.eyes?.[spec.silhouette], eyes = mk?.length === 2 ? mk.map((e) => ({ x: ox + e.x * cut.w * sc, y: oy + e.y * cut.h * sc, r: e.r * cut.w * sc })) : null; // the eyes you marked with /align-eyes
+  const eye = eyes ? { x: (eyes[0].x + eyes[1].x) / 2, y: (eyes[0].y + eyes[1].y) / 2, gap: Math.abs(eyes[1].x - eyes[0].x) / 2 / sc } : { x: ox + cut.eye.x * sc, y: oy + cut.eye.y * sc, gap: cut.eye.gap };
+  return { x: eye.x, y: eye.y, s: (eye.gap * sc) / (R * .256), ink: "#fff", eyes };
+}
 function drawPoured(g, x, y, R, spec, tint, k, t, alpha) {
-  const cut = chibiCut(spec.silhouette), face = { x, y, s: 1, ink: "#06222a" };
+  const cut = chibiCut(spec.silhouette, spec.cuts?.[spec.silhouette]), face = { x, y, s: 1, ink: "#06222a" };
   if (!cut?.mask || k < .01) return face;
   const sc = (R * 2.7) / (cut.bot - cut.top), w = cut.w * sc, h = cut.h * sc, ox = x - (cut.eye.x * sc), oy = y + R - cut.bot * sc; // its feet where the sphere's bottom was, centred on its face
   const level = oy + (cut.bot - (cut.bot - cut.top) * Math.min(1, k * 1.08)) * sc; // the liquid's surface, rising as it pours in
@@ -48,7 +77,7 @@ function drawPoured(g, x, y, R, spec, tint, k, t, alpha) {
   spec._eyesAt ||= now; const dt = (now - spec._eyesAt) / 1000, wob = Math.exp(-dt * 4) * Math.cos(dt * 16); // the surface passed the face: they spring into place
   return { x: ex + wob * cut.eye.gap * sc * .5, y: ey - wob * R * .06, s: s * (1 + wob * .25), ink: face.ink };
 }
-function drawChibi(g, x, y, R, spec, tint, k, t, alpha = 1) {
+function drawChibi(g, x, y, R, spec, tint, k, t, alpha = 1, line = false) { // line: hairline outlines over black, as the story draws (the /char mesh)
   if (spec.silhouette) return drawPoured(g, x, y, R, spec, tint, k, t, alpha);
   const f = new Set(spec.features || []), mech = spec.kind === "mech", holo = f.has("holo") && !mech, beast = spec.kind === "creature";
   const suit = f.has("suit") && !mech, c1 = suit ? "#1d212b" : spec.colours?.[0] || (mech ? "#9aa3ad" : tint), // a butler wears black, whatever else his article mentions
@@ -58,7 +87,7 @@ function drawChibi(g, x, y, R, spec, tint, k, t, alpha = 1) {
   const face = { x: hx, y: hy + hr * .1 * k, s: (hr / R) * (mech && f.has("optic") ? .72 : .9 + .1 * (1 - k)), ink: k > .5 && mech ? tint : "#06222a" };
   if (k < .01) return face;
   g.save(); g.globalAlpha = alpha * Math.min(1, k * 1.6) * (holo ? .8 + .08 * Math.sin(t * 2.1) : 1); g.lineJoin = g.lineCap = "round";
-  const fill = (c, path) => { g.fillStyle = c; g.beginPath(); path(); g.fill(); };
+  const fill = (c, path) => { g.fillStyle = line ? "#000" : c; g.beginPath(); path(); g.fill(); if (line) { g.strokeStyle = "#fff"; g.lineWidth = 1; g.stroke(); } };
   if (f.has("cape")) fill(c2, () => { g.moveTo(hx - b * .32, top + b * .05); g.lineTo(hx + b * .32, top + b * .05); g.lineTo(hx + b * .55, top + b * .78); g.quadraticCurveTo(hx, top + b * .9, hx - b * .55, top + b * .78); });
   if (f.has("wings")) for (const s of [-1, 1]) fill(chibiShade(c1, .4), () => g.ellipse(hx + s * b * .5, top + b * .2, b * .32, b * .16, s * -.5, 0, 6.283));
   if (f.has("tail") || beast) { g.strokeStyle = c1; g.lineWidth = b * .1; g.beginPath(); g.moveTo(hx + b * .25, top + b * .5); g.quadraticCurveTo(hx + b * .75, top + b * .55, hx + b * .6, top + b * .1 + Math.sin(t * 3) * b * .05); g.stroke(); }

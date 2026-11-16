@@ -109,3 +109,71 @@ def test_you_ask_for_chibi_pictures_pick_one_and_go_back(monkeypatch, tmp_path):
 def test_a_picture_is_only_fetched_from_the_public_web():
     assert not chibi._public("http://127.0.0.1/x.png") and not chibi._public("http://localhost/x.png") and not chibi._public("file:///etc/passwd")
     assert not chibi._public("http://192.168.1.4/x.png")
+
+
+def test_you_can_upload_your_own_picture_for_a_new_form(monkeypatch, tmp_path):
+    import base64
+    from workbench import db
+    monkeypatch.setattr(db, "DATA_DIR", tmp_path)
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 40).decode()
+    chibi._save("Sagira", {"name": "Sagira", "kind": "humanoid", "colours": [], "features": []})
+    spec = chibi.pick("Sagira", f"data:image/png;base64,{png}")
+    assert spec["silhouette"].startswith("/char/chibi/image/") and spec["silhouette_from"] == "uploaded"  # stored as a file, not the upload itself
+    assert (tmp_path / "chibi" / spec["silhouette"].rsplit("/", 1)[1]).is_file()
+    for bad in ("data:text/html;base64,PGI+", "data:image/png,notbase64", "data:image/png;base64,***"):
+        try:
+            chibi._image(bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)
+
+
+def test_its_wardrobe_lists_learned_forms_and_switches_back_to_one(monkeypatch, tmp_path):
+    import base64
+    from workbench import db
+    monkeypatch.setattr(db, "DATA_DIR", tmp_path)
+    chibi._save("Sagira", {"name": "Sagira", "kind": "humanoid", "colours": [], "features": []})
+    first = chibi.pick("Sagira", "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"1" * 40).decode())["silhouette"]
+    chibi.pick("Sagira", "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"2" * 40).decode())
+    assert len(chibi.saved()) == 2 and first in [r["url"] for r in chibi.saved()]
+    assert chibi.pick("Sagira", first)["silhouette"] == first  # a learned form comes back without a fetch
+    for bad in ("/char/chibi/image/../../secret.png", "/char/chibi/image/0000000000000000.png"):  # not a name it saved
+        try:
+            chibi._image(bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)
+
+
+def test_you_can_mark_where_its_eyes_are_per_picture(monkeypatch, tmp_path):
+    import base64
+    from workbench import db
+    monkeypatch.setattr(db, "DATA_DIR", tmp_path)
+    chibi._save("Sagira", {"name": "Sagira", "kind": "humanoid", "colours": [], "features": []})
+    pic = chibi.pick("Sagira", "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"3" * 40).decode())["silhouette"]
+    spec = chibi.set_eyes("Sagira", [{"x": .6, "y": .4, "r": .05}, {"x": .4, "y": .41, "r": .05}])
+    assert [e["x"] for e in spec["eyes"][pic]] == [.4, .6]  # left to right
+    assert chibi.set_eyes("Sagira", [])["eyes"] == {}  # back to finding them itself
+    for bad in ([{"x": .4, "y": .4, "r": .05}], [{"x": 2, "y": .4, "r": .05}, {"x": .4, "y": .4, "r": .05}], [{"x": .4}, {"x": .5}]):
+        try:
+            chibi.set_eyes("Sagira", bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)
+
+
+def test_you_can_trace_round_its_figure_per_picture(monkeypatch, tmp_path):
+    import base64
+    from workbench import db
+    monkeypatch.setattr(db, "DATA_DIR", tmp_path)
+    chibi._save("Sagira", {"name": "Sagira", "kind": "humanoid", "colours": [], "features": []})
+    pic = chibi.pick("Sagira", "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"3" * 40).decode())["silhouette"]
+    spec = chibi.set_cut("Sagira", [[.1, .1], [.9, .1], [.5, .9]])
+    assert spec["cuts"][pic] == [[.1, .1], [.9, .1], [.5, .9]]
+    assert chibi.set_cut("Sagira", [])["cuts"] == {}  # back to cutting it out itself
+    for bad in ([[.1, .1], [.2, .2]], [[.1, .1], [2, .1], [.5, .9]], [[.1], [.2], [.3]]):
+        try:
+            chibi.set_cut("Sagira", bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)

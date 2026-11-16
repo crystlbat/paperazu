@@ -1227,6 +1227,30 @@ def char_chibi_pick(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
         raise HTTPException(422, detail=str(e))
 
 
+@app.post("/char/chibi/cut")
+def char_chibi_cut(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Trace round its picture's figure, so the background is left out; no outline goes back to cutting it out by itself."""
+    try:
+        return chibi.set_cut(char.get_profile()["name"], body.get("outline") or [])
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+
+
+@app.post("/char/chibi/eyes")
+def char_chibi_eyes(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Mark where its picture's eyes are, so it can blink and make faces with them; no eyes goes back to finding them by itself."""
+    try:
+        return chibi.set_eyes(char.get_profile()["name"], body.get("eyes") or [])
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+
+
+@app.get("/char/chibi/saved")
+def char_chibi_saved() -> dict[str, Any]:
+    """The forms it has learned before, to switch between."""
+    return {"refs": chibi.saved()}
+
+
 @app.get("/char/chibi/image/{name}")
 def char_chibi_image(name: str) -> FileResponse:
     if not re.fullmatch(r"[0-9a-f]{16}\.(png|jpg|webp|gif)", name) or not (chibi.image_dir() / name).is_file():

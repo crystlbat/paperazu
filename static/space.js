@@ -64,7 +64,124 @@ async function renderSpace(base = "/space") {
     { name: "/learn", also: ["/learn-more"], does: "Turn learn mode on or off.", run: () => toggleLearnMode() },
     { name: "/steer", also: ["/steer-mode"], does: "Open the steer studio.", run: () => openSteerStudio() },
     { name: "/verse", does: "Go to the verse: every persona around the model.", run: () => { location.hash = "#verse"; } },
+    { name: "/follow-me", also: ["/follow"], does: "It gathers its mind up, swallows the chat box and follows your cursor with a new one.", run: () => web?.follow(true) },
+    { name: "/sit", also: ["/sit-down"], does: "It sits down for a bit.", run: () => web?.emote("sit") },
+    { name: "/dance", also: ["/cute-dance"], does: "It does a cute little dance.", run: () => web?.emote("cute") },
+    { name: "/play", also: ["/trick"], does: "It does a random move: hop, spin, bow, poof…", run: () => web?.emote() },
+    { name: "/end-follow-me", also: ["/unfollow", "/stay", "/go-home"], does: "It stops following you and goes home; the mind comes back.", run: () => web?.follow(false) },
+    { name: "/form", also: ["/teach-form", "/new-form", "/upload"], does: "Teach it a new form: pick a picture of your own and it becomes it.", run: () => teachForm() },
+    { name: "/looks", also: ["/forms", "/chibi"], does: "Pictures of this persona from the web: pick one and it takes that form.", run: () => showLooks() },
+    { name: "/wardrobe", also: ["/my-forms", "/switch-form", "/forms-saved"], does: "Every form it has learned: pick one and it changes into it.", run: () => showWardrobe() },
+    { name: "/cycle-forms", also: ["/rotate-forms", "/shuffle-forms"], does: "It changes from one learned form to the next every 20 seconds. Again to stop.", run: () => cycleForms() },
+    { name: "/old-form", also: ["/drawn-form", "/reset-form"], does: "Go back to its drawn form.", run: () => setForm("") },
+    { name: "/align-eyes", also: ["/eyes", "/mark-eyes"], does: "Show it where its picture's eyes are: drag two circles onto them, and it blinks and makes faces with them.", run: () => alignEyes() },
+    { name: "/trace", also: ["/cut-out", "/trace-figure", "/remove-background"], does: "Draw round the figure in its picture, so the background is left out of its body.", run: () => traceFigure() },
   ];
+  // tracing its figure: draw round it on the picture; everything outside the line is background. Saved per picture, as fractions of it
+  async function traceFigure() {
+    const spec = await api("/char/chibi").catch(() => null);
+    if (!spec?.silhouette) return web?.say({ text: "It has no picture form yet. Type /form or /wardrobe first.", events: [] });
+    document.querySelector(".sp-eyemodal")?.remove();
+    let pts = (spec.cuts?.[spec.silhouette] || []).map((p) => [...p]), drawing = false;
+    const img = h("img", { src: spec.silhouette, alt: "Its picture", draggable: "false" }), NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg"), shade = document.createElementNS(NS, "path"), line = document.createElementNS(NS, "path");
+    svg.setAttribute("class", "sp-tracesvg"); svg.setAttribute("viewBox", "0 0 1000 1000"); svg.setAttribute("preserveAspectRatio", "none"); shade.setAttribute("fill-rule", "evenodd"); shade.setAttribute("class", "shade"); line.setAttribute("class", "line"); svg.append(shade, line);
+    const marks = [], prev = h("canvas", { class: "sp-traceprev", width: "256", height: "256", "aria-label": "What it keeps" });
+    const preview = (n = 0) => { const pc = prev.getContext("2d"); pc.clearRect(0, 0, prev.width, prev.height); if (pts.length < 3) return; // what will be kept, background taken out as it will be
+      const cut = typeof chibiCut === "function" ? chibiCut(spec.silhouette, pts) : null; if (!cut) return n < 40 && setTimeout(() => preview(n + 1), 50); if (!cut.mask) return;
+      prev.width = cut.w; prev.height = cut.h; prev.getContext("2d").drawImage(cut.mask, 0, 0); };
+    const gap = document.createElementNS(NS, "path"), dot0 = document.createElementNS(NS, "ellipse"); gap.setAttribute("class", "gap"); dot0.setAttribute("class", "start"); svg.append(gap, dot0);
+    // the line you drew is solid; the straight run that closes it back to its start is dashed, so you can see where it will cut; the start is a ring
+    const draw = () => { const d = pts.length ? "M" + pts.map(([x, y]) => `${x * 1000} ${y * 1000}`).join("L") : "", f = pts[0], l = pts[pts.length - 1];
+      line.setAttribute("d", d); shade.setAttribute("d", pts.length > 2 ? "M0 0H1000V1000H0Z" + d + "Z" : ""); gap.setAttribute("d", pts.length > 1 ? `M${l[0] * 1000} ${l[1] * 1000}L${f[0] * 1000} ${f[1] * 1000}` : "");
+      const W = img.clientWidth || 1, H = img.clientHeight || 1, r = 7 / z; dot0.setAttribute("cx", f ? f[0] * 1000 : -99); dot0.setAttribute("cy", f ? f[1] * 1000 : -99); dot0.setAttribute("rx", r * 1000 / W); dot0.setAttribute("ry", r * 1000 / H); };
+    const wrap = h("div", { class: "sp-tracewrap" }, img, svg), stage = h("div", { class: "sp-eyestage sp-tracestage" }, wrap);
+    // zoom: scroll or pinch zooms where you point; hold Space or drag with the right button to move round the picture
+    let z = 1, tx = 0, ty = 0, pan = null, space = false, fresh = pts.length > 2;
+    const view = () => { const W = stage.clientWidth, H = stage.clientHeight; tx = Math.min(0, Math.max(W - W * z, tx)); ty = Math.min(0, Math.max(H - H * z, ty)); wrap.style.transform = `translate(${tx}px, ${ty}px) scale(${z})`; stage.classList.toggle("panning", space || !!pan); draw(); };
+    const zoomAt = (px, py, f) => { const nz = Math.min(8, Math.max(1, z * f)); tx = px - (px - tx) * nz / z; ty = py - (py - ty) * nz / z; z = nz; view(); };
+    stage.addEventListener("wheel", (e) => { e.preventDefault(); const b = stage.getBoundingClientRect(); zoomAt(e.clientX - b.left, e.clientY - b.top, Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .002))); }, { passive: false });
+    stage.addEventListener("contextmenu", (e) => e.preventDefault());
+    const at = (e) => { const b = img.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - b.left) / b.width)), Math.min(1, Math.max(0, (e.clientY - b.top) / b.height))]; };
+    // a tap drops a point, a drag draws; each adds on to the line, which always closes back to where it began. The first touch on a saved outline starts a new one
+    stage.addEventListener("pointerdown", (e) => { e.preventDefault(); stage.setPointerCapture(e.pointerId);
+      if (space || e.button === 2 || e.button === 1) { pan = [e.clientX - tx, e.clientY - ty]; return view(); }
+      if (fresh) { pts = []; marks.length = 0; fresh = false; } drawing = true; marks.push(pts.length); if (pts.length < 600) pts.push(at(e)); draw(); });
+    stage.addEventListener("pointermove", (e) => { if (pan) { tx = e.clientX - pan[0]; ty = e.clientY - pan[1]; return view(); } if (!drawing) return; const p = at(e), l = pts[pts.length - 1]; if (Math.hypot(p[0] - l[0], p[1] - l[1]) > .008 / z && pts.length < 600) { pts.push(p); draw(); } });
+    stage.addEventListener("pointerup", () => { if (pan) { pan = null; return view(); } drawing = false; draw(); preview(); });
+    const fit = () => { const ar = img.naturalWidth / img.naturalHeight || 1, nar = innerWidth <= 700, w = Math.max(120, Math.min(innerWidth - (nar ? 64 : 270), (innerHeight - (nar ? 380 : 200)) * ar)); img.style.width = `${w}px`; img.style.height = `${w / ar}px`; view(); }; // as big as the window allows
+    img.addEventListener("load", fit); addEventListener("resize", fit);
+    const zoomBtn = (f) => () => f ? zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, f) : (z = 1, tx = ty = 0, view());
+    const undo = () => { if (marks.length) pts.length = marks.pop(); else pts = []; draw(); preview(); };
+    const close = () => { modal.remove(); document.removeEventListener("keydown", esc, true); removeEventListener("resize", fit); };
+    const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+    const save = async (list) => { const res = await fetch("/char/chibi/cut", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ outline: list }) }).catch(() => null);
+      if (!res?.ok) return web?.say({ text: "I couldn't keep that outline. Draw all the way round the figure.", events: [] }); web?.reform(await res.json()); close(); };
+    const modal = h("div", { class: "sp-eyemodal", role: "dialog", "aria-label": "Trace its figure" },
+      h("div", { class: "sp-eyebox sp-tracebox" },
+        h("header", {}, h("b", {}, "Trace its figure"), h("span", {}, "Tap points round the figure, or drag. A rough line is fine: background left inside it is taken out too. Scroll or pinch to zoom; hold Space and drag to move around.")),
+        h("div", { class: "sp-tracerow" }, stage, h("div", { class: "sp-traceside" }, h("div", { class: "sp-eyebtns sp-tracezoom" },
+          h("button", { type: "button", "aria-label": "Zoom in", onclick: zoomBtn(1.5) }, "+"), h("button", { type: "button", "aria-label": "Zoom out", onclick: zoomBtn(1 / 1.5) }, "−"), h("button", { type: "button", onclick: zoomBtn(0) }, "Fit")),
+          h("small", {}, "What it keeps"), prev)),
+        h("div", { class: "sp-eyebtns" },
+          h("button", { type: "button", onclick: () => save([]) }, "Cut it out itself"),
+          h("button", { type: "button", onclick: undo }, "Undo"),
+          h("button", { type: "button", onclick: () => { pts = []; marks.length = 0; draw(); preview(); } }, "Start over"),
+          h("button", { type: "button", onclick: close }, "Cancel"),
+          h("button", { type: "button", class: "on", onclick: () => pts.length > 2 ? save(pts.map(([x, y]) => [+x.toFixed(4), +y.toFixed(4)])) : web?.say({ text: "Draw round the figure first.", events: [] }) }, "Keep this outline"))));
+    const keys = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "z") { e.preventDefault(); undo(); } if (e.key === " " && !space) { e.preventDefault(); space = true; view(); } };
+    modal.addEventListener("keydown", keys); modal.addEventListener("keyup", (e) => { if (e.key === " ") { space = false; view(); } }); modal.tabIndex = -1;
+    document.addEventListener("keydown", esc, true); document.body.append(modal); modal.focus(); if (img.complete) fit(); draw(); preview(); }
+  // marking its eyes: the picture, large, with a circle on each eye to drag and size; saved per picture, as fractions of it
+  async function alignEyes() {
+    const spec = await api("/char/chibi").catch(() => null);
+    if (!spec?.silhouette) return web?.say({ text: "It has no picture form yet. Type /form or /wardrobe first.", events: [] });
+    document.querySelector(".sp-eyemodal")?.remove();
+    const cut = typeof chibiCut === "function" ? chibiCut(spec.silhouette) : null, ce = cut?.eye, marked = spec.eyes?.[spec.silhouette];
+    const eyes = (marked || (ce ? [-1, 1].map((s) => ({ x: (ce.x + s * ce.gap) / cut.w, y: ce.y / cut.h, r: Math.max(.012, ce.gap * .5 / cut.w) })) : [{ x: .42, y: .35, r: .04 }, { x: .58, y: .35, r: .04 }])).map((e) => ({ ...e }));
+    const img = h("img", { src: spec.silhouette, alt: "Its picture", draggable: "false" });
+    const rings = eyes.map((_, i) => h("div", { class: "sp-eyering", tabindex: "0", role: "slider", "aria-label": i ? "Right eye: drag, or use the arrow keys" : "Left eye: drag, or use the arrow keys" }));
+    const stage = h("div", { class: "sp-eyestage" }, img, ...rings);
+    const size = h("input", { type: "range", min: "0.008", max: "0.15", step: "0.001", value: String(eyes[0].r), "aria-label": "Eye size" });
+    const place = () => { const W = img.clientWidth; rings.forEach((r, i) => { const e = eyes[i]; r.style.left = `${e.x * 100}%`; r.style.top = `${e.y * 100}%`; r.style.width = r.style.height = `${e.r * 2 * W}px`; }); };
+    const close = () => { modal.remove(); document.removeEventListener("keydown", esc, true); removeEventListener("resize", place); };
+    const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+    const save = async (list) => { const res = await fetch("/char/chibi/eyes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ eyes: list }) }).catch(() => null);
+      if (!res?.ok) return web?.say({ text: "I couldn't keep those eyes. Put both circles on the picture.", events: [] }); web?.reform(await res.json()); close(); };
+    const modal = h("div", { class: "sp-eyemodal", role: "dialog", "aria-label": "Mark its eyes" },
+      h("div", { class: "sp-eyebox" },
+        h("header", {}, h("b", {}, "Mark its eyes"), h("span", {}, "Drag a circle onto each eye. Scroll on a circle, or use the slider, to size it.")),
+        stage,
+        h("label", { class: "sp-eyesize" }, "Size", size),
+        h("div", { class: "sp-eyebtns" },
+          h("button", { type: "button", onclick: () => save([]) }, "Find them itself"),
+          h("button", { type: "button", onclick: close }, "Cancel"),
+          h("button", { type: "button", class: "on", onclick: () => save(eyes) }, "Keep these eyes"))));
+    rings.forEach((r, i) => { r.tabIndex = 0; r.setAttribute("role", "slider"); r.setAttribute("aria-label", i ? "Right eye: drag, or use the arrow keys" : "Left eye: drag, or use the arrow keys"); // whatever h() does with these
+      r.addEventListener("pointerdown", (e) => { e.preventDefault(); r.setPointerCapture(e.pointerId); r.classList.add("held"); });
+      r.addEventListener("pointermove", (e) => { if (!r.hasPointerCapture(e.pointerId)) return; const b = img.getBoundingClientRect(); eyes[i].x = Math.min(1, Math.max(0, (e.clientX - b.left) / b.width)); eyes[i].y = Math.min(1, Math.max(0, (e.clientY - b.top) / b.height)); place(); });
+      r.addEventListener("pointerup", () => r.classList.remove("held"));
+      r.addEventListener("wheel", (e) => { e.preventDefault(); eyes[i].r = Math.min(.15, Math.max(.008, eyes[i].r * Math.exp(-e.deltaY * .002))); place(); }, { passive: false });
+      r.addEventListener("keydown", (e) => { const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]; if (!d) return; e.preventDefault(); eyes[i].x = Math.min(1, Math.max(0, eyes[i].x + d[0] * .004)); eyes[i].y = Math.min(1, Math.max(0, eyes[i].y + d[1] * .004)); place(); }); });
+    size.addEventListener("input", () => { eyes.forEach((e) => { e.r = +size.value; }); place(); });
+    img.addEventListener("load", place); addEventListener("resize", place);
+    document.addEventListener("keydown", esc, true); document.body.append(modal); place(); rings[0].focus(); }
+  // its form: a picture you upload or pick becomes Dot's chibi; the server keeps the picture as a file
+  async function setForm(url) { const res = await fetch("/char/chibi/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) }).catch(() => null);
+    if (!res?.ok) return web?.say({ text: url ? "I couldn't take that picture. Try a PNG, JPEG, WebP or GIF under 4 MB." : "I couldn't change back just now.", events: [] });
+    web?.reform(await res.json()); }
+  function teachForm() { const pick = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp,image/gif" });
+    pick.onchange = () => { const f = pick.files?.[0]; if (!f) return; if (f.size > 4e6) return web?.say({ text: "That picture is over 4 MB. Try a smaller one.", events: [] });
+      const rd = new FileReader(); rd.onload = () => setForm(String(rd.result)); rd.readAsDataURL(f); };
+    pick.click(); }
+  async function showWardrobe() { const r = await api("/char/chibi/saved").catch(() => null); if (r?.refs?.length) showCard({ kind: "chibi", refs: r.refs, title: "Its wardrobe" }); else web?.say({ text: "It hasn't learned any forms yet. Type /form to teach it one.", events: [] }); }
+  let cycleT = null;
+  async function cycleForms() { if (cycleT) { clearInterval(cycleT); cycleT = null; return web?.say({ text: "It stays in this form now.", events: [] }); }
+    const r = await api("/char/chibi/saved").catch(() => null), refs = r?.refs || []; if (refs.length < 2) return web?.say({ text: "It needs at least two learned forms to change between. Type /form to teach it another.", events: [] });
+    let i = 0; const next = () => setForm(refs[i++ % refs.length].url); next(); cycleT = setInterval(next, 20000);
+    web?.say({ text: `It will change between its ${refs.length} forms every 20 seconds. Type /cycle-forms again to stop.`, events: [] }); }
+  async function showLooks() { try { const r = await api("/char/chibi/refs"); if (r.refs?.length) showCard({ kind: "chibi", refs: r.refs }); else web?.say({ text: "I couldn't find pictures just now.", events: [] }); }
+    catch { web?.say({ text: "The picture search didn't answer.", events: [] }); } }
   const command = (t) => { const c = t.toLowerCase().trim().replace(/\s+/g, "-"); return COMMANDS.find((x) => x.name === c || x.also?.includes(c)); };
   let W, H, CX, CY, S, layers, papers = [], spin = 0, all = [], vars = [], tables = {}, arcs = new Map();
   const P = (r, deg) => [CX + r * S * Math.sin(deg * Math.PI / 180), CY - r * S * Math.cos(deg * Math.PI / 180)];
@@ -459,7 +576,7 @@ async function renderSpace(base = "/space") {
     await wait(40); probe.classList.add("dots");
     const spans = [...probe.children].filter((x) => !x.classList.contains("sp-gap"));
     await wait(220);
-    await Promise.all(spans.map((sp, i) => { const r = sp.getBoundingClientRect(), dx = CX - (r.left - s.left + r.width / 2), dy = CY - (r.top - s.top + r.height / 2);
+    await Promise.all(spans.map((sp, i) => { const r = sp.getBoundingClientRect(), T = web?.dotAt?.(), dx = (T ? T[0] : CX) - (r.left - s.left + r.width / 2), dy = (T ? T[1] : CY) - (r.top - s.top + r.height / 2); // on the stage, into Dot where it sits
       return sp.animate([{ translate: "0 0", scale: 1 }, { translate: `${dx * .5}px ${dy * .5 - 40}px`, scale: 1.3, offset: .5 }, { translate: `${dx}px ${dy}px`, scale: .4, opacity: .6 }],
         { duration: 760, delay: Math.min(i * 14, 900), easing: "cubic-bezier(.45,0,.35,1)", fill: "forwards" }).finished.catch(() => {}); }));
     probe.remove(); gulp();
@@ -573,7 +690,7 @@ async function renderSpace(base = "/space") {
           !c.highlights.length && !c.note ? h("p", { class: "sp-empty" }, "No highlights or notes on this paper yet.") : null),
         h("button", { type: "button", class: "sp-open", onclick: () => travel(c.paper) }, "Open the paper →")];
     } else if (c.kind === "chibi") { // pictures to pour Dot into: pick one and it fills it
-      body = [h("header", {}, h("b", {}, "Pick a look"), h("span", {}, `${c.refs.length} pictures`)),
+      body = [h("header", {}, h("b", {}, c.title || "Pick a look"), h("span", {}, `${c.refs.length} ${c.title ? "forms" : "pictures"}`)),
         h("div", { class: "sp-chibis" }, ...c.refs.map((r, i) => h("button", { type: "button", class: "sp-chibi", style: `--i:${i}`, title: r.title,
           onclick: async (e) => { const card = e.target.closest(".sp-card"); card?.classList.add("pouring");
             const res = await fetch("/char/chibi/pick", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: r.url, thumb: r.thumb }) }).catch(() => null);
@@ -718,7 +835,7 @@ async function renderSpace(base = "/space") {
   function sleep(animate = true) {
     root.classList.add("asleep"); if (animate && !still) root.classList.add("powering-down");
     setTimeout(() => root.classList.remove("powering-down"), 1400);
-    form.say.disabled = true; form.say.placeholder = "Asleep. Knock on Dot three times";
+    form.say.disabled = !web; form.say.placeholder = web ? "Asleep · chat off. Type / for commands, or knock three times" : "Asleep. Knock on Dot three times"; // on /char the box still takes commands
     knock.hidden = false; knock.style.left = `${CX}px`; knock.style.top = `${CY}px`; knock.style.width = knock.style.height = `${120 * S}px`;
     buddy.sleep(true); // the same sleep as the reading buddy's: AI off everywhere, until Dot is woken
   }
@@ -1135,6 +1252,7 @@ async function renderSpace(base = "/space") {
       if (c) c.run(); else web.say({ text: `${t} is not a command. Type / to see them all.`, events: [] });
       return;
     }
+    const off = web?.chatOff?.(); if (off) { web.say({ text: off, events: [] }); return; } // asleep or learning: chat is off, commands still work
     if (t.toLowerCase() === "/steer" || t.toLowerCase() === "steer" || t.toLowerCase() === "/steer mode") {
       openSteerStudio();
       return;

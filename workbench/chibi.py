@@ -7,6 +7,7 @@ Each persona's reference is stored, so it is looked up once. Only the persona's 
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import ipaddress
@@ -244,21 +245,41 @@ def image_dir() -> Any:
 
 
 def _image(url: str) -> str:
-    """Saves the picture under data/chibi and returns the app's own link to it, so the canvas can read its pixels without the other site's permission."""
-    if not _public(url):
-        raise ValueError("not a public web address")
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) PaperWorkbench/1.0"})
-    with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 — checked public above
-        kind = resp.headers.get_content_type()
-        if kind not in EXT:
-            raise ValueError(f"not a picture ({kind})")
-        data = resp.read(MAX_IMAGE + 1)
+    """Saves the picture under data/chibi and returns the app's own link to it, so the canvas can read its pixels without the other site's permission.
+    A data: URL is a picture you uploaded yourself; anything else is fetched from the public web."""
+    local = re.fullmatch(r"/char/chibi/image/([0-9a-f]{16}\.(?:png|jpg|webp|gif))", url)
+    if local and (image_dir() / local[1]).is_file():
+        return url  # one it learned before: already here
+    if url.startswith("data:"):
+        head, _, b64 = url.partition(",")
+        kind = head[5:].split(";")[0]
+        if kind not in EXT or ";base64" not in head:
+            raise ValueError(f"not a picture ({kind or 'unknown'})")
+        if len(b64) > MAX_IMAGE * 4 // 3 + 4:
+            raise ValueError("picture too big")
+        data = base64.b64decode(b64, validate=True)  # a bad encoding raises binascii.Error, a ValueError
+    else:
+        if not _public(url):
+            raise ValueError("not a public web address")
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) PaperWorkbench/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 — checked public above
+            kind = resp.headers.get_content_type()
+            if kind not in EXT:
+                raise ValueError(f"not a picture ({kind})")
+            data = resp.read(MAX_IMAGE + 1)
     if len(data) > MAX_IMAGE:
         raise ValueError("picture too big")
     name = f"{hashlib.sha1(data).hexdigest()[:16]}.{EXT[kind]}"
     image_dir().mkdir(parents=True, exist_ok=True)
     (image_dir() / name).write_bytes(data)
     return f"/char/chibi/image/{name}"
+
+
+def saved() -> list[dict[str, str]]:
+    """Every picture it has learned a form from, newest first: its wardrobe."""
+    d = image_dir()
+    files = sorted((f for f in d.glob("*") if re.fullmatch(r"[0-9a-f]{16}\.(png|jpg|webp|gif)", f.name)), key=lambda f: f.stat().st_mtime, reverse=True) if d.is_dir() else []
+    return [{"url": f"/char/chibi/image/{f.name}", "thumb": f"/char/chibi/image/{f.name}", "title": ""} for f in files]
 
 
 def pick(name: str, url: str, thumb: str = "", look: list[str] | None = None, load: Callable[[str], str] | None = None) -> dict[str, Any]:
@@ -270,12 +291,63 @@ def pick(name: str, url: str, thumb: str = "", look: list[str] | None = None, lo
         err = None
         for u in (url, thumb):  # the full image, or its thumbnail when the site refuses
             try:
-                spec["silhouette"], spec["silhouette_from"] = (load or _image)(u), url
+                spec["silhouette"], spec["silhouette_from"] = (load or _image)(u), "uploaded" if url.startswith("data:") else url  # never keep a whole upload in the record
                 break
             except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
                 err = e
         else:
             raise ValueError(f"could not load that picture: {err}")
+    _save(name, spec)
+    return spec
+
+
+def set_eyes(name: str, eyes: Any) -> dict[str, Any]:
+    """Where its picture's eyes are, as you marked them: two circles, in fractions of the picture (x, y from its top left, r of its width).
+    Kept per picture, so each learned form keeps its own; an empty list goes back to finding them by itself."""
+    spec = cached(name)
+    if not spec or not spec.get("silhouette"):
+        raise ValueError("it has no picture form to mark")
+    if eyes:
+        if not isinstance(eyes, list) or len(eyes) != 2 or not all(isinstance(e, dict) for e in eyes):
+            raise ValueError("mark two eyes")
+        try:
+            eyes = [{k: round(float(e[k]), 4) for k in ("x", "y", "r")} for e in eyes]
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("each eye needs x, y and r") from None
+        if not all(0 <= e["x"] <= 1 and 0 <= e["y"] <= 1 and 0.003 <= e["r"] <= 0.3 for e in eyes):
+            raise ValueError("an eye is off the picture")
+        eyes.sort(key=lambda e: e["x"])
+    marks = dict(spec.get("eyes") or {})
+    if eyes:
+        marks[spec["silhouette"]] = eyes
+    else:
+        marks.pop(spec["silhouette"], None)
+    spec["eyes"] = marks
+    _save(name, spec)
+    return spec
+
+
+def set_cut(name: str, outline: Any) -> dict[str, Any]:
+    """The figure as you traced it: a closed outline of [x, y] points, in fractions of the picture from its top left.
+    Kept per picture; everything outside it is background. An empty list goes back to cutting it out by itself."""
+    spec = cached(name)
+    if not spec or not spec.get("silhouette"):
+        raise ValueError("it has no picture form to trace")
+    if outline:
+        if not isinstance(outline, list) or not 3 <= len(outline) <= 600:
+            raise ValueError("trace round the figure")
+        try:
+            outline = [[round(float(x), 4), round(float(y), 4)] for x, y in outline]
+        except (TypeError, ValueError):
+            raise ValueError("each point needs x and y") from None
+        if not all(0 <= x <= 1 and 0 <= y <= 1 for x, y in outline):
+            raise ValueError("a point is off the picture")
+    cuts = dict(spec.get("cuts") or {})
+    if outline:
+        cuts[spec["silhouette"]] = outline
+    else:
+        cuts.pop(spec["silhouette"], None)
+    spec["cuts"] = cuts
     _save(name, spec)
     return spec
 

@@ -50,18 +50,37 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     if (e.key === "Escape") { shut(); return; }
     if (ear && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey && !e.target.closest?.("input, textarea, select, button, [contenteditable]") && !root.querySelector(".sp-steer-modal")) ear.focus(); });
 
-  const COL = { plan: "#ffb347", question: "#ffe347", verified: "#7dffa8", rejected: "#ff6b6b", unchecked: "#8b93a7", name: "#e8ecf4", curious: "#ffb347", idea: "#c79bff", you: "#9fb4ff", mistake: "#ff6b6b", trait: "#ff7ac6" };
-  const colour = (n) => n.layer === "note" ? COL[n.state] : n.layer === "name" ? (n.kind === "idea" ? COL.idea : n.state === "known" ? COL.name : COL.curious) : n.layer === "chat" ? (n.state === "mistake" ? COL.mistake : n.kind === "you" ? COL.you : tint) : n.layer === "question" && n.state === "open" ? "#a89a4a" : COL[n.layer];
+  // the story's palette: what it knows is white, yellow is what is live this second, red is what the Verifier turned away; settled things are filled squares, open ones hollow
+  const SIG = "#ffe600", BAD = "#ff6b6b", WAVE_C = ["#c79bff", "#ffb347", "#6ff7ff", "#7dffa8"];
+  const LCOL = { plan: "#c79bff", question: "#ffb347", note: "#6ff7ff", trait: "#ff7ac6", chat: "#9fb4ff" }; // the systems' colours: S2 violet, S1 amber, S0 cyan, V green
+  const colour = (n) => ["rejected", "mistake", "dropped"].includes(n.state) ? BAD : n.layer === "note" && n.state === "verified" ? "#7dffa8"
+    : n.layer === "name" ? (n.kind === "idea" ? "#c79bff" : n.state === "known" ? "#f4f6fb" : "#ffd27a") : n.layer === "chat" && n.kind !== "you" ? tint : LCOL[n.layer] || "#fff";
+  const rgba = (c, a) => { const v = parseInt(String(c).slice(1), 16); return `rgba(${v >> 16},${(v >> 8) & 255},${v & 255},${Math.max(0, Math.min(1, a))})`; };
+  const glow = (x, y, r, c, a) => { if (r < 1 || a <= .01) return; const gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, rgba(c, a)); gr.addColorStop(.4, rgba(c, a * .35)); gr.addColorStop(1, rgba(c, 0)); g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2); };
+  const R3 = ((s0) => () => ((s0 = (s0 * 16807) % 2147483647) - 1) / 2147483646)(11); // the motes: dust that drifts through its mind, fixed seeds so it keeps its shape
+  const MOTES = [...Array(170)].map(() => { const u = R3() * 2 - 1, a = R3() * 6.283, k = Math.cbrt(R3()) * .95, s1 = Math.sqrt(1 - u * u); return { x: Math.cos(a) * s1 * k, y: u * k, z: Math.sin(a) * s1 * k, ph: R3() * 99, c: ["#c79bff", "#ffb347", "#6ff7ff", "#7dffa8", "#ffffff", "#ffffff"][R3() * 6 | 0] }; });
+  const hollow = (n) => n.layer === "trait" ? n.state !== "grown" : ["unchecked", "open", "curious"].includes(n.state);
   const hoverAt = (q) => ptr && Math.hypot(q.x - ptr[0], q.y - ptr[1]) < 30;
-  const RS0 = 290; let bandY = {}, RS = RS0; // the globe grows with what it knows, so nodes keep their room
-  let planes = {}, W = 1, H = 1, K = 1, cx = 0, cy = 0, nodes = [], edges = [], vars = [], tint = "#6ff7ff", proj = [];
+  const RS0 = 290; let RS = RS0, wires = []; // the mind's shell grows with what it knows, so nodes keep their room
+  // inside the shell each layer is its own structure, the way the story opens Dot: where node i of n sits (in shell radii), and the system whose colour its lines take
+  const fr = (i) => (i * .618034) % 1, GA = 2.39996;
+  const SHAPE = {
+    trait: { sys: null, at: (i, n) => { const a = (i + .5) / n * 6.283; return [Math.cos(a) * .3, -.8, Math.sin(a) * .3]; }, tag: [.34, -.86, 0] }, // a crown: who it is
+    plan: { sys: 2, at: (i) => { const a = i * GA, u = 1 - 2 * fr(i * 3 + 1), k = .45 + .55 * fr(i), r = Math.sqrt(1 - u * u) * .58 * k; return [Math.cos(a) * r, -.5 + u * .15, Math.sin(a) * r]; }, tag: [.62, -.5, 0] }, // a net in its head
+    question: { sys: 1, at: (i, n) => { const a = (i + .5) / n * 6.283; return [Math.cos(a) * (.7 + (fr(i) - .5) * .08), -.12 + Math.sin(i * 1.7) * .035, Math.sin(a) * (.7 + (fr(i) - .5) * .08)]; }, tag: [.8, -.12, 0] }, // a ring round its middle
+    note: { sys: 0, at: (i) => { const a = i * GA, r = .48 + .42 * fr(i); return [Math.cos(a) * r, .16 + (fr(i * 7) - .5) * .18, Math.sin(a) * r]; }, tag: [.96, .16, 0] }, // hands reaching out to the web
+    name: { sys: 3, at: (i, n) => { const a = i * GA, u = 1 - 2 * (i + .5) / n, r = Math.sqrt(1 - u * u); return [Math.cos(a) * r * 1.1, u * 1.1, Math.sin(a) * r * 1.1]; }, tag: [1.1, .3, 0] }, // the ends of the mesh: out on the shell itself, so every link reaches the surface
+    chat: { sys: null, at: (i, n) => { const f = (i + .5) / n, a = f * 6.283 * 2.5; return [Math.cos(a) * (.32 - f * .12), .74 + f * .14, Math.sin(a) * (.32 - f * .12)]; }, tag: [.36, .82, 0] }, // a spiral at its base: what was said
+  };
+  const xp = { h: 0, s: 0, t: 0, k: 0, w: 0, i: 0 }; const limA = [0, 0, 0, 0, 0], limV = [0, 0, 0, 0, 0], limB = [0, 0, 0, 0, 0], limBV = [0, 0, 0, 0, 0]; let gph = 0, emo = null, hd = { a: 0, av: 0, u: 0, uv: 0, ga: 0, gu: 0, next: 0 }, zoomSaid = false, want = null, gait = 0, zoom = 1, zt = 1, nextEmo = 400, dimD = 0, gat = 0, orbA = 0, fv = [0, 0], spinV = 0, folR = 40, boxT = null, boxIdle = 0, earA = 0, hearts = [], pats = [], patDir = 0, fol = null, folE = 0, fp = null, bp = null, ballE = 0, mouse = null, mouseV = 0; // following you: the command's start, how far the mind has gathered, where it is, where its box is, how much it's a ball round your cursor
+  let planes = {}, W = 1, H = 1, K = 1, cx = 0, cy = 0, bcx = 0, bK = 1, lay = 0, sit = null, stageR = null, earNat = null, earOn = false, hold = 0, lastDot = null, nodes = [], edges = [], vars = [], tint = "#6ff7ff", proj = [];
   const EYES = { extract: "read", sort: "read", practise: "read", fill: "read", reflect: "search", wonder: "search", ideas: "search", plan: "think", goal: "think", ask: "think",
     check: "verify", review: "verify", evaluate: "verify", fold: "fold", bake: "fold" };
   const SYSC = { 2: "#c79bff", 1: "#ffb347", 0: "#6ff7ff", 3: "#7dffa8" }, VERB_OF = { read: "reading", search: "searching", think: "thinking", verify: "checking", fold: "folding" };
   // expanded, each job is its own character: a small body in its system's colour, walking the net to the nodes it works on
   const HOME = { reflect: "question", wonder: "question", ideas: "name", plan: "plan", goal: "question", ask: "question", check: "note", review: "chat", evaluate: "note",
     extract: "note", sort: "chat", practise: "chat", fill: "trait", fold: "name", bake: "note" }, sysOf = {};
-  let agents = [];
+  let agents = [], pinned = null, workE = 0, workCol = "#fff"; const SHELLPAL = [], WAVE = [[199, 155, 255], [255, 179, 71], [111, 247, 255], [125, 255, 168]];
   const pickNode = (k) => { const pool = nodes.filter((n) => n.layer === HOME[k] && !hide.has(n.layer)); return (pool.length ? pool : nodes)[Math.random() * (pool.length || nodes.length) | 0]; };
   function agentOf(k) { return agents.find((a) => a.k === k) || (agents.push({ k, x: cx, y: cy, n: null, work: 0, ph: Math.random() * 99, vx: 0 }), agents.at(-1)); }
   function walk() { // each character heads for its node, works there with its eyes, then wanders to another of its kind; contracting, they all go home into Dot
@@ -71,12 +90,11 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       if (growTo) { if (!a.n || (a.work <= 0 && Math.random() < .004)) a.n = pickNode(a.k); const q = a.n && proj[nodes.indexOf(a.n)]; if (q) { tx = q.x; ty = q.y - 16; } }
       const px0 = a.x; a.x += (tx - a.x) * (still ? 1 : .03); a.y += (ty - a.y) * (still ? 1 : .03); a.vx = a.x - px0; if (a.work > 0) a.work--;
       const c = SYSC[sysOf[a.k]] || tint, r = 14 * K, t = tick * .06 + a.ph, bob = still ? 0 : Math.sin(t) * 2;
-      g.globalAlpha = growTo ? .95 : Math.min(.95, Math.hypot(a.x - cx, a.y - cy) / 60); const gr = g.createRadialGradient(a.x - r * .35, a.y + bob - r * .4, r * .1, a.x, a.y + bob, r);
-      gr.addColorStop(0, "#fff"); gr.addColorStop(.35, c); gr.addColorStop(1, "#0b1320"); g.fillStyle = gr; g.beginPath(); g.arc(a.x, a.y + bob, r, 0, 6.283); g.fill();
+      g.globalAlpha = growTo ? .95 : Math.min(.95, Math.hypot(a.x - cx, a.y - cy) / 60); g.strokeStyle = c; g.lineWidth = 1; g.beginPath(); g.arc(a.x, a.y + bob, r, 0, 6.283); g.stroke();
       const mode = a.work > 0 ? EYES[a.k] : "", ph = 260 - a.work; let ex2 = Math.max(-2.5, Math.min(2.5, a.vx * 2)), ey2 = 0, lid = 1;
       if (mode === "read") { ex2 = -2.5 + (ph % 50) / 50 * 5; ey2 = 1; } else if (mode === "search") { ex2 = Math.sin(ph * .12) * 2.5; ey2 = -2; } else if (mode === "think") ey2 = -2.5;
       else if (mode === "verify") lid = .4; else if (mode === "fold") lid = .2;
-      g.fillStyle = "#06222a"; for (const o of [-4.8, 4.8]) { g.beginPath(); g.ellipse(a.x + o * K + ex2 * K, a.y + bob + ey2 * K, 2.2 * K, Math.max(.8, 5.4 * K * lid * (tick % 170 > 165 ? .15 : 1)), 0, 0, 6.283); g.fill(); }
+      g.fillStyle = "#fff"; for (const o of [-4.8, 4.8]) { g.beginPath(); g.ellipse(a.x + o * K + ex2 * K, a.y + bob + ey2 * K, 2.2 * K, Math.max(.8, 5.4 * K * lid * (tick % 170 > 165 ? .15 : 1)), 0, 0, 6.283); g.fill(); }
       if (a.work > 0 || growTo) { g.font = "600 11px ui-monospace, monospace"; g.textAlign = "center"; g.globalAlpha = a.work > 0 ? 1 : .7; g.fillStyle = c; g.fillText(a.work > 0 ? `${a.k} · ${VERB_OF[mode] || "working"}` : a.k, a.x, a.y + bob - r - 6); }
       g.globalAlpha = 1;
     }
@@ -85,9 +103,9 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   let form = null, formOf = "", cb = 0; // its chibi form: the live persona's look from /char/chibi, and how far it has morphed into it
   let eyeTask = null, grow = 0, growTo = 0, detached = false, learning = false, lift = 1, yaw = .5, pitch = -.45, drag = null, moved = 0, tick = 0, ptr = null, ex = 0, ey = 0, happy = 0, blinkAt = 120, talk = 0, morph = 0, slab = null, wet = 1, px = 0, py = 0, busy = false, lit = -1, litT = 0, sparks = [], rings = [], gulp = [];
   const hash = (t) => [...t].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
-  function fit() { const d = devicePixelRatio || 1; W = root.clientWidth; H = root.clientHeight; cv.width = W * d; cv.height = H * d; g.setTransform(d, 0, 0, d, 0, 0); K = Math.max(.4, Math.min(W / (2 * RS + 280), H / (2 * RS + 130), 1.4)); cx = W / 2; cy = H * .47; }
+  function fit() { const d = devicePixelRatio || 1; W = root.clientWidth; H = root.clientHeight; cv.width = W * d; cv.height = H * d; g.setTransform(d, 0, 0, d, 0, 0); K = Math.max(.4, Math.min(W / (2.2 * RS + 160), (H - 150) / (2.3 * RS), 1.6)); cx = W / 2; cy = 56 + (H - 150) / 2; bcx = cx; bK = K; } // the sphere sits between the top bar and the hint and input, clear of both
   const ro = new ResizeObserver(() => root.isConnected ? fit() : ro.disconnect()); ro.observe(root); fit();
-  function P(x, y, z) { y *= lift; const a = Math.cos(yaw), b = Math.sin(yaw), c = Math.cos(pitch), d = Math.sin(pitch), x1 = x * a + z * b, z1 = -x * b + z * a, y1 = y * c - z1 * d, z2 = y * d + z1 * c, s = 700 / (700 + z2 * K);
+  function P(x, y, z) { y *= lift; const a = Math.cos(yaw), b = Math.sin(yaw), c = Math.cos(pitch), d = Math.sin(pitch), x1 = x * a + z * b, z1 = -x * b + z * a, y1 = y * c - z1 * d, z2 = y * d + z1 * c, s = 700 / (700 + z2 * K) * (1 - .9 * gat * gat) * (1 + .3 * folE * (1 - gat)); // following you, the sky spreads a little wider
     return { x: cx + x1 * s * K, y: cy + y1 * s * K, z: z2, s: s * K }; }
 
   // ---- what it shows: the graph space.js already holds, and the wiring (signals, mode, the open correction) it fetches itself ----
@@ -99,14 +117,27 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     nodes = [];
     // one full globe around Dot: every node evenly on a sphere (a Fibonacci spiral), in layer order from the top, so each layer is a band of latitude
     // as tall as it is full; however lopsided the counts, the shape stays round, with no flat side
-    const order = LAYERS.map(([k]) => k).filter((k) => by[k]), N = order.reduce((s2, k) => s2 + by[k].length, 0); RS = RS0 * Math.min(1.7, Math.max(1, Math.sqrt(N / 80))); fit(); let k0 = 0; bandY = {};
-    for (const layer of order) { const list = by[layer], ys = [];
-      list.forEach((x, i) => { const u = 1 - 2 * (k0 + i + .5) / N, rr = RS * Math.sqrt(1 - u * u), a = (k0 + i) * 2.39996, o = old.get(x.id); ys.push(u * RS);
-        nodes.push({ ...x, key: x.id, x: rr * Math.cos(a), y: -u * RS, z: rr * Math.sin(a), R: rr, flash: o ? o.flash : old.size ? 70 : 0, born: o || !old.size ? 1 : 0 }); });
-      const mid = -(ys[0] + ys.at(-1)) / 2; bandY[layer] = mid; k0 += list.length; }
+    const N = m.nodes.length; RS = RS0 * Math.min(1.7, Math.max(1, Math.sqrt(N / 80))); fit(); wires = [];
+    for (const [layer, S] of Object.entries(SHAPE)) { const list = by[layer] || [], pts = [];
+      list.forEach((x, i) => { const [ux, uy, uz] = S.at(i, list.length), o = old.get(x.id); pts.push([ux * RS, uy * RS, uz * RS]);
+        nodes.push({ ...x, key: x.id, x: ux * RS, y: uy * RS, z: uz * RS, flash: o ? o.flash : old.size ? 70 : 0, born: o || !old.size ? 1 : 0 }); });
+      if (!list.length) continue;
+      const w = (line, dash) => wires.push({ layer, sys: S.sys, line, dash });
+      if (layer === "plan") pts.forEach((p, i) => pts.map((q, j) => [j, Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])]).filter(([j]) => j !== i).sort((u, v) => u[1] - v[1]).slice(0, 2).forEach(([j]) => i < j && w([p, pts[j]]))); // each plan joined to its two nearest
+      else if (layer === "question" || layer === "trait") { const [, y] = S.at(0, 1), r = layer === "trait" ? .3 : .7; w([...Array(65)].map((_, j) => [Math.cos(j / 64 * 6.283) * r * RS, y * RS, Math.sin(j / 64 * 6.283) * r * RS])); }
+      else if (layer === "note") pts.forEach((p) => w([[p[0] * .2, .1 * RS, p[2] * .2], p], [3, 4])); // a hand from its core to each note
+      else if (layer === "chat") w(pts);
+      S.n = list.length; }
     const at = new Map(nodes.map((n, i) => [n.id, i]));
     edges = m.edges.map(([a, b]) => [at.get(a), at.get(b)]).filter((e) => e[0] != null && e[1] != null);
-    planes = Object.fromEntries(Object.keys(by).filter((k) => bandY[k] != null).map((k) => [k, RS * Math.sqrt(Math.max(0, 1 - (bandY[k] / RS) ** 2))]));
+    planes = { chat: RS }; // expanded, Dot grows out to the shell
+    edges.forEach(([a, b]) => { nodes[a].deg = (nodes[a].deg || 0) + 1; nodes[b].deg = (nodes[b].deg || 0) + 1; }); // hubs draw bigger and are labelled first
+    const cnt = (l, st) => (by[l] || []).filter((x) => st.includes(x.state)).length, join = (...xs) => xs.filter(([v]) => v).map(([v, t]) => `${v} ${t}`).join(" · ");
+    const SUB = { trait: () => join([cnt("trait", ["grown"]), "grown"], [cnt("trait", ["base"]), "from its persona"]),
+      plan: () => join([cnt("plan", ["open"]), "in play"], [cnt("plan", ["dropped"]), "dropped"]), question: () => join([cnt("question", ["answered"]), "answered"], [cnt("question", ["open"]), "open"], [cnt("question", ["dropped"]), "dropped"]),
+      note: () => join([cnt("note", ["verified"]), "verified"], [cnt("note", ["unchecked"]), "unchecked"], [cnt("note", ["rejected"]), "turned away"]),
+      name: () => join([cnt("name", ["known"]), "read about"], [cnt("name", ["curious"]), "still curious"]), chat: () => `${SHAPE.chat.n} turns` };
+    for (const [k, S] of Object.entries(SHAPE)) S.sub = S.n ? SUB[k]() || `${S.n}` : "";
   }
   const spark = (pts, color) => { const el = h("span", { class: "sw-spark" }); if (pts.length < 2) return el; // one line per variable: how it moved, step by step
     const lo = Math.min(...pts), hi = Math.max(...pts), span = hi - lo || 1, xy = pts.map((v, i) => `${(i / (pts.length - 1) * 96 + 2).toFixed(1)},${(22 - (v - lo) / span * 18).toFixed(1)}`).join(" ");
@@ -162,14 +193,14 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     lamps.querySelectorAll("span").forEach((l) => l.classList.toggle("off", !d.systems.find((s) => s.id === +l.dataset.s)?.on));
     modes.replaceChildren(...[["sleeping", "Sleep", "No replies, no learning: safe to swap models"], ["quiet", "Quiet", "Never learns by itself"], ["curious", "Curious", "Learns while idle"], ["proactive", "Proactive", "Learns, and tells you what it found"]].map(([m, t, tip]) =>
       h("button", { type: "button", role: "radio", "aria-checked": String(d.mode === m), title: tip, onclick: async () => { try { await api("/char/wiring", { method: "POST", body: JSON.stringify({ mode: m }) }); } catch { return; } refresh(); } }, t)));
-    root.dataset.mode = d.mode; const T = d.tracker || {}; learning = !!T.asleep; modeChip.textContent = T.asleep ? "learning" : T.asking ? "asking" : d.mode;
+    root.dataset.mode = d.mode; const T = d.tracker || {}; learning = !!T.asleep; modeChip.textContent = T.asleep ? "learning · commands only" : `${T.asking ? "asking" : d.mode} · ${{ sleeping: "chat off", quiet: "chat only", curious: "chat + learns", proactive: "chat + learns + tells", planner: "chat + plans" }[d.mode] || "chat on"}`; // which mode, and whether you can talk to it
     modeChip.style.setProperty("--p", String(Math.min(1, (T.momentum || 0) / (T.sleep_at || 3)))); modeChip.dataset.halo = T.asleep ? "asleep" : T.asking ? "asking" : "";
-    modeChip.title = `Momentum ${T.momentum ?? 0} of ${T.sleep_at ?? 3}: ${T.ups ?? 0} ups said; every ${T.every ?? 10} add 1. ${T.asleep ? "Asleep, learning the way you told it to grow; it wakes when the push is spent." : "At the threshold it asks which way to grow, then sleeps to learn it."}`;
-    paintTrack(T); if (ear) ear.placeholder = d.mode === "sleeping" ? `${d.who.split(" ")[0]} is asleep. Type /wake to wake it` : `Talk to ${d.who.split(" ")[0]}…`;
+    modeChip.title = `${MODE_DOES[d.mode] || ""} Momentum ${T.momentum ?? 0} of ${T.sleep_at ?? 3}: ${T.ups ?? 0} ups said; every ${T.every ?? 10} add 1. ${T.asleep ? "Asleep, learning the way you told it to grow; it wakes when the push is spent." : "At the threshold it asks which way to grow, then sleeps to learn it."}`;
+    paintTrack(T); if (ear) ear.placeholder = d.mode === "sleeping" ? `${d.who.split(" ")[0]} is asleep · chat off. Type /wake, or / for commands` : learning ? `${d.who.split(" ")[0]} is learning · chat paused. Type / for commands` : `Talk to ${d.who.split(" ")[0]}…`;
     engines();
     const braked = d.wires[0]?.holding; // one line that says what you can do right now
     const q = d.review?.open; asking = q || null; // the correction loop, as talk: it says what went wrong, and your next message is the answer
-    hint.replaceChildren(detached ? "The model is detached: the harness lies flat until it is back." : q?.kind === "direction" ? h("span", {}, "It asks which way to grow. Your next message sets it. ", h("button", { type: "button", class: "sw-skip", onclick: skipAsk }, "Skip"))
+    hint.replaceChildren(detached ? "The model isn't running: Dot is powered down until it's back. Commands still work." : q?.kind === "direction" ? h("span", {}, "It asks which way to grow. Your next message sets it. ", h("button", { type: "button", class: "sw-skip", onclick: skipAsk }, "Skip"))
       : T.asleep ? "Asleep: it is learning the way you told it to grow, and wakes when the push is spent."
       : q ? h("span", {}, "Your next message teaches it what to do instead. ", h("button", { type: "button", class: "sw-skip", onclick: skipAsk }, "Skip")) : d.mode === "sleeping" ? "Asleep: it will not answer or learn. Type /wake, or wake it on Controls." : d.mode === "quiet" ? "Quiet mode: it only answers. Start typing to talk to it."
       : braked ? "It has nothing new to chase. Tell it about something and its curiosity wakes up."
@@ -181,6 +212,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   async function skipAsk() { try { await api("/char/correction", { method: "DELETE" }); } catch { /* the next poll shows it again */ } asking = null; refresh(); }
 
   function openNote(n) { // a click on a node: what it is, the Verifier's word on it, and everything it is wired to
+    pinned = n; // its neighbourhood stays lit while the card is open
     const close = h("button", { type: "button", class: "sw-x", "aria-label": "Close details", onclick: () => { note.hidden = true; cv.focus(); } }, "✕");
     const i = nodes.indexOf(n), near = edges.filter((e) => e.includes(i)).map((e) => nodes[e[0] === i ? e[1] : e[0]]);
     const STATE = { verified: "verified by the Verifier", rejected: "rejected by the Verifier", unchecked: "not checked yet", answered: "answered by a note", open: "not answered yet", dropped: "dropped", known: "read about", curious: "not read about yet: it is curious", ok: "reread by the Verifier: fine", mistake: "reread by the Verifier: a mistake" };
@@ -189,29 +221,110 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
       ...(near.length ? [h("small", {}, "Wired to"), h("ul", { class: "sw-wired" }, ...near.slice(0, 14).map((x) => h("li", {}, h("button", { type: "button", style: `--c:${colour(x)}`, onclick: () => { x.flash = 70; openNote(x); } }, h("small", {}, LY[x.layer].t), " ", x.label.slice(0, 70)))))] : []));
     shut(); note.hidden = false; close.focus();
   }
+  // Dot links the chat box to its box: a spark runs from it down the box's edge to the chat box, then dotted stitches join the two, right to left
+  function linkUp() { if (!stageR || lay < .3) return; const ear = root.querySelector(".sp-ear"); if (!ear) return; const r = cv.getBoundingClientRect(), q = ear.getBoundingClientRect(), y0 = q.top - r.top, by = stageR[1] + stageR[3], p = cl((lay - .55) / .4);
+    if (p <= 0 || y0 <= by) return; g.save(); g.globalCompositeOperation = "lighter";
+    for (let k = 0; k < 6; k++) { const sx = stageR[0] + stageR[2] * (1 - (k + .5) / 6), kp = ease(cl(p * 1.8 - k * .14)); for (let y = by + 3; y < by + 3 + (y0 - by - 3) * kp; y += 3) { g.globalAlpha = .7 * lay; g.fillStyle = WAVE_C[k % 4]; g.fillRect(sx - 1, y - 1, 2, 2); } }
+    if (p < 1 && lastDot) { const P2 = [[lastDot[0], lastDot[1]], [stageR[0] + stageR[2], by], [q.right - r.left - 10, y0]], s2 = ease(p) * 2, a = P2[s2 < 1 ? 0 : 1], b = P2[s2 < 1 ? 1 : 2], t2 = s2 % 1 || (s2 >= 2 ? 1 : 0);
+      for (let j = 0; j < 8; j++) { const tt = cl(t2 - j * .03); g.globalAlpha = (1 - j / 8) * lay; g.fillStyle = SIG; const d = 3.4 - j * .35; g.fillRect(a[0] + (b[0] - a[0]) * tt - d / 2, a[1] + (b[1] - a[1]) * tt - d / 2, d, d); } }
+    g.restore(); }
+  // while you pick a command, the space beside the list plays a tiny film of what it does: the mind steps back, a small Dot acts it out in dots,
+  // and a numbered caption says each beat in words, so it reads on its own
+  const BEATS = { "/report": ["The 3D mind…", "…folds flat into a report", "Cycles · fixes · engine runs"], "/scene": ["The flat report…", "…rises back into the 3D mind"],
+    "/expand-to-net": ["Dot sits small in the middle", "It swells out to the base ring", "Holding the whole net inside"], "/step": ["The Verifier picks an engine", "One learning step runs", "Its row lights up"],
+    "/mind": ["Open its memory", "Every note and question", "And the prompts it sent"], "/wiring": ["Its systems: S0 · S1 · S2 · V", "Wired to your rules", "And its own corrections"],
+    "/sleep": ["Its eyes close", "No replies · no learning", "Safe to swap models"], "/wake": ["Its eyes open", "It answers you again", "And learns while you're idle"],
+    "/quiet": ["It only answers you", "It never learns by itself"], "/curious": ["While you are idle…", "…it explores by itself"], "/proactive": ["It explores by itself", "And tells you what it found"],
+    "/learn": ["Learn mode: off", "Learn mode: on"], "/steer": ["Open the steer studio", "Set which way it grows"], "/verse": ["Step out of this mind…", "…into every persona round the model"] };
+  let preview = null;
+  function showWhat() { if (!preview || lay < .3 || !BEATS[preview.name]) return;
+    const B = BEATS[preview.name], nb = B.length, LEN = 120 * nb, o = P(0, 0, 0), r = Math.max(70, RS * 1.1 * o.s), X = o.x, Y = o.y, f = tick - preview.t0, u = still ? .999 : (f % LEN) / LEN, b = Math.min(nb - 1, u * nb | 0), bu = still ? 1 : (u * nb) % 1, A = Math.min(1, f / 20) * lay, e = ease, L = (p, a, c) => a + (c - a) * p;
+    g.save(); g.globalAlpha = .82 * A; g.fillStyle = "#000"; g.beginPath(); g.arc(X, Y, r * 1.18, 0, 6.283); g.fill(); // the mind steps back
+    const dt = (x, y, c, al = 1, d = 2.2) => { g.globalAlpha = A * al; g.fillStyle = c; g.fillRect(x - d / 2, y - d / 2, d, d); };
+    const ring = (x, y, rr, c, al = 1, n = 64, d = 2) => { for (let i = 0; i < n; i++) { const t2 = i / n * 6.283; dt(x + Math.cos(t2) * rr, y + Math.sin(t2) * rr, c, al, d); } };
+    const box = (x, y, w, h2, c, al = 1) => { for (let i = 0; i <= w; i += 4) { dt(x + i, y, c, al); dt(x + i, y + h2, c, al); } for (let i = 0; i <= h2; i += 4) { dt(x, y + i, c, al); dt(x + w, y + i, c, al); } };
+    const txt = (s2, x, y, c = "#fff", al = 1, size = 10) => { g.globalAlpha = A * al; g.fillStyle = c; g.font = `${size}px ui-monospace, monospace`; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(s2, x, y); g.textBaseline = "alphabetic"; };
+    const face = (x, y, s2, open = 1) => { ring(x, y, s2, tint, .9, 40, 2); for (const sx of [-1, 1]) { g.globalAlpha = A; g.fillStyle = "#fff"; g.beginPath(); g.ellipse(x + sx * s2 * .32, y, s2 * .13, Math.max(1, s2 * .26 * open), 0, 0, 6.283); g.fill(); } }; // a small Dot
+    const bub = (x, y, w, h2, c, al = 1, tailRight = false) => { box(x - w / 2, y - h2 / 2, w, h2, c, al); for (let i = 0; i < 4; i++) dt(x + (tailRight ? w / 2 - 6 + i * 2 : -w / 2 + 6 - i * 2), y + h2 / 2 + 3 + i * 2, c, al); }; // a speech bubble
+    const spark = (x0, y0, x1, y1, p, c) => { for (let j = 0; j < 7; j++) { const pp = cl(p - j * .03); dt(L(pp, x0, x1), L(pp, y0, y1) - Math.sin(pp * Math.PI) * 12, c, 1 - j / 7, 3.2 - j * .3); } };
+    const nodesAt = [[-.55, -.35], [.5, -.45], [.62, .2], [-.4, .5], [.15, .62], [-.68, .12]].map(([a, c]) => [X + a * r * .85, Y + c * r * .85]);
+    const sq = (x, y, c, al = 1, s2 = 4) => box(x - s2, y - s2, s2 * 2, s2 * 2, c, al);
+    const rectPt = (t, x0, y0, w, h2) => { const per = 2 * (w + h2); let d = t * per; if (d < w) return [x0 + d, y0]; d -= w; if (d < h2) return [x0 + w, y0 + d]; d -= h2; if (d < w) return [x0 + w - d, y0 + h2]; d -= w; return [x0, y0 + h2 - d]; };
+    g.globalCompositeOperation = "lighter";
+    switch (preview.name) {
+      case "/report": case "/scene": { const toPage = preview.name === "/report", m0 = toPage ? (b === 0 ? 0 : b === 1 ? e(bu) : 1) : (b === 0 ? 1 : 1 - e(bu)), w = r * 1.1, h2 = r * 1.25, x0 = X - w / 2, y0 = Y - h2 / 2;
+        for (let i = 0; i < 90; i++) { const t2 = i / 90, [px2, py2] = rectPt(t2, x0, y0, w, h2), a2 = t2 * 6.283 - Math.PI * .75; dt(L(m0, X + Math.cos(a2) * r * .7, px2), L(m0, Y + Math.sin(a2) * r * .7, py2), m0 > .5 ? "#fff" : WAVE_C[i % 4], .8); }
+        if (m0 < .5) nodesAt.slice(0, 5).forEach(([x, y], i) => sq(L(.45, X, x), L(.45, Y, y), WAVE_C[i % 4], 1 - m0 * 2));
+        if (m0 > .5) [["CYCLES", SIG], ["FIXES", "#7dffa8"], ["ENGINE RUNS", "#6ff7ff"]].forEach(([t3, c], j) => { const ry = y0 + 22 + j * h2 * .3; txt(t3, X, ry, c, (m0 - .5) * 2, 9); for (let x = 0; x < (w - 30) * e(cl((m0 - .5) * 2 - j * .1)); x += 4) dt(x0 + 15 + x, ry + 12, "#fff", .45); });
+        break; }
+      case "/expand-to-net": { const R2 = b === 0 ? r * .2 : b === 1 ? L(e(bu), r * .2, r) : r; ring(X, Y, R2, tint, .9, 120, 2.4); face(X, Y, r * .16, 1);
+        nodesAt.forEach(([x, y], i) => { const inside = Math.hypot(x - X, y - Y) < R2 - 6; sq(x, y, WAVE_C[i % 4], inside ? 1 : .3, inside && b === 2 ? 5 : 4); }); break; }
+      case "/step": { const E2 = [0, 1, 2, 3].map((k) => [X + (k - 1.5) * r * .48, Y - r * .4, k]), pick = (f / LEN | 0) % 3, at2 = b === 0 ? Math.min(3, bu * 7 | 0) % 4 : pick, ry = Y + r * .35;
+        E2.forEach(([x, y, k]) => { box(x - 16, y - 11, 32, 22, SYSC[k], k === at2 ? 1 : .4); txt(["S0", "S1", "S2", "V"][k], x, y, SYSC[k], k === at2 ? 1 : .5); });
+        const [cx3, cy3] = E2[at2]; box(cx3 - 21, cy3 - 16, 42, 32, SIG, .9); // the Verifier's pick
+        if (b >= 1) spark(cx3, cy3 + 14, X, ry, b === 1 ? e(bu) : 1, SIG);
+        for (let x = 0; x < r * 1.2; x += 4) dt(X - r * .6 + x, ry, b === 2 ? SIG : "#fff", b === 2 ? .95 : .3); if (b === 2) txt("STEP DONE", X, ry + 16, SIG, e(bu), 9); break; }
+      case "/mind": { box(X - r * .7, Y - r * .7, r * 1.4, r * 1.4, "#fff", .35); txt("MEMORY", X, Y - r * .7 - 10, "#fff", .7, 9);
+        [["NOTE", "#6ff7ff"], ["NOTE", "#6ff7ff"], ["QUESTION", "#ffb347"], ["QUESTION", "#ffb347"], ["PROMPT", "#c79bff"], ["PROMPT", "#c79bff"]].forEach(([t3, c], j) => { const grp = j >> 1; if (grp > b) return; const p = grp < b ? 1 : e(cl(bu * 2 - (j & 1) * .3)), ry = Y - r * .5 + j * r * .2;
+          sq(X - r * .55, ry, c, p, 3); txt(t3, X - r * .3, ry, c, p, 9); for (let x = 0; x < r * .6 * p; x += 4) dt(X - r * .05 + x, ry, "#fff", .4); }); break; }
+      case "/wiring": { const S = [[X - r * .5, Y - r * .45, 0], [X + r * .5, Y - r * .45, 1], [X + r * .5, Y + r * .45, 2], [X - r * .5, Y + r * .45, 3]];
+        S.forEach(([x, y, k]) => { box(x - 16, y - 11, 32, 22, SYSC[k], .9); txt(["S0", "S1", "S2", "V"][k], x, y, SYSC[k]); });
+        const k2 = (u * 8 | 0) % 4, a2 = S[k2], c2 = S[(k2 + 1) % 4]; spark(a2[0], a2[1], c2[0], c2[1], (u * 8) % 1, "#fff");
+        if (b >= 1) { box(X - 30, Y - 10, 60, 20, SIG, b === 1 ? e(bu) : 1); txt("YOUR RULES", X, Y, SIG, b === 1 ? e(bu) : 1, 8); S.forEach(([x, y]) => { for (let q = 0; q < 1; q += .08) dt(L(q, X, x), L(q, Y, y), SIG, .35); }); }
+        if (b === 2) { spark(S[3][0], S[3][1], S[0][0], S[0][1], e(bu), "#7dffa8"); txt("FIX", (S[3][0] + S[0][0]) / 2 - 18, Y, "#7dffa8", e(bu), 9); } break; }
+      case "/sleep": { const open = b === 0 ? 1 - e(bu) : 0; face(X, Y, r * .3, open);
+        if (b >= 1) { const bx2 = X + r * .62, by2 = Y - r * .5; bub(bx2, by2, 44, 22, "#fff", .6); txt("hi?", bx2, by2, "#fff", .7); for (let i = -12; i <= 12; i += 2) { dt(bx2 + i, by2 + i * .6, BAD, .9 * (b === 1 ? e(bu) : 1)); dt(bx2 + i, by2 - i * .6, BAD, .9 * (b === 1 ? e(bu) : 1)); } }
+        for (let z = 0; z < 3; z++) { const p = (u * 2 + z / 3) % 1, s2 = 5 + z * 2, zx = X + r * .3 + z * 10, zy = Y - r * .3 - p * r * .5; for (let i = 0; i <= s2; i += 2) { dt(zx + i, zy, "#9fb4ff", 1 - p); dt(zx + i, zy + s2, "#9fb4ff", 1 - p); dt(zx + s2 - i, zy + i, "#9fb4ff", 1 - p); } }
+        if (b === 2) { box(X - r * .5, Y + r * .5, r, 20, "#fff", .5); txt("MODEL ⇄ MODEL", X, Y + r * .5 + 10, "#fff", e(bu), 9); } break; }
+      case "/wake": { const open = b === 0 ? e(bu) : 1; face(X, Y, r * .3, open); if (b === 0) ring(X, Y, r * (.3 + bu * .6), SIG, 1 - bu, 64);
+        if (b === 1) { bub(X + r * .62, Y - r * .55, 40, 20, "#fff", .7); txt("hi", X + r * .62, Y - r * .55, "#fff", .8); spark(X + r * .25, Y - r * .2, X + r * .55, Y - r * .45, e(bu), SIG); }
+        if (b === 2) nodesAt.forEach(([x, y], i) => { spark(X, Y, x, y, e(cl(bu * 1.5 - i * .1)), WAVE_C[i % 4]); sq(x, y, WAVE_C[i % 4], .4 + .6 * cl(bu * 1.5 - i * .1 - .3)); }); break; }
+      case "/quiet": { face(X, Y, r * .3, 1); nodesAt.forEach(([x, y]) => sq(x, y, "#fff", .25));
+        if (b === 0) { const p = e(bu); bub(L(p, X + r * 1.1, X + r * .55), Y - r * .5, 40, 20, "#fff", .8); txt("you", L(p, X + r * 1.1, X + r * .55), Y - r * .5, "#fff", .8, 9); if (bu > .5) { bub(X - r * .55, Y - r * .55, 40, 20, tint, .9, true); txt("it", X - r * .55, Y - r * .55, tint, .9, 9); } }
+        else { for (let y = -12; y <= 12; y += 3) { dt(X + r * .62 - 5, Y + r * .4 + y, "#fff", .9, 2.6); dt(X + r * .62 + 5, Y + r * .4 + y, "#fff", .9, 2.6); } txt("NO LEARNING", X, Y + r * .78, "#fff", .7, 9); } break; }
+      case "/curious": case "/proactive": { const look = b === 0 && preview.name === "/curious"; face(X, Y, r * .25, 1);
+        if (look) { txt("you: idle", X + r * .55, Y - r * .7, "#fff", .5, 9); nodesAt.forEach(([x, y], i) => sq(x, y, WAVE_C[i % 4], .3)); }
+        else if (preview.name === "/curious" || b === 0) nodesAt.forEach(([x, y], i) => { const p = e(cl(bu * 1.6 - i * .12)); spark(X, Y, x, y, p, WAVE_C[i % 4]); sq(x, y, WAVE_C[i % 4], .3 + .7 * cl(p * 2 - 1)); });
+        else { nodesAt.forEach(([x, y], i) => sq(x, y, WAVE_C[i % 4], 1)); const p = e(bu); bub(L(p, X + r * .3, X + r * .75), L(p, Y - r * .2, Y - r * .7), 70, 22, SIG, .9); txt("found: 3", L(p, X + r * .3, X + r * .75), L(p, Y - r * .2, Y - r * .7), SIG, .9, 9); } break; }
+      case "/learn": { const on = b === 1, kx = on ? L(e(cl(bu * 3)), X - 20, X + 20) : L(e(cl(bu * 3)), X + 20, X - 20), c = on ? SIG : "#fff"; box(X - 38, Y - 15, 76, 30, c, .8); for (let a3 = 0; a3 < 6.283; a3 += .3) dt(kx + Math.cos(a3) * 9, Y + Math.sin(a3) * 9, c, 1, 2.6); txt(on ? "ON" : "OFF", X, Y + 32, c, .9, 10); break; }
+      case "/steer": { box(X - r * .7, Y - r * .6, r * 1.4, r * 1.2, "#fff", .35); txt("STEER", X, Y - r * .6 - 10, "#fff", .7, 9); const t2 = b === 0 ? -Math.PI / 2 : -Math.PI / 2 + Math.sin(bu * 6.283) * 1.1;
+        for (let s2 = 0; s2 < r * .5; s2 += 4) dt(X + Math.cos(t2) * s2, Y + Math.sin(t2) * s2 + r * .2, SIG, .9, 2.4); nodesAt.forEach(([x, y], i) => { const lit = b === 1 && Math.cos(Math.atan2(y - Y - r * .2, x - X) - t2) > .7; sq(x, y, WAVE_C[i % 4], lit ? 1 : .25); }); break; }
+      case "/verse": { const z = b === 0 ? 1 : 1 - .65 * e(bu); ring(X, Y, r * .5 * z, tint, .9, 60); face(X, Y, r * .16 * z, 1);
+        if (b === 1) for (let k = 0; k < 6; k++) { const t2 = k / 6 * 6.283 + u * 2, d2 = r * .75 * e(bu); ring(X + Math.cos(t2) * d2, Y + Math.sin(t2) * d2 * .7, r * .13, WAVE_C[k % 4], e(bu), 24); } break; }
+    }
+    g.globalCompositeOperation = "source-over";
+    txt(`WHAT ${preview.name.toUpperCase()} DOES`, X, Y - r * 1.18 - 14, "#fff", .55, 10); // the caption: which beat this is, in words
+    txt(`${b + 1} · ${B[b].toUpperCase()}`, X, Y + r * 1.18 + 16, b === nb - 1 ? SIG : "#fff", Math.min(1, bu * 5, (1 - bu) * 6 + .3), 12);
+    for (let k = 0; k < nb; k++) dt(X + (k - (nb - 1) / 2) * 12, Y + r * 1.18 + 34, k === b ? SIG : "#fff", k === b ? 1 : .35, 4);
+    g.restore(); }
   function palette(list, active = 0, pick) { // the commands, as Dot: it shrinks away and the list takes its place, with its eyes on top
-    if (!list) { if (!cmds.hidden) { cmds.hidden = true; if (bubble.hidden || bubble.classList.contains("out")) slab = null; } return; }
+    if (!list) { preview = null; if (!cmds.hidden) { cmds.hidden = true; if (bubble.hidden || bubble.classList.contains("out")) slab = null; } return; }
     const tip = h("p", { class: "sw-cmd-tip", "aria-live": "polite" }, list[active]?.does || "No command starts like that.");
     cmds.replaceChildren(h("span", { class: "sw-cmd-eyes", "aria-hidden": "true" }, h("i", {}), h("i", {})),
       ...list.map((c, i) => h("button", { type: "button", role: "option", "aria-selected": String(i === active), title: c.does,
-        onmouseenter: () => { tip.textContent = c.does; }, onmouseleave: () => { tip.textContent = list[active]?.does || ""; },
+        onmouseenter: () => { tip.textContent = c.does; if (preview?.name !== c.name) preview = { name: c.name, t0: tick }; }, onmouseleave: () => { tip.textContent = list[active]?.does || ""; },
         onmousedown: (e) => { e.preventDefault(); pick?.(c); } }, c.name)), tip);
-    cmds.hidden = false; bubble.classList.add("out"); slab = { w: 1, h: 1 };
+    cmds.hidden = false; bubble.classList.add("out"); slab = { w: 1, h: 1 }; const nm = list[active]?.name; if (nm && preview?.name !== nm) preview = { name: nm, t0: tick };
   }
   // ---- things space.js tells it ----
   function say(t) { // the reply IS Dot: it pours out of its sphere into liquid letters, and its eyes play along the words; then it gathers back
     rings.push(0); happy = 0;
     const n = t.text.length, words = t.text.split(/(\s+)/), p = h("p", { style: `font-size:${n <= 60 ? 32 : n <= 150 ? 25 : n <= 320 ? 20 : 17}px` });
     words.forEach((w, i) => { if (/^\s+$/.test(w)) return p.append(w); const sp = h("span", {}, w); p.append(sp);
-      if (!still) sp.animate([{ opacity: 0, translate: "0 18px", scale: "1.3 .5" }, { opacity: 1, translate: "0 0", scale: "1 1" }], { duration: 560, delay: 260 + Math.min(i * 30, 3200), easing: "cubic-bezier(.2,1.5,.4,1)", fill: "backwards" }); });
+    });
     ink.replaceChildren(p, drop);
     chipsEl.replaceChildren(...(t.events || []).filter((e) => e.name).map((e) => h("span", { class: "rule" }, e.name)), ...(t.drew || []).slice(0, 4).map((x) => h("span", {}, x.title.replace(/^\w+: /, ""))));
     bubble.hidden = false; bubble.classList.remove("out"); slab = { w: ink.offsetWidth, h: p.offsetHeight }; wet = 1; px = slab.w / 2; py = -20; talk = Math.min(60 + words.length * 3, 300);
+    hold = 0; const q0 = lay > .3 ? root.querySelector(".sp-ear")?.getBoundingClientRect() : null; // a follow-up: the words rise out of the attached chat box
+    if (!still) p.querySelectorAll("span").forEach((sp, i) => { const r0 = sp.getBoundingClientRect(), dx = q0 ? q0.left + q0.width * (r0.left - p.getBoundingClientRect().left) / Math.max(1, p.offsetWidth) - r0.left : 0, dy = q0 ? q0.top + q0.height / 2 - r0.top : 18;
+      sp.animate([{ opacity: 0, translate: `${dx}px ${dy}px`, scale: q0 ? ".4" : "1.3 .5" }, { opacity: 1, translate: "0 0", scale: "1 1" }], { duration: q0 ? 900 : 560, delay: 200 + Math.min(i * 30, 3200), easing: "cubic-bezier(.2,1.2,.4,1)", fill: "backwards" }); });
     clearTimeout(say.t); say.t = setTimeout(() => { bubble.classList.add("out"); slab = null; }, Math.max(11000, words.length * 400));
     refresh();
     return new Promise((r) => setTimeout(r, still ? 0 : Math.min(words.length * 30 + 900, 3600)));
   }
-  function heard(text) { bubble.classList.add("out"); slab = null; clearTimeout(say.t); gulp.push({ text: text.length > 34 ? `${text.slice(0, 33)}…` : text, t: 0 }); } // your words rise from the box and Dot takes them in
+  function heard(text) { bubble.classList.add("out"); slab = null; clearTimeout(say.t); const staged = lay > .3, q = root.querySelector(".sp-ear")?.getBoundingClientRect(), r = cv.getBoundingClientRect();
+    if (staged) hold = tick + 3600; // a follow-up: the stage stays up while it thinks, the box empty, Dot on its corner
+    gulp.push({ text: text.length > 34 ? `${text.slice(0, 33)}…` : text, t: 0, from: staged && q ? [q.left - r.left + q.width / 2, q.top - r.top + q.height / 2] : null, to: staged && lastDot ? [...lastDot] : null }); } // your words rise from the box and Dot takes them in
   function fire(names) { for (const nm of names || []) { const n = nodes.find((x) => x.label === nm); if (n) { n.flash = 70; sparks.push({ n, t: 0 }); } } } // what a reply drew on lights up and sends a spark in
   function stepped(r) { busy = false; if (!r || r.done) return; lit = r.system; litT = 260; rings.push(0);
     const hit = nodes.filter((n) => n.kind !== "note" && `${r.topic} ${r.note}`.toLowerCase().includes(n.label.toLowerCase())).sort((a, b) => b.label.length - a.label.length).slice(0, 2);
@@ -220,33 +333,390 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   // ---- drawing ----
   function dot(mood, asleep) {
     morph += ((slab ? 1 : 0) - morph) * (still ? 1 : .08); const m = morph * morph * (3 - 2 * morph); // 1 = all of it has poured into the words
-    const quiet = asleep || root.dataset.mode === "quiet", t = tick * (quiet ? .018 : .045), bob = still ? 0 : Math.sin(t * .7) * 5 * K, y = cy + bob + m * 30 * K, R = 82 * K * (1 - m * .93) * (1 + grow * Math.max(0, (planes.chat || 260) / 82 - 1)), sq = 1 + Math.sin(t) * .03;
-    rings = rings.map((r) => r + 2.4).filter((r) => r < 80); for (const r of rings) { g.strokeStyle = tint; g.globalAlpha = (1 - r / 80) * (1 - m); g.lineWidth = 2; g.beginPath(); g.arc(cx, cy, 82 * K + r * K, 0, 6.283); g.stroke(); } g.globalAlpha = 1;
-    if (m > .97) return;
-    cb += ((form && !detached && grow < .3 ? 1 : 0) - cb) * (still ? 1 : .03); const c = cb * cb * (3 - 2 * cb), sy = y - R * .3 * c, sr = R * (1 - .38 * c); // sphere -> chibi: the sphere rises and shrinks into its head
-    g.strokeStyle = tint; g.globalAlpha = (.1 + .06 * Math.sin(t)) * (1 - m) * (1 - grow); g.lineWidth = 10 * K; g.beginPath(); g.arc(cx, y, R + 12 * K, 0, 6.283); g.stroke(); g.globalAlpha = 1;
-    if ((busy || mood === "think") && grow < .3) { g.strokeStyle = "#ffb347"; g.lineWidth = 2.5; g.lineCap = "round"; for (let i = 0; i < 3; i++) { const a = tick * .07 + i * 2.094; g.beginPath(); g.arc(cx, y, R + 24 * K, a, a + .9); g.stroke(); } } // looking something up, or thinking
-    const body = (asleep ? .6 : detached ? .38 : 1) * (1 - grow), gr = g.createRadialGradient(cx - sr * .34, sy - sr * .4, sr * .1, cx, sy, sr); gr.addColorStop(0, "#ffffff"); gr.addColorStop(.3, tint); gr.addColorStop(1, "#0d3a42"); g.fillStyle = gr; g.globalAlpha = body * (1 - c); g.beginPath();
-    for (let a = 0; a <= 6.3; a += .12) { const r = sr * (1 + (still ? 0 : .022 * Math.sin(3 * a + t * 1.3) + .016 * Math.sin(5 * a - t * 1.7))), qx = cx + Math.cos(a) * r * sq, qy = sy + Math.sin(a) * r / sq; a ? g.lineTo(qx, qy) : g.moveTo(qx, qy); }
-    g.closePath(); g.fill(); g.globalAlpha = 1;
-    const F = form && c > .01 ? drawChibi(g, cx, y, R, form, tint, c, t, body) : { x: cx, y, s: 1, ink: "#06222a" }; // where its eyes go: on the chibi's face once it has one
+    const quiet = asleep || root.dataset.mode === "quiet", t = tick * (quiet ? .018 : .045), bob = still ? 0 : Math.sin(t * .7) * 5 * K, y = cy + bob, R = 82 * K * (1 - lay * .35) * (1 + grow * Math.max(0, (planes.chat || 260) / 82 - 1)), sq = 1 + Math.sin(t) * .03;
+    rings = rings.map((r) => r + 2.4).filter((r) => r < 80); for (const r of rings) { g.strokeStyle = "#fff"; g.globalAlpha = (1 - r / 80) * (1 - m) * .6; g.lineWidth = 1; g.beginPath(); g.arc(cx, cy, 82 * K + r * K, 0, 6.283); g.stroke(); } g.globalAlpha = 1;
+    cb += ((form && grow < .3 ? 1 : 0) - cb) * (still ? 1 : .03); const c = cb * cb * (3 - 2 * cb), sy = y - R * .3 * c, sr = R * (1 - .38 * c); // sphere -> chibi: the sphere rises and shrinks into its head
+    g.strokeStyle = "#fff"; g.globalAlpha = (.12 + .06 * Math.sin(t)) * (1 - m) * (1 - grow); g.lineWidth = 1; g.beginPath(); g.arc(cx, y, R + 12 * K, 0, 6.283); g.stroke(); g.globalAlpha = 1; // a breathing hairline where the glow was
+    const body = (asleep ? .6 : detached ? (form ? .9 : .38) : 1) * (1 - grow), fade = body * (1 - c);
+    g.globalCompositeOperation = "lighter"; glow(cx, y, R * (2.3 + .15 * Math.sin(t * .8)), tint, .32 * body * (1 - m)); glow(cx, y, R * 1.1, "#ffffff", .08 * body * (1 - m)); g.globalCompositeOperation = "source-over"; // its aura, breathing in its colour
+    g.strokeStyle = tint; g.lineWidth = 1;
+    // the story's Dot: contour rings, the far half dim and the near half bright, inside the same wobbling, breathing outline the blob had
+    const tilt = Math.max(.1, Math.abs(Math.sin(pitch))), near = pitch < 0 ? Math.PI : 0, wob = (a) => 1 + (still ? 0 : .022 * Math.sin(3 * a + t * 1.3) + .016 * Math.sin(5 * a - t * 1.7));
+    for (let i = 1; i < 18; i++) { const v = -1 + i / 9, rr = sr * Math.sqrt(1 - v * v) * sq * wob(i), yy = sy + v * sr * Math.cos(pitch) / sq;
+      for (const [a0, al] of [[near + Math.PI, .14], [near, .62]]) { g.globalAlpha = al * fade; g.beginPath(); g.ellipse(cx, yy, rr, rr * tilt, 0, a0, a0 + Math.PI); g.stroke(); } }
+    g.globalAlpha = .4 * fade; g.beginPath();
+    for (let a = 0; a <= 6.3; a += .12) { const r = sr * wob(a), qx = cx + Math.cos(a) * r * sq, qy = sy + Math.sin(a) * r / sq; a ? g.lineTo(qx, qy) : g.moveTo(qx, qy); }
+    g.closePath(); g.stroke(); g.globalAlpha = 1;
+    const F = form && c > .01 ? dotChibi(cx, y, R, c, t, body) : { x: cx, y, s: 1, ink: "#fff" }; // the character, as a cloud of dots in its own colours // where its eyes go: on the chibi's face once it has one
     if (grow > .55) return; // dissolved into the net: its jobs walk it now
+    if (asleep && !still) { g.save(); g.globalCompositeOperation = "lighter"; for (let z = 0; z < 3; z++) { const p = (tick * .004 + z / 3) % 1, s2 = (5 + z * 2.5) * K, zx = F.x + 26 * K + z * 12 * K + Math.sin(p * 6) * 4, zy = F.y - 20 * K - p * 70 * K; g.globalAlpha = Math.sin(p * Math.PI) * .9; g.fillStyle = "#9fb4ff"; // asleep: Zs of dots drift up off it
+      for (let i = 0; i <= s2; i += 2) { g.fillRect(zx + i, zy, 2, 2); g.fillRect(zx + i, zy + s2, 2, 2); g.fillRect(zx + s2 - i, zy + i, 2, 2); } } g.restore(); }
     let tx = Math.sin(yaw * 1.3) * 9, ty = mood === "think" || busy ? -9 : pitch * -8; if (ptr && !busy) { tx = Math.max(-13, Math.min(13, (ptr[0] - cx) * .08)); ty = Math.max(-10, Math.min(10, (ptr[1] - F.y) * .08)); }
+    if (gaze) { tx = Math.max(-13, Math.min(13, (gaze[0] - F.x) * .06)); ty = Math.max(-10, Math.min(10, (gaze[1] - F.y) * .06)); } // on its trip: eyes on what it is weighing
     const task = eyeTask && tick < eyeTask.until && !still ? EYES[eyeTask.kind] : "", ph = tick - (eyeTask?.until ?? 0) + 260; let lid = 1;
     if (task === "read") { tx = -12 + (ph % 70) / 70 * 24; ty = 2 + (Math.floor(ph / 70) % 3) * 3; } // line by line, left to right
     else if (task === "search") { tx = Math.sin(ph * .09) * 13; ty = -9; } // up and scanning: out on the web
     else if (task === "think") { tx = Math.sin(ph * .025) * 6; ty = -11; } // eyes up, turning it over
     else if (task === "verify") { tx = Math.sin(ph * .04) * 4; lid = .42; } // a squint: checking its own work
     else if (task === "fold") { lid = .18 + .12 * Math.sin(ph * .05); } // heavy-lidded: folding what it knows together
-    ex += (tx * K - ex) * .12; ey += (ty * K - ey) * .12; if (tick > blinkAt + 7) blinkAt = tick + 90 + Math.random() * 220;
-    const ez = (1 - m) * F.s, open = lid * (asleep ? .08 : quiet ? .45 : root.dataset.mode === "proactive" ? 1.12 : 1) * (tick > blinkAt ? .1 : 1), gap = 21 * K * ez; g.fillStyle = g.strokeStyle = F.ink;
-    if (detached || learning) { g.lineWidth = 4.5 * K * ez; g.lineCap = "round"; // detached: flat eyes, nothing behind them; learning: closed, dreaming, under a slow cyan orbit
-      if (learning && !detached) { g.save(); g.strokeStyle = "#6ff7ff"; g.globalAlpha = .7; g.lineWidth = 2; g.setLineDash([3, 10]); g.lineDashOffset = still ? 0 : -tick * .4; g.beginPath(); g.arc(cx, y, R + 20 * K, 0, 6.283); g.stroke(); g.restore(); g.strokeStyle = F.ink; }
-      for (const o of [-gap, gap]) { g.beginPath(); detached ? (g.moveTo(F.x + o - 9 * K * ez, F.y), g.lineTo(F.x + o + 9 * K * ez, F.y)) : g.arc(F.x + o, F.y - 2 * K * ez, 10 * K * ez, .35, 2.79); g.stroke(); }
+    ex += (tx * K - ex) * .12; ey += (ty * K - ey) * .12; const wx = F.pic ? ex * .25 : ex, wy = F.pic ? ey * .25 : ey; if (tick > blinkAt + 7) blinkAt = tick + 90 + Math.random() * 220; // a picture's eyes are painted in place: they only glance
+    lastDot = [F.x, F.y]; eyeHit = F.s > .2 ? [F.x, F.y, 21 * K * F.s + 16] : null; if (F.pic) return; // a picture has its own eyes: it shows how it feels with its body
+    const ez = F.s, open = lid * (asleep ? .08 : quiet ? .45 : root.dataset.mode === "proactive" ? 1.12 : 1) * (tick > blinkAt ? .1 : 1), gap = 21 * K * ez; g.fillStyle = g.strokeStyle = F.ink;
+    const off = detached && !F.pic && !form; if (off || learning || F.calm) { g.lineWidth = 1.6; g.lineCap = "round"; // detached: flat eyes, nothing behind them; learning: closed, dreaming, under a slow cyan orbit
+      if (learning && !detached) { g.save(); g.strokeStyle = "#fff"; g.globalAlpha = .6; g.lineWidth = 1; g.setLineDash([3, 10]); g.lineDashOffset = still ? 0 : -tick * .4; g.beginPath(); g.arc(cx, y, R + 20 * K, 0, 6.283); g.stroke(); g.restore(); g.strokeStyle = F.ink; }
+      for (const o of [-gap, gap]) { g.beginPath(); off ? (g.moveTo(F.x + o - 9 * K * ez, F.y), g.lineTo(F.x + o + 9 * K * ez, F.y)) : g.arc(F.x + o, F.y - 2 * K * ez, 10 * K * ez, .35, 2.79); g.stroke(); }
       return; }
-    if ((happy > 0 || mood === "happy") && !asleep) { happy--; g.lineWidth = 7 * K * ez; g.lineCap = "round"; for (const o of [-gap, gap]) { g.beginPath(); g.arc(F.x + o + ex * ez, F.y + (6 * K + ey) * ez, 11 * K * ez, 3.5, 5.93); g.stroke(); } return; }
-    for (const o of [-gap, gap]) { g.fillStyle = F.ink; g.beginPath(); g.ellipse(F.x + o + ex * ez, F.y + ey * ez, 9 * K * ez, Math.max(1, 23 * K * ez * open * (mood === "sad" ? .7 : 1)), 0, 0, 6.283); g.fill();
-      if (open > .5 && ez > .3) { g.fillStyle = "#fff"; g.beginPath(); g.arc(F.x + o + ex * ez - 2.5 * K * ez, F.y + ey * ez - 10 * K * ez, 2.6 * K * ez, 0, 6.283); g.fill(); } }
+    if ((happy > 0 || mood === "happy") && !asleep) { happy--; g.lineWidth = 1.6; g.lineCap = "round"; for (const o of [-gap, gap]) { g.beginPath(); g.arc(F.x + o + wx * ez, F.y + (6 * K + wy) * ez, 11 * K * ez, 3.5, 5.93); g.stroke(); } return; }
+    if (F.pic && !immerse) { const h = Math.max(1, 15 * K * ez * open * (mood === "sad" ? .7 : 1)), w = 9 * K * ez; // a chibi's eyes: big, filled, with a pupil that looks where it looks and a glint
+      for (const o of [-gap, gap]) { const x0 = F.x + o, px = x0 + ex * .35 * ez, py = F.y + ey * .3 * ez; g.fillStyle = "#fff"; g.beginPath(); g.ellipse(x0, F.y, w, h, 0, 0, 6.283); g.fill();
+        if (h > 3) { g.save(); g.beginPath(); g.ellipse(x0, F.y, w, h, 0, 0, 6.283); g.clip(); g.fillStyle = "#14161c"; g.beginPath(); g.ellipse(px, py + h * .1, w * .62, Math.min(h * .78, w * 1.1), 0, 0, 6.283); g.fill();
+          g.fillStyle = "#fff"; g.beginPath(); g.arc(px - w * .22, py - h * .28, w * .24, 0, 6.283); g.fill(); g.globalAlpha = .7; g.beginPath(); g.arc(px + w * .2, py + h * .25, w * .1, 0, 6.283); g.fill(); g.restore(); } }
+      return; }
+    g.lineWidth = 1.6; for (const o of [-gap, gap]) { g.beginPath(); g.ellipse(F.x + o + wx * ez, F.y + wy * ez, 9 * K * ez, Math.max(1, 17 * K * ez * open * (mood === "sad" ? .7 : 1)), 0, 0, 6.283); immerse ? g.fill() : g.stroke(); } // outline eyes, as in the story; filled when the dashboard is away
+  }
+  // the chibi as a 3D cloud of dots: drawn once off screen, its pixels sampled on a grid, each given a depth from how far it sits inside the
+  // figure (so it has a front and a back), then turned with the view each frame; it keeps the outfit's colours and lights up in the working system's colour
+  let cloud = null, cloudOf = null, cloudT = "", cloudTry = 0;
+  // any form gets limbs: below the face, the outer dots of each row are arms (pivoting at the shoulders) and the bottom of the body is legs (pivoting at the hips),
+  // each dot weighted softly so a limb bends out of the body rather than tearing off it
+  function autoRig(pts, fv) {
+    const sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    let top = 1e9, bot = -1e9, uc = 0; pts.forEach((p) => { top = Math.min(top, p[1]); bot = Math.max(bot, p[1]); uc += p[0]; }); uc /= pts.length;
+    const hip = bot - (bot - top) * .2, sh = fv + (bot - fv) * .32, row = {}, key = (v) => Math.round(v * 20);
+    pts.forEach((p) => { const k = key(p[1]); row[k] = Math.max(row[k] || 0, Math.abs(p[0] - uc)); });
+    const shW = row[key(sh)] || .5, hipW = row[key(hip)] || .5;
+    // limbs by shape, not just height: each row below the shoulders splits into runs of dots with gaps between. The run at the middle is the body
+    // (below the hips, the two runs either side of the middle are the legs); runs further out are arms, so a hand hanging past the hips stays an arm
+    const G = .03, cu = Math.round(uc / G), rows = new Map(), lab = new Map();
+    pts.forEach((p) => { const r = Math.round(p[1] / G); if (!rows.has(r)) rows.set(r, new Set()); rows.get(r).add(Math.round(p[0] / G)); });
+    rows.forEach((cs, r) => { if (r * G < sh - .03) return; const runs = [];
+      for (const c of [...cs].sort((a, b) => a - b)) { const l = runs[runs.length - 1]; if (l && c - l[1] <= 2) l[1] = c; else runs.push([c, c]); }
+      const inR = runs.findIndex(([a, b]) => a <= cu && cu <= b); let L = -1, Rr = -1; runs.forEach(([a, b], j) => { if (b < cu) L = j; else if (a > cu && Rr < 0) Rr = j; });
+      const core = inR >= 0 ? [inR] : [L, Rr].filter((j) => j >= 0), below = r * G > hip;
+      runs.forEach(([a, b], j) => { const k = core.includes(j) ? (below ? -1 : 0) : (a + b) / 2 < cu ? 1 : 2; for (let c = a; c <= b; c++) lab.set(r * 1000 + c, k); }); });
+    const id = new Int8Array(pts.length), w = new Float32Array(pts.length);
+    pts.forEach((p, i) => { const du = p[0] - uc, side = du < 0 ? 0 : 1, k = lab.get(Math.round(p[1] / G) * 1000 + Math.round(p[0] / G));
+      if (k === 1 || k === 2) { id[i] = k; w[i] = 1; } // an arm, apart from the body
+      else if (k === -1) { if (Math.abs(du) > .06) { id[i] = 3 + side; w[i] = 1; } } // a leg
+      else if (k === 0 && Math.abs(du) / (row[key(p[1])] || 1) > .62 && p[1] < hip + .03) { id[i] = 1 + side; w[i] = 1; } }); // an arm held close: the body's outer edge
+    return { id, w, hip, bot, piv: [null, [uc - shW * .55, sh], [uc + shW * .55, sh], [uc - hipW * .45, hip], [uc + hipW * .45, hip]] };
+  }
+  function makeCloud() {
+    const pic = !!form.silhouette, S = pic ? 330 : 180, OR = pic ? 82 : 44, ox = S / 2, oy = S * .56, oc = document.createElement("canvas"); oc.width = oc.height = S; const og = oc.getContext("2d", { willReadFrequently: true });
+    const face = form.silhouette ? drawFlat(og, ox, oy, OR, form) : drawChibi(og, ox, oy, OR, form, tint, 1, 0, 1); if (!face) return null; // a picture keeps its own colours
+    const px = og.getImageData(0, 0, S, S).data, A = (x, y) => x < 0 || y < 0 || x >= S || y >= S ? 0 : px[(y * S + x) * 4 + 3];
+    const pts = [], step = 2; let fz = 0, fd = 1e9;
+    let G = 1; if (pic) { let sum = 0, n = 0; for (let j = 3; j < px.length; j += 16) if (px[j] > 60) { sum += Math.max(px[j - 3], px[j - 2], px[j - 1]); n++; } G = Math.min(2.2, Math.max(1, 130 / (sum / Math.max(1, n)))); } // a dark picture is lit as a whole, so its darks stay darker than its lights
+    for (let y = 0; y < S; y += step) for (let x = 0; x < S; x += step) { if (A(x, y) < 60) continue;
+      const i = (y * S + x) * 4; let e = 0; while (e < 24 && A(x + e, y) > 60 && A(x - e, y) > 60 && A(x, y + e) > 60 && A(x, y - e) > 60) e += 2; // how deep inside the figure: its thickness there
+      const lu = px[i] * .3 + px[i + 1] * .59 + px[i + 2] * .11, fl = pic ? Math.max(0, 70 - lu * G) : 0, rgb = [0, 1, 2].map((k) => Math.min(255, ((px[i + k] * G + 22 + fl * [.8, .85, 1.1][k]) / (pic ? 5 : 12) | 0) * (pic ? 5 : 12))), c = `rgb(${rgb})`, d = Math.sqrt(e / 24) * .55, sct = pic ? .75 : .9, u = (x - ox + (Math.random() - .5) * step * sct) / OR, v = (y - oy + (Math.random() - .5) * step * sct) / OR; // a little scatter, so it reads as a body of dots, not a printed screen
+      const dc = (x2, y2) => { const j = (y2 * S + x2) * 4; return A(x2, y2) < 60 ? 999 : Math.abs(px[i] - px[j]) + Math.abs(px[i + 1] - px[j + 1]) + Math.abs(px[i + 2] - px[j + 2]); };
+      let rim = e <= 2 || dc(x + step, y) > 70 || dc(x, y + step) > 70 ? 1 : 0; // the outline and where one part meets another (face plate, arms, legs)
+      if (!pic && !rim && (x + y) % 4) continue; // every rim dot, so the shape reads; half the inside, so it stays airy
+      const head = pic && y < face.y + face.s * OR * .256 * 2.8; if (head) rim = 1; // the head stays solid and whole: a face you can see through is no face
+      if (pic && !rim && (x + y) % 4) continue; // a picture keeps every line and edge, and half its insides: a ghost of it, not a print
+      { const q = Math.hypot(x - face.x, y - face.y); if (q < fd) { fd = q; fz = -d; } } // how far its face stands out front, so the eyes turn with it
+      pts.push([u, v, -d, c, Math.random() * 6.283, rim, rgb]); if (d > .06 && (!pic || rim || (x + y) % 8 === 0)) pts.push([u, v, d, c, Math.random() * 6.283, 0, rgb]); } // a picture's back is barely seen: its outline and a sprinkle // its front and its back
+    if (pic) { let n = 0; for (let y = 1; y < S - 1; y++) for (let x = 1; x < S - 1; x++) { if (A(x, y) < 60 || (A(x - 1, y) >= 60 && A(x + 1, y) >= 60 && A(x, y - 1) >= 60 && A(x, y + 1) >= 60)) continue; // its contour, pixel by pixel: a smooth edge, not a staircase
+      const i = (y * S + x) * 4, lu = px[i] * .3 + px[i + 1] * .59 + px[i + 2] * .11, fl = Math.max(0, 70 - lu * G), rgb = [0, 1, 2].map((k) => Math.min(255, px[i + k] * G + 22 + fl * [.8, .85, 1.1][k] | 0)), u = (x - ox) / OR, v = (y - oy) / OR;
+      pts.push([u, v, -.07, `rgb(${rgb})`, Math.random() * 6.283, 1, rgb]); if (n++ % 2) continue;
+      for (const [z, k] of [[0, .68], [.07, .5]]) { const r2 = rgb.map((a) => a * k | 0); pts.push([u, v, z, `rgb(${r2})`, Math.random() * 6.283, 1, r2]); } } } // and a wall round it, shaded darker, so it has sides when it turns
+    // the eyes you marked are their own fine grid of dots, a little bigger than in the picture (chibi eyes), from its own colours with a soft edge;
+    // three anchor points ride along in the cloud (its centre, one to its right, one above) so they move, turn and tilt with the face
+    const eyeImg = pic && face.eyes ? face.eyes.map((e, j) => { const R2 = Math.ceil(e.r * 1.25), n = R2 * 2;
+      const im = og.getImageData(Math.round(e.x) - R2, Math.round(e.y) - R2, n, n), d = im.data;
+      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { const q = Math.hypot(x - R2 + .5, y - R2 + .5) / R2, o = (y * n + x) * 4; for (let k = 0; k < 3; k++) d[o + k] = Math.max(0, Math.min(255, (d[o + k] * G - 128) * 1.25 + 142)); d[o + 3] *= Math.max(0, Math.min(1, (1 - q) / .3)); }
+      [[0, 0], [1, 0], [0, -1]].forEach(([a, b], m) => pts.push([(e.x + a * e.r - ox) / OR, (e.y + b * e.r - oy) / OR, fz - .03, "#000", 0, 2, [0, 0, 0], j * 3 + m]));
+      const cols = []; for (let o = 0; o < d.length; o += 4) cols.push(`rgb(${d[o]},${d[o + 1]},${d[o + 2]})`); return { d, n, R2, r: e.r, cols }; }) : null;
+    const rig = pts.length > 20 ? autoRig(pts, (face.y - oy) / OR) : null;
+    const eyes = face.eyes ? face.eyes.map((e) => [(e.x - ox) / OR, (e.y - oy) / OR, e.r / OR]) : null; // marked eyes, in the body's own units
+    return pts.length > 20 ? { pts, pic, rig, eyes, eyeImg, face: [(face.x - ox) / OR, (face.y - oy) / OR, face.s, fz] } : null;
+  }
+  // the chibi lives the loop, as a little film: it LOOKS round the mesh (a scan line and its eyes pass over a few nodes), DECIDES (the line locks on one),
+  // MEDITATES (it shrinks into a mini chibi, eyes closed, breathing, and nearby nodes condense into data dots that fly into it: its sense of the data),
+  // TRAVELS as the mini chibi, LANDS on the chosen node with a little bounce (the rest of the mesh steps back), WORKS there, comes home,
+  // and POPS back to full size with a silly overshoot and wobble; the nodes it took from grow back after
+  let immerse = false, eyeHit = null, boxE = 0, lastBox = null; const setImmerse = (v) => { immerse = v; root.classList.toggle("sw-immerse", v); };
+  let trip = null, nextTrip = 300, built = -1e9, gaze = null, tripF = -1;
+  const ease = (p) => p <= 0 ? 0 : p >= 1 ? 1 : p < .5 ? 4 * p * p * p : 1 - (-2 * p + 2) ** 3 / 2, TSYS = { plan: 2, question: 1, note: 0, name: 3 }, cl = (p) => Math.max(0, Math.min(1, p));
+  const LOOK = 80, DEC = 50, MED = 180, GO = 110, LAND = 45, WORK = 270, BACK = 110, POP = 100, SM = .34;
+  // at a node it acts its job out in three beats, its eyes on the node: it sizes it up, does the thing, and leaves its mark on it
+  const SCRIPT = { check: [["reading it", "tapping it", "checked"], "check"], ask: [["looking at it", "wondering", "asked"], "ask"], plan: [["tying it in", "pulling it tight", "planned"], "check"], find: [["looking it up", "digging in", "found it"], "bang"] };
+  const ROLE = { checking: "check", reading: "check", asking: "ask", thinking: "ask", planning: "plan", folding: "plan", "looking up": "find", searching: "find" };
+  const GLYPH = { check: ["....#", "...#.", "#.#..", ".#..."], ask: [".###.", "#...#", "..##.", "..#..", ".....", "..#.."], bang: ["..#..", "..#..", "..#..", ".....", "..#.."] };
+  let workTilt = 0;
+  const T1 = LOOK, T2 = T1 + DEC, T3 = T2 + MED, T4 = T3 + GO, T5 = T4 + LAND, T6 = T5 + WORK, T7 = T6 + BACK, T8 = T7 + POP;
+  function plan(n, x, y, sys, verb) { const vis = (m, i) => m !== n && !hide.has(m.layer) && m.layer !== "chat" && proj[i] && proj[i].z < 0;
+    const near = nodes.map((m, i) => vis(m, i) ? [m, Math.hypot(proj[i].x - x, proj[i].y - y)] : null).filter((p) => p && p[1] > 50).sort((p, q) => p[1] - q[1]); // what it takes in while it meditates: the nodes nearest it
+    const wp = near.slice(0, 3).map((p) => p[0]), decoys = near.slice(3).sort(() => Math.random() - .5).slice(0, 3).map((p) => p[0]);
+    return { n, sys, verb, t0: tick, wp, ate: 0, bits: [], look: [...decoys, ...wp].sort(() => Math.random() - .5) }; }
+  const MORPH = 130; // frames a change of form takes
+  const bod = { l: 0, lv: 0, s: 0, sv: 0, h: 0, hv: 0 }; let prevC = null, roamT = 0;
+  const spring = (o, k, to, pull, damp) => { o[k + "v"] = (o[k + "v"] + (to - o[k]) * pull) * damp; o[k] += o[k + "v"]; }; // overshoots a little, then settles
+  function workScene(role, beat, wb, wf, q, tc) {
+    const dotAt = (x, y, a, d = 2.4) => { g.globalAlpha = a; g.fillRect(x - d / 2, y - d / 2, d, d); }, bx = 15 * K + 6; g.fillStyle = tc;
+    if (beat === 0) { const a = ease(cl(wb * 4)) * (1 - ease(cl((wb - .85) * 7)));
+      if (role === "check") { const yy = q.y - bx + ((wb * 2.2) % 1) * bx * 2; for (let i = -6; i <= 6; i++) dotAt(q.x + i * bx / 6, yy, a * (1 - Math.abs(i) / 9)); } // a scan line reads down it, twice
+      else if (role === "find") { const an = wb * 9, lx = q.x + Math.cos(an) * bx * .8, ly = q.y + Math.sin(an) * bx * .5; g.strokeStyle = tc; g.lineWidth = 1.4; g.globalAlpha = a; g.beginPath(); g.arc(lx, ly, 7 * K + 3, 0, 6.283); g.moveTo(lx + 5 * K + 2, ly + 5 * K + 2); g.lineTo(lx + 10 * K + 4, ly + 10 * K + 4); g.stroke(); } // a lens goes over it
+      else if (role === "ask") for (let i = 0; i < 3; i++) dotAt(q.x - bx * .6 + i * bx * .6, q.y - bx - 6 - Math.abs(Math.sin(wf * .12 + i)) * 5, a, 3); // it looks it over: three dots bob above it
+      else { const near = (trip.near ||= nodes.map((m, i) => [m, proj[i]]).filter(([m, p]) => m !== trip.n && p).sort((A, B) => Math.hypot(A[1].x - q.x, A[1].y - q.y) - Math.hypot(B[1].x - q.x, B[1].y - q.y)).slice(0, 3).map(([m]) => m));
+        near.forEach((m, j) => { const p = proj[nodes.indexOf(m)]; if (!p) return; const e = ease(cl(wb * 2.2 - j * .35)); for (let s2 = 0; s2 <= 14 * e; s2++) dotAt(q.x + (p.x - q.x) * s2 / 14, q.y + (p.y - q.y) * s2 / 14, a * .8); }); } } // dotted threads out to its neighbours
+    if (beat === 1 && role === "plan" && trip.near) trip.near.forEach((m) => { const p = proj[nodes.indexOf(m)]; if (!p) return; const pull = Math.sin(wb * Math.PI * 4) * 3; for (let s2 = 0; s2 <= 14; s2++) dotAt(q.x + (p.x - q.x) * s2 / 14, q.y + (p.y - q.y) * s2 / 14 + Math.sin(s2 / 14 * Math.PI) * pull, .7); }); // pulled tight, twanging
+    if (beat === 1 && role === "ask") { const a = ease(cl(wb * 3)); GLYPH.ask.forEach((r, j) => [...r].forEach((ch, i) => ch === "#" && dotAt(q.x + 26 * K + (i - 2) * 3.4, q.y - 44 * K - 10 + j * 3.4 - wb * 8, a * .7, 2.6))); } // a question forms over its head
+    if (beat === 2) { const p = cl(wb * 2.5), s = 1 - Math.cos(p * 9) * Math.exp(-p * 5), G = GLYPH[SCRIPT[role][1]], a = 1 - ease(cl((wb - .8) * 5)), u = 3.6 * s; // its mark pops onto the node
+      G.forEach((r, j) => [...r].forEach((ch, i) => ch === "#" && dotAt(q.x + 34 * K + 10 + (i - 2) * u, q.y - 30 * K - (G.length - j) * u, a, 2.8 * Math.max(.3, s)))); } // beside it, where its body doesn't hide it
+    g.globalAlpha = 1;
+  }
+  // /follow-me: the mind gathers into Dot and fades back; Dot swallows the chat box, bends its dots out into a long new one, and follows your cursor
+  // with it. While you move it unravels into rings round your cursor; when you stop it steps back out beside it, its box hanging under it.
+  const SWALLOW = 80, MADE = 160; // frames: the box goes in, the new one is drawn, it's live
+  addEventListener("pointermove", (e) => { const r = cv.getBoundingClientRect(), m = [e.clientX - r.left, e.clientY - r.top, performance.now()]; if (mouse) mouseV = mouseV * .7 + Math.hypot(m[0] - mouse[0], m[1] - mouse[1]) * .3;
+    if (fol && !fol.out && fp && mouse && tick - fol.t0 > MADE && Math.hypot(m[0] - fp[0], m[1] - fp[1] + folR * .3) < folR * 1.5) { const dx = m[0] - mouse[0], dir = Math.abs(dx) > 2 ? Math.sign(dx) : 0; // patting: strokes back and forth over it
+      if (dir && dir !== patDir) { patDir = dir; pats = pats.filter((q) => m[2] - q < 1200); pats.push(m[2]); if (pats.length > 1) hearts.push({ x: fp[0] + (Math.random() - .5) * folR, y: fp[1] - folR * 1.4, t: tick }); bod.sv -= .05;
+        if (pats.length >= 5) { pats = []; happy = 80; bod.sv -= .1; if (boxT == null) { boxT = tick; boxIdle = 0; } } } }
+    mouse = m; });
+  function follow(on) { const ear = root.querySelector(".sp-ear");
+    if (on && !fol?.out && fol) return; if (!on && !fol) return;
+    if (on) { if (ear) { ear.style.transform = ""; ear.style.width = ""; earOn = false; const q = ear.getBoundingClientRect(), r = cv.getBoundingClientRect(); earNat = [q.left - r.left, q.top - r.top, q.width, q.height]; }
+      fol = { t0: tick }; fp = fp || [bcx, cy]; bp = [fp[0], fp[1] + 120]; root.classList.add("sw-following"); trip = null; boxT = null; earA = 0; status.textContent = "Following you. Double-tap or pat it to talk; /end-follow-me sends it home."; }
+    else { fol.out = true; fol.t0 = tick; status.textContent = "Going home."; } }
+  addEventListener("keydown", (e) => { if (!fol || fol.out || tick - fol.t0 < MADE) return; if (e.key === "Escape") { follow(false); return; }
+    if (e.key.length !== 1 || e.metaKey || e.ctrlKey || e.altKey) return; boxIdle = 0; if (boxT == null) { boxT = tick - 60; happy = 40; } const inp = root.querySelector(".sp-ear input"); if (inp && document.activeElement !== inp) inp.focus(); }, true); // first, before the page's own typing handler
+  let taps = []; // double or triple tap on it: it's the same as patting it
+  addEventListener("pointerdown", (e) => { if (!fol || fol.out || !fp || tick - fol.t0 < MADE || ballE > .3) return; const r = cv.getBoundingClientRect(), m = [e.clientX - r.left, e.clientY - r.top]; // rings round your cursor: you're grabbing the mind, not tapping it
+    if (Math.hypot(m[0] - fp[0], m[1] - fp[1] + folR * .3) > folR * 1.5) return; const now = performance.now(); taps = taps.filter((q) => now - q < 500); taps.push(now); bod.sv -= .08;
+    hearts.push({ x: fp[0], y: fp[1] - folR * 1.4, t: tick }); if (taps.length >= 2) { taps = []; happy = 80; if (boxT == null) { boxT = tick; boxIdle = 0; } } });
+  function follower(mood, asleep) {
+    const ear = root.querySelector(".sp-ear"), t = fol ? tick - fol.t0 : 999, on = fol && !fol.out, home = [bcx, cy], live = on && t > MADE;
+    folE += ((on ? 1 : 0) - folE) * (still ? 1 : .035);
+    gat += ((on && t < MADE + 30 ? 1 : 0) - gat) * (still ? 1 : on && t < MADE + 30 ? .035 : .025); // it gathers the mind in to swallow the box, then lets it back out so you can look round it
+    g.globalAlpha = .8 * gat; g.fillStyle = "#000"; g.fillRect(0, 0, W, H); g.globalAlpha = 1;
+    const Rm = folR = 82 * bK * (1 - .45 * folE), over = live && mouse && Math.hypot(mouse[0] - fp[0], mouse[1] - fp[1] + Rm * .3) < Rm * 1.5; // your cursor on it: it holds still to be patted
+    const moving = live && !over && mouse && performance.now() - mouse[2] < 160 && mouseV > 2;
+    ballE += ((moving ? 1 : 0) - ballE) * (still ? 1 : moving ? .14 : .05);
+    const rest = mouse ? performance.now() - mouse[2] : 1e9, spin = moving ? .09 : rest < 1800 ? .05 * (1 - rest / 1800) : 0; orbA += still ? 0 : spin;
+    const orR = moving ? 45 : rest < 1800 ? 95 * (1 - rest / 2400) : 0, beside = [mouse ? mouse[0] + Rm * 1.6 + 10 : 0, mouse ? mouse[1] - Rm * 1.2 : 0], set = cl((rest - 1200) / 600);
+    const tgt = !live || !mouse ? (on ? fp.slice() : home) : over ? fp.slice() : [mouse[0] + Math.cos(orbA) * orR + (beside[0] - mouse[0]) * set, mouse[1] + Math.sin(orbA) * orR * .7 + (beside[1] - mouse[1]) * set]; // it chases you round your cursor, then settles beside it
+    if (!on && !fol) tgt.splice(0, 2, ...home);
+    if (still || !live) { fp[0] += (tgt[0] - fp[0]) * (still ? 1 : .11); fp[1] += (tgt[1] - fp[1]) * (still ? 1 : .11); fv[0] = fv[1] = 0; }
+    else { for (const k of [0, 1]) { fv[k] = (fv[k] + (tgt[k] - fp[k]) * .028) * .88; fp[k] += fv[k]; } } // a spring with momentum: it overshoots and swings back, like something chasing you
+    fp[0] = Math.max(Rm, Math.min(W - Rm, fp[0])); fp[1] = Math.max(Rm * 1.6 + 50, Math.min(H - Rm * 1.15 - 96, fp[1]));
+    const bw = Math.min(360, W - 40), bt = [Math.max(bw / 2 + 10, Math.min(W - bw / 2 - 10, fp[0])), fp[1] + Rm * 1.15 + 48]; // its box hangs under it, trailing a little
+    bp[0] += (bt[0] - bp[0]) * (still ? 1 : .07); bp[1] += (bt[1] - bp[1]) * (still ? 1 : .07);
+    const perim = (x0, y0, w, h, u) => { const L = 2 * (w + h); let d = u * L; if (d < w) return [x0 + d, y0]; d -= w; if (d < h) return [x0 + w, y0 + d]; d -= h; if (d < w) return [x0 + w - d, y0 + h]; d -= w; return [x0, y0 + h - d]; };
+    g.fillStyle = tint; g.globalCompositeOperation = "lighter";
+    if (on && t > SWALLOW - 10 && t < MADE && earNat) { const f = (t - SWALLOW + 10) / (MADE - SWALLOW); // the old box comes apart into dots and they're sucked into its mouth
+      for (let j = 0; j < 90; j++) { const p = ease(cl(f * 1.5 - j / 90 * .5)), [sx, sy] = perim(earNat[0], earNat[1], earNat[2], earNat[3], j / 90), w2 = Math.sin(p * Math.PI) * 30;
+        g.globalAlpha = (1 - p * p) * .9; const d = 2.4 * (1 - p * .6); g.fillRect(sx + (fp[0] - sx) * p + Math.sin(j + p * 9) * w2 * .3 - d / 2, sy + (fp[1] - sy) * p - w2 - d / 2, d, d); }
+      if (t === MADE - 20) { bod.sv -= .12; happy = 30; } } // gulp
+    // patted: it bends its dots out of its mouth, along curves, into a long box under it; left alone a while with nothing typed, it takes the box back in
+    const typing = ear && (ear.contains(document.activeElement) || ear.querySelector("input")?.value);
+    if (boxT != null && tick - boxT > 120 && !typing && ++boxIdle > 480) { boxT = null; boxIdle = 0; } if (typing) boxIdle = 0; if (live && boxT == null && ear?.querySelector("input")?.value) { boxT = tick - 60; happy = 40; } // you started typing: the box comes out to take it
+    if (live && boxT != null && tick - boxT < 130) { const f = (tick - boxT) / 90, bx = bt[0] - bw / 2, by = bt[1] - 20;
+      for (let j = 0; j < 140; j++) { const p = ease(cl(f * 1.6 - j / 140 * .6)), [ex2, ey2] = perim(bx, by, bw, 40, j / 140), side = j % 2 ? 1 : -1, mx2 = (fp[0] + ex2) / 2 + side * 60 * Math.sin(j * .3), my2 = (fp[1] + ey2) / 2 + 30;
+        const qx = (1 - p) * (1 - p) * fp[0] + 2 * (1 - p) * p * mx2 + p * p * ex2, qy = (1 - p) * (1 - p) * fp[1] + 2 * (1 - p) * p * my2 + p * p * ey2;
+        g.globalAlpha = p > .02 ? Math.min(1, (130 - (tick - boxT)) / 40) : 0; g.fillRect(qx - 1.2, qy - 1.2, 2.4, 2.4); } }
+    if (live && earA > .03) { const bx = bp[0] - bw / 2, by = bp[1] - 20, n = 150; g.fillStyle = tint; // its box, drawn in its own dots: a soft ripple runs round it, and a thread of dots ties it to its feet
+      for (let j = 0; j < n; j++) { const [qx, qy] = perim(bx, by, bw, 40, j / n), w2 = Math.sin(j / n * 6.283 * 3 - tick * .06); g.globalAlpha = earA * (.45 + .4 * w2); const d = 2 + .6 * w2; g.fillRect(qx - d / 2, qy - d / 2 + (still ? 0 : w2 * .8), d, d); }
+      const fx = fp[0], fy = fp[1] + Rm * 1.05, tx = bp[0], ty = by; for (let j = 0; j <= 10; j++) { const u = j / 10, qx = fx + (tx - fx) * u + Math.sin(u * Math.PI) * 10 * Math.sin(tick * .05), qy = fy + (ty - fy) * u; g.globalAlpha = earA * (.35 + .5 * Math.abs(Math.sin(u * 5 - tick * .1))); g.fillRect(qx - 1.2, qy - 1.2, 2.4, 2.4); } }
+    hearts = hearts.filter((h2) => tick - h2.t < 70); g.fillStyle = "#ff8fb1"; // pats come back as little dotted hearts
+    for (const h2 of hearts) { const u = (tick - h2.t) / 70; g.globalAlpha = Math.sin(u * Math.PI); [".#.#.", "#####", ".###.", "..#.."].forEach((r, jj) => [...r].forEach((ch, ii) => ch === "#" && g.fillRect(h2.x + (ii - 2) * 3 + Math.sin(u * 6 + h2.x) * 4, h2.y - u * 50 + jj * 3, 2.4, 2.4))); }
+    g.globalCompositeOperation = "source-over"; g.globalAlpha = 1;
+    if (live) { g.globalAlpha = (boxT == null ? .75 : Math.max(0, 1 - (tick - boxT) / 40)) * Math.min(1, (t - MADE) / 30); g.font = "10px ui-monospace, monospace"; g.letterSpacing = "1.6px"; g.textAlign = "center"; g.fillStyle = SIG;
+      g.fillText(boxT == null ? "FOLLOWING YOU · TYPE OR TAP ME TWICE · ESC SENDS ME HOME" : "FOLLOWING YOU", fp[0], fp[1] - Rm * 1.9 - 10); g.letterSpacing = "0px"; g.globalAlpha = 1; }
+    // the chat box: swallowed; out again only once you've patted it; home again at the end
+    if (ear && earNat) { const ec = [earNat[0] + earNat[2] / 2, earNat[1] + earNat[3] / 2];
+      if (on && t < SWALLOW) { ear.style.opacity = ""; }
+      else if (on && t < MADE) { const s2 = ease(cl((t - SWALLOW) / 60)); ear.style.transform = `translate(${(fp[0] - ec[0]) * s2}px, ${(fp[1] - ec[1]) * s2}px) scale(${1 - .95 * s2})`; ear.style.opacity = String(1 - s2); ear.style.pointerEvents = "none"; }
+      else if (on) { const shown = boxT != null && tick - boxT > 80; ear.style.width = `${bw}px`; ear.style.transform = `translate(${bp[0] - ec[0]}px, ${bp[1] - ec[1]}px)`; earA += ((shown ? 1 : 0) - earA) * .12; ear.style.opacity = String(earA); ear.style.pointerEvents = shown ? "" : "none"; }
+      else { ear.style.width = ""; ear.style.transform = ""; ear.style.pointerEvents = ""; ear.style.opacity = String(cl((t - 20) / 40)); } }
+    if (!on && folE < .01) { fol = null; folE = 0; gat = 0; ballE = 0; boxT = null; earA = 0; root.classList.remove("sw-following"); if (ear) { ear.style.opacity = ""; ear.style.transform = ""; ear.style.width = ""; ear.style.pointerEvents = ""; } status.textContent = ""; }
+    const c0 = cx, y0 = cy, K0 = K; cx = fp[0]; cy = fp[1]; K = bK * (1 - .45 * folE); dot(mood, asleep); cx = c0; cy = y0; K = K0; // Dot itself, smaller, wherever it is
+    if (!on) { fp[0] += (home[0] - fp[0]) * .06; fp[1] += (home[1] - fp[1]) * .06; } }
+  // its own moves: they work on the cloud of dots itself, so they fit any form it wears
+  const BEAT = .034; // the one tempo it lives at: a breath every ~3 s; sway, bob and dance are multiples of it
+  const EMO = { hop: [70, "HOP"], spin: [90, "WHEE"], shiver: [60, "BRRR"], poof: [110, "POOF"], bow: [90, "HELLO"], sit: [360, "SIT"], cute: [360, "✦ ♪ ✦"] };
+  const emote = (k) => { const ks = Object.keys(EMO); emo = { k: k || ks[Math.random() * ks.length | 0], t0: tick }; };
+  function dotChibi(x, y, R, k, t, alpha) {
+    const zg = Math.min(1.5, Math.sqrt(Math.max(1, zoom))); R *= zg / Math.max(1, zoom); // zooming in opens up the mind around it; Dot itself grows only a little, to 1.5x at most
+    if (zt > 1.7 && !zoomSaid) { zoomSaid = true; want = "bow"; } else if (zt < 1.3) zoomSaid = false; // you came in close: it waves hello
+    if ((cloudOf !== form || cloudT !== tint) && tick > cloudTry) { const nc = makeCloud(); cloudTry = tick + 60; if (nc) { if (cloud) { nc.from = cloud; nc.from.from = null; nc.t0 = tick; built = Math.min(built, tick - 400); } else built = tick; cloud = nc; cloudOf = form; cloudT = tint; } } // a new form: the old one's dots flow into it // a poured picture may still be loading: try again in a second
+    gaze = null; if (!cloud) return { x, y, s: 1, ink: "#fff" };
+    // it lives in the mind, not on a stand: between trips it wanders through it in 3D, nearer and further, turning to face where it goes
+    if (!trip && !still && lay < .01) roamT++;
+    { const a = roamT * .0019, w = (1 - ease(cl(lay * 3))) * (1 - folE), r = RS * .4, p0 = P(0, 0, 0), p1 = P(Math.sin(a) * r, Math.sin(a * 1.3 + 2) * RS * .12, Math.sin(a * 1.7 + 1) * r * .8);
+      x += (p1.x - p0.x) * w; y += (p1.y - p0.y) * w; R *= 1 + (p1.s / p0.s - 1) * w; }
+    if (fol) trip = null;
+    if (want && !still && lay < .01 && !ballE) { trip = null; emo = null; emote(want); want = null; nextEmo = tick + 600; } // asked for by a command: once the reply has gone
+    if (!emo && !trip && !still && lay < .01 && !ballE && tick > nextEmo) { emote(); nextEmo = tick + 260 + Math.random() * 300; } // now and then, when nothing else is going on
+    // ONE motion system: every move rides one tempo (b, the breath) and one envelope (env: eases in, holds, eases out), so it starts and ends at rest;
+    // a move cut short (a trip, lying down) doesn't snap off: it fades out over a third of a second (fo)
+    const b = tick * BEAT;
+    if (emo && !emo.out && (trip || lay > .05)) emo.out = tick; const fo = emo?.out ? 1 - cl((tick - emo.out) / 20) : 1;
+    let ep = emo ? (tick - emo.t0) / EMO[emo.k][0] : 0; if (emo && (ep >= 1 || fo <= 0)) { emo = null; ep = 0; } const ek = emo?.k, env = emo ? ease(cl(ep / .12)) * (1 - ease(cl((ep - .86) / .14))) * fo : 0;
+    if (!still && ek === "hop" && tick - emo.t0 === 1) bod.sv -= .12; if (!still && ek === "hop" && tick - emo.t0 === 52) bod.sv -= .16; // crouch before, squash on landing
+    if (!trip && !emo && !fol && !still && !detached && lay < .01 && nodes.length && tick - built > 160) { const T = eyeTask && tick < eyeTask.until ? eyeTask.n : null;
+      if (T && !hide.has(T.layer) && proj[nodes.indexOf(T)]) trip = plan(T, x, y, eyeTask.sys, VERB_OF[EYES[eyeTask.kind]] || eyeTask.kind);
+      else if (tick > nextTrip && !["quiet", "sleeping"].includes(root.dataset.mode) && !root.classList.contains("asleep")) {
+        const pool = nodes.filter((n, i) => TSYS[n.layer] != null && !hide.has(n.layer) && proj[i] && proj[i].z < 0);
+        if (pool.length) { const n = pool[Math.random() * pool.length | 0]; trip = plan(n, x, y, TSYS[n.layer], { plan: "planning", question: "asking", note: "checking", name: "looking up" }[n.layer]); }
+        nextTrip = tick + 1400 + Math.random() * 900; } }
+    if (trip && !nodes.includes(trip.n)) { const by = (m) => nodes.find((o) => o.id === m.id); trip.n = by(trip.n) || trip.n; trip.wp = trip.wp.map(by).filter(Boolean); trip.ate = Math.min(trip.ate, trip.wp.length); trip.bits = []; } // the mesh reloaded mid-trip: find its nodes again
+    let f = trip ? tick - trip.t0 : 0; const tq = trip ? proj[nodes.indexOf(trip.n)] : null;
+    if (trip && (!tq || f > T8)) { trip = null; f = 0; nextTrip = Math.max(nextTrip, tick + 700); }
+    tripF = trip ? f : -1;
+    const ax = tq ? tq.x : x, ay = tq ? tq.y - 26 * K : y, tc = trip && SYSC[trip.sys] || workCol;
+    const TURN = cloud?.pic ? .12 : .3, ang = Math.max(-TURN, Math.min(TURN, bod.h * .35 + (still ? 0 : Math.sin(tick * .009) * .1) + (ek === "cute" ? Math.sin(b * 2 + 1.57) * .3 * env : 0))) + (ek === "spin" && !cloud?.pic ? ease(Math.min(1, ep + 1 - fo)) * 6.283 : 0), ca = Math.cos(ang), sa = Math.sin(ang), sc = R * (.4 + .6 * k), asm = (tick - built) / 200, N = nodes.length;
+    const ph = !trip ? "home" : f < T1 ? "look" : f < T2 ? "decide" : f < T3 ? "med" : f < T4 ? "go" : f < T5 ? "land" : f < T6 ? "work" : f < T7 ? "back" : "pop";
+    const fm = (f - T2) / MED, fg = (f - T3) / GO, fl = (f - T4) / LAND, fb = (f - T6) / BACK, fp = (f - T7) / POP;
+    const sit = (1 - SM) * R * .45, hx = x, hy = y + sit; // the mini chibi sits a little lower than the big one stood
+    const BT = WORK / 3, wf = f - T5, beat = ph === "work" ? Math.min(2, wf / BT | 0) : -1, wb = ph === "work" ? (wf - beat * BT) / BT : 0, role = trip ? ROLE[trip.verb] || "check" : "check";
+    const hop = beat === 1 && role !== "ask" ? Math.abs(Math.sin(wb * Math.PI * 2)) * 10 * K : beat === 2 ? Math.sin(cl(wb * 3) * Math.PI) * 6 * K : 0; // two taps on it; a little jump when it's done
+    let tiltT = beat === 1 && role === "ask" ? .2 * Math.sin(wb * Math.PI) : 0; // a head tilt while it wonders (a target: the tilt springs toward it)
+    if (beat === 0 || beat === 1) gaze = [tq.x, tq.y]; if (beat === 2 && wb > .1) happy = Math.max(happy, 2);
+    const nod = ph === "decide" ? Math.sin(cl((f - T1) / DEC) * Math.PI) * 5 * K : 0;
+    // where its body is and how big, per frame of the film (sx, sy differ only for the squash and the pop)
+    const shrink = ph === "med" ? ease(cl(fm * 3)) : 1, float = ph === "med" ? Math.sin(f * .045) * 3 * K * shrink : 0;
+    const along = (p, a0, b0, a1, b1) => [a0 + (a1 - a0) * p, b0 + (b1 - b0) * p - Math.sin(p * Math.PI) * 30 * K]; // a soft arc between two places
+    const elastic = (p) => 1 - Math.cos(p * 9) * Math.exp(-p * 5), wob = ph === "pop" ? .2 * Math.sin(fp * 16) * Math.exp(-fp * 4) : ph === "land" ? .14 * Math.sin(fl * Math.PI * 3) * (1 - fl) : 0;
+    const body = (p) => ph === "med" ? [x, y + (hy - y) * shrink + float, 1 + (SM - 1) * shrink] : ph === "go" ? [...along(p, hx, hy, ax, ay), SM] : ph === "land" ? [ax, ay - Math.abs(Math.sin(fl * Math.PI * 2)) * Math.exp(-fl * 3) * 8 * K, SM]
+      : ph === "work" ? [ax, ay - hop, SM] : ph === "back" ? [...along(p, ax, ay, hx, hy), SM] : ph === "pop" ? [x, hy + (y - hy) * cl(elastic(fp)), SM + (1 - SM) * elastic(fp)] : [x, y + nod, 1];
+    const C = body(ph === "go" ? ease(fg) : ph === "back" ? ease(fb) : 0).slice(); if (ek === "hop") C[1] -= Math.max(0, Math.sin(cl((ep - .1) / .65) * Math.PI)) * 34 * K * fo;
+    { const md = root.dataset.mood || (busy ? "think" : ""); for (const [q, m] of [["h", "happy"], ["s", "sad"], ["t", "think"], ["k", "talk"], ["w", "wow"], ["i", "wink"]]) xp[q] += ((md === m && !emo && !trip ? 1 : 0) - xp[q]) * (still ? 1 : .06); }
+    if (cloud.pic && !still) { C[1] -= (Math.abs(Math.sin(b * 2)) * 5 * xp.h + Math.abs(Math.sin(b * 4)) * 2.5 * xp.k + 7 * xp.w) * K; tiltT += .12 * xp.t + .1 * xp.i; } // happy bounces; talking bobs as it speaks; surprised jumps up a little; thinking and winking tilt the head
+    const dance = ek === "cute" ? env : 0; // dancing: the body stays whole and its own dots swarm over it on the beat
+    if (ek === "cute" && !still) { C[1] -= Math.abs(Math.sin(b * 4)) * 6 * K * dance; C[0] += Math.sin(b * 2) * 5 * K * dance; happy = Math.max(happy, 2); } // a bob on every beat, a sway every two, on the same tempo as its breath
+    // sitting: it settles down, looks about, then gets up (a drawn form folds its legs and swings its feet; a picture just sinks and rests)
+    const DOWN = 40, UP = EMO.sit[0] - 40; let sitE = 0, sf = -1;
+    if (ek === "sit") { const f = sf = tick - emo.t0;
+      sitE = (f < UP ? ease(cl(f / DOWN)) : 1 - ease(cl((f - UP) / 25))) * fo;
+      if (!still && f === DOWN) bod.sv -= .08; if (!still && f === UP + 22) bod.sv += .1;
+      if (f > DOWN && f < UP) { tiltT += .1 * Math.sin(b * .5) * sitE; gaze = [C[0] + Math.sin(b * .25) * 200, C[1] + 40]; } happy = Math.max(happy, f > DOWN ? 1 : 0);
+      if (cloud.pic) C[1] += sitE * 26 * K; }
+    if (ek === "spin" && cloud.pic) { tiltT += Math.sin(ep * Math.PI * 6) * .22 * env; C[1] -= Math.abs(Math.sin(ep * Math.PI * 3)) * 10 * K * env; } // a picture can't spin round: it twirls on the spot instead, rocking side to side with little hops
+    workTilt = still ? tiltT : workTilt + (tiltT - workTilt) * .1; // one tilt, sprung, whoever asked for it
+    // meditating: the nodes nearest it condense and send their data dots into it, one after another
+    if (ph === "med") trip.wp.forEach((m, j) => { if (j >= trip.ate && fm >= .3 + j * .18) { trip.ate = j + 1; m.eat = 1; m.flash = 40;
+      for (let b = 0; b < 22; b++) trip.bits.push({ n: m, t0: tick + b * 2, c: colour(m), a: Math.random() * 6.283, r: 4 + Math.random() * 10 }); } });
+    if (ph === "look" || ph === "decide") { const L = trip.look, q = ph === "look" && L.length ? proj[nodes.indexOf(L[Math.min(L.length - 1, f / (LOOK / L.length) | 0)])] : tq, lock = ph === "decide" ? ease(cl((f - T1) / 30)) : 0;
+      if (q) { const per = LOOK / Math.max(1, L.length), fl2 = ph === "look" ? Math.sin(((f % per) / per) * Math.PI) : 1, c = ph === "look" ? "#ffffff" : tc;
+        g.save(); g.strokeStyle = c; g.globalAlpha = (ph === "look" ? .28 : .35 + .5 * lock) * fl2; g.lineWidth = ph === "look" ? 1 : 1.4; g.setLineDash(ph === "look" ? [2, 5] : [6, 5]); g.lineDashOffset = -tick * .6;
+        g.beginPath(); g.moveTo(x, y); g.lineTo(q.x, q.y); g.stroke(); g.setLineDash([]);
+        const b = ph === "look" ? 11 : 26 - 14 * lock, e2 = 5; g.globalAlpha = (ph === "look" ? .6 : .95) * fl2; g.lineWidth = 1.4; g.beginPath(); // corner brackets on what it is looking at
+        for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { g.moveTo(q.x + sx * b, q.y + sy * (b - e2)); g.lineTo(q.x + sx * b, q.y + sy * b); g.lineTo(q.x + sx * (b - e2), q.y + sy * b); } g.stroke(); g.restore(); gaze = [q.x, q.y]; } }
+    g.globalCompositeOperation = "lighter";
+    if (ph === "med") { const w = Math.min(shrink, cl((1 - fm) * 6)); glow(C[0], C[1], 60 * K, tc, .25 * w); // its calm: breathing rings going out slowly round it
+      for (let j = 0; j < 3; j++) { const u = ((f * .006 + j / 3) % 1); g.strokeStyle = tc; g.globalAlpha = w * .45 * (1 - u); g.lineWidth = 1; g.beginPath(); g.ellipse(C[0], C[1] + 6 * K, (14 + 46 * u) * K, (5 + 14 * u) * K, 0, 0, 6.283); g.stroke(); } }
+    if (trip && (ph === "land" || ph === "work")) { const w = ph === "land" ? ease(fl) : ease(cl((T6 - f) / 40)); glow(tq.x, tq.y - 10 * K, 70 * K, tc, .22 * w); } // a spotlight on the node it sits on
+    trip?.bits.forEach((b) => { const u = (tick - b.t0) / 55; if (u < 0 || u > 1) return; const q = proj[nodes.indexOf(b.n)]; if (!q) return; const e = ease(u), sx = q.x + Math.cos(b.a) * b.r * K, sy = q.y + Math.sin(b.a) * b.r * K; // data dots, flying into it
+      g.globalAlpha = .25 + .75 * Math.sin(u * Math.PI); g.fillStyle = b.c; const d = 2.8 - 1.2 * e; g.fillRect(sx + (C[0] - sx) * e - d / 2, sy + (C[1] - sy) * e - Math.sin(e * Math.PI) * 14 * K - d / 2, d, d); });
+    if (trip) trip.bits = trip.bits.filter((b) => tick - b.t0 < 56);
+    let mx = C[2] * (1 + wob), my = C[2] * (1 - wob);
+    // it is a body, not a sticker: it breathes, sways from its feet, leans into where it is going and towards you, stretches as it flies,
+    // and when it stops the lean and the stretch spring past and settle, so every move carries through it
+    if (!still) { const vx = prevC ? (C[0] - prevC[0]) / sc : 0, vy = prevC ? (C[1] - prevC[1]) / sc : 0, sp = Math.hypot(vx, vy), pt = ptr && !trip ? Math.max(-1, Math.min(1, (ptr[0] - C[0]) / (W * .35))) : 0;
+      spring(bod, "l", Math.max(-.32, Math.min(.32, vx * 12)) + pt * (cloud.pic ? 0 : .09), .07, .84); spring(bod, "h", Math.max(-.7, Math.min(.7, vx * 45)), .03, .9); spring(bod, "s", Math.min(.2, sp * 7) - (ph === "med" ? .04 : 0), .09, .8); }
+    prevC = [C[0], C[1]];
+    const br = still ? 0 : Math.sin(b), sway = still ? 0 : (Math.sin(b * .4) * .045 + Math.sin(b * .9 + 1) * .018) * (cloud.pic ? 1.6 : 1) + (ek === "shiver" ? Math.sin(tick * .5) * .05 * env : 0), rus = still ? 0 : cloud.pic ? .25 : 1;
+    // a picture's head lives on its own: it tilts and turns a little toward your cursor, and now and then glances somewhere else, then springs back
+    const nk = cloud.rig ? cloud.rig.piv[1][1] - .1 : -.6, nu = cloud.rig ? (cloud.rig.piv[1][0] + cloud.rig.piv[2][0]) / 2 : 0;
+    if (!still && cloud.pic) { if (tick > hd.next) { const q = Math.random() < .3; hd.ga = q ? 0 : (Math.random() - .5) * .34; hd.gu = q ? 0 : (Math.random() - .5) * .16; hd.next = tick + 100 + Math.random() * 240; }
+      const pt = ptr && !trip ? Math.max(-1, Math.min(1, (ptr[0] - C[0]) / (W * .35))) : 0, ta = hd.ga + .12 * pt + .05 * Math.sin(b * .55) + workTilt * .6, tu = hd.gu + .07 * pt;
+      hd.av = (hd.av + (ta - hd.a) * .045) * .8; hd.a += hd.av; hd.uv = (hd.uv + (tu - hd.u) * .045) * .8; hd.u += hd.uv; }
+    const bend = (u, v, phs) => { const hh = Math.max(0, Math.min(1, (1.05 - v) / 2.8)), sy = (1 + bod.s) * (1 + (cloud.pic ? .04 : .022) * br * hh), sx = (1 - bod.s * .45) * (1 - .012 * br);
+      if (cloud.pic && v < nk + .08) { const w = Math.min(1, (nk + .08 - v) / .18), a = hd.a * w, du = u - nu, dv = v - nk, co = Math.cos(a), si = Math.sin(a); u = nu + du * co * (1 - Math.abs(hd.u) * w * .5) - dv * si + hd.u * w; v = nk + du * si + dv * co; } // the head turns on its neck; the body under it stays put
+      return [u * sx + (sway + bod.l + workTilt) * hh * hh + rus * .012 * hh * Math.sin(v * 7 - tick * .07 + phs), 1.05 + (v - 1.05) * sy]; }; // the top moves most; a ripple runs up it like wind through leaves or breath through a chest
+    const mo = cloud.from && tick - cloud.t0 < MORPH + 60 ? cloud.from.pts : null, mN = mo ? mo.length / cloud.pts.length : 0, mf = mo ? (tick - cloud.t0) / MORPH : 1; if (cloud.from && !mo) cloud.from = null;
+    if (cloud.pic) g.globalCompositeOperation = "source-over"; // a picture keeps its true colours: overlapping dots don't add up to white
+    const em2 = emo ? Math.sin(ep * Math.PI) * fo : 0;
+    gait += ((still || emo ? 0 : Math.min(1, Math.hypot(bod.l, bod.s) * 4 + (ph === "go" || ph === "back" ? 1 : 0))) - gait) * .08;
+    const lim = [0, 0, 0, 0, 0], tk = tick; if (!still && cloud.rig && !cloud.pic) { gph += .06 + .12 * gait; const st = Math.sin(gph); // the step's phase moves on steadily; its speed may change, its place never jumps // arms (1 left, 2 right) and legs (3, 4): positive swings outward
+      lim[1] = .1 + .06 * Math.sin(tk * .045) + .25 * gait * st; lim[2] = .1 + .06 * Math.sin(tk * .045 + 2) - .25 * gait * st; lim[3] = (.04 + .22 * gait) * Math.max(0, st); lim[4] = (.04 + .22 * gait) * Math.max(0, -st);
+      if (ph === "work") { lim[2] = 1.1 + .35 * Math.sin(tk * .3); } // it reaches out to the node it works on
+      if (ph === "pop" || (ph === "land" && fl > .5)) { lim[1] = lim[2] = 1.4; } // ta-da
+      if (ek) { const bb = Math.sin(b * 4), base = lim.slice();
+        if (ek === "cute") { const w = Math.sin(b * 2); lim[1] = .35 + .55 * Math.max(0, w); lim[2] = .35 + .55 * Math.max(0, -w); lim[3] = .12 * Math.max(0, -bb); lim[4] = .12 * Math.max(0, bb); } // it sways from side to side, each arm lifting as it leans that way, little steps on the beat
+        else if (ek === "sit") { lim[1] = lim[2] = .3 + .1 * sitE; const sw = sf > DOWN + 10 && sf < UP ? .2 + .2 * Math.sin(b * 2.6) : 0; lim[3] = (.15 + sw) * sitE; lim[4] = (.15 + (sw ? .4 - sw : 0)) * sitE; } // its feet dangle and swing, one against the other
+        else if (ek === "hop") { const air = Math.max(0, Math.sin(cl((ep - .1) / .65) * Math.PI)); lim[1] = lim[2] = .2 + 1.8 * air; lim[3] = lim[4] = .3 * air; }
+        else if (ek === "spin") { lim[1] = lim[2] = 1.5 * em2; }
+        else if (ek === "bow") { lim[2] = (2.1 + .3 * Math.sin(ep * Math.PI * 6)) * em2; } // HELLO: one hand up, waving
+        else if (ek === "shiver") { lim[1] = lim[2] = -.25 * em2 + .06 * Math.sin(tk * .5); lim[3] = lim[4] = -.1 * em2; } // hugging itself
+        for (let j = 1; j < 5; j++) lim[j] = base[j] + (lim[j] - base[j]) * env; } } // a move eases out of, and back into, how it was standing
+    for (let j = 1; j < 5; j++) { if (still) { limA[j] = limB[j] = lim[j]; continue; } // limbs have weight: the upper part springs toward where it's going, overshoots a touch and settles; the forearm trails it
+      limV[j] = (limV[j] + (lim[j] - limA[j]) * .08) * .8; limA[j] += limV[j]; limBV[j] = (limBV[j] + (limA[j] - limB[j]) * .06) * .8; limB[j] += limBV[j]; }
+    const rig = cloud.rig, flip = [0, 1, -1, 1, -1];
+    const pose = (u, v, z, phs) => { // what a move does to the body; its eyes go through it too, so they stay on its face
+      if (xp.s > .01 || xp.w > .01) { const hh = cl((1.05 - v) / 2.8); v += hh * hh * .14 * xp.s; u *= 1 - .05 * xp.s * hh; v = 1.05 + (v - 1.05) * (1 + .07 * xp.w); } // sad: head and shoulders sink; surprised: it draws itself up
+      if (ek === "poof") { const b = Math.sin(cl(ep * 1.4) * Math.PI) * fo * 1.3 * (.6 + .4 * Math.sin(phs * 3)); u += Math.cos(phs) * b; v += Math.sin(phs * 1.7) * b * .8; z += Math.sin(phs) * b; } // bursts into a cloud of dots, then pulls back together
+      else if (ek === "sit" && cloud.pic) { v = 1.05 + (v - 1.05) * (1 - .12 * sitE); u *= 1 + .05 * sitE; } // a picture settles: it sinks, squats a little lower and wider, nothing bends
+      else if (ek === "sit" && rig) { const L = rig.bot - rig.hip, dn = sitE * L * .45; // its top stays whole and upright and just comes down; its legs fold forward toward you, so from the front they look short and splayed
+        if (v < rig.hip) v += dn; else { const k = (v - rig.hip) / L; v = rig.hip + dn + (v - rig.hip) * (1 - .5 * sitE); z -= k * .5 * sitE; } }
+      else if (ek === "bow") { const hh = cl((1.05 - v) / 2.8); if (cloud.pic) v += hh * hh * em2 * .12; else { v += hh * hh * em2 * .55; z -= hh * em2 * .7; } } // its top bends toward you; a picture nods
+      return [u, v, z]; };
+    const uc0 = rig ? (rig.piv[1][0] + rig.piv[2][0]) / 2 : 0;
+    if (cloud.pic && !still) glow(C[0], C[1] + .2 * sc, sc * 1.5, tint, .1 * alpha * k); // a faint light it stands in
+    let lastFs = null;
+    // marked eyes close the way eyes do: lids slide over them. No dot moves; the dots a lid covers take the skin's colour, and its edge is a lash line in the eye's own dark
+    const EY = cloud.eyes; if (EY && !cloud.eyeCol) cloud.eyeCol = EY.map(([eu, ev, r]) => { let sk = [0, 0, 0], n = 0, dk = null, dl = 999; // the skin just below the eye; the eye's darkest colour
+      for (const p of cloud.pts) { if (p[5] === 2) continue; const du = p[0] - eu, dv = p[1] - ev, l = p[6][0] * .3 + p[6][1] * .59 + p[6][2] * .11;
+        if (Math.abs(du) < r * .8 && dv > r * 1.15 && dv < r * 1.7) { sk = sk.map((a, k) => a + p[6][k]); n++; }
+        if (du * du + dv * dv < r * r && l < dl) { dl = l; dk = p[6]; } }
+      return [n ? `rgb(${sk.map((a) => a / n | 0)})` : "rgb(230,200,190)", dk ? `rgb(${dk.map((a) => a * .7 | 0)})` : "rgb(30,20,30)"]; });
+    const bk = tick - blinkAt, blink = bk < 0 || bk > 7 ? 0 : bk < 2 ? bk / 2 : bk < 4 ? 1 : 1 - (bk - 4) / 3; // shut fast, hold a beat, open a little slower
+    const smile = Math.max(xp.h, ek === "cute" ? env : ek === "sit" ? sitE * env : 0);
+    const lids = EY ? EY.map((_, j) => { const cu = Math.max(blink, j === 0 ? xp.i : 0), k = Math.max(cu, smile); return { k, arch: k > .001 ? cl(smile / k) * smile : 0, sad: .45 * xp.s }; }) : null;
+    const eyeQ = [], eatC = trip && trip.ate ? trip.wp.map(colour) : null;
+    cloud.pts.forEach(([u, v, z, c, phs, rim, rgb, ej], i) => {
+      if (EY) for (let j = 0; j < 2; j++) { const [eu, ev, r] = EY[j], du = u - eu, dv = v - ev; if (du * du + dv * dv > r * r * 1.25) continue;
+        const L = lids[j], q = Math.min(1, Math.abs(du) / r), meet = ev + .1 * r - .55 * r * (1 - q * q) * (L.arch > 0 ? L.arch / Math.max(L.k, .001) : 0); // where the lids meet: a line, or an arch when it smiles (^ ^)
+        const top = ev - r + (meet - (ev - r)) * Math.max(L.k, L.sad), bot = ev + r + (meet - (ev + r)) * L.k, edge = r * .11;
+        if (L.k > .03 || L.sad > .03) { if (v < top - edge || v > bot + edge) { c = cloud.eyeCol[j][0]; rim = 1; } else if (v < top + edge || (v > bot - edge && L.k > .03)) { c = cloud.eyeCol[j][1]; rim = 1; } } // lid, then its lash line
+        break; }
+      const li = rig && !cloud.pic ? rig.id[i] : 0; if (li && (limA[li] || limB[li])) { const [pu, pv] = rig.piv[li], du = u - pu, dv = v - pv, rr = Math.hypot(du, dv), jt = Math.min(1, rr / .18), el = cl((rr - .2) / .22), fore = limB[li] + (li < 3 ? .35 * Math.abs(limA[li]) : 0); // the upper limb follows the shoulder; past the elbow it follows the trailing forearm, and a raised arm bends a little
+        const a = ((limA[li] * (1 - el) + fore * el) * jt ) * rig.w[i] * flip[li], co = Math.cos(a), si = Math.sin(a);
+        u = pu + du * co - dv * si; v = pv + du * si + dv * co; z -= Math.abs(a) * .15 * (li > 2 ? 1 : 0); } [u, v] = bend(u, v, phs);
+      [u, v, z] = pose(u, v, z, phs);
+      if (dance > .001) { const fa = b * 4 + u * 5 + v * 3.5, fb = b * 3 - u * 4 + v * 5, am = .045 * dance; u += Math.cos(fa) * am; v += Math.sin(fb) * am; z += Math.sin(fa) * am; } // dancing, its dots swarm: a flow that moves neighbours together, like a school of fish, rippling over its body on the beat while its outline holds
+      if (mo) { const o = mo[i * mN | 0], p = ease(cl(mf * 1.5 - (v + 1.3) / 2.6 * .5)), sw = Math.sin(p * Math.PI); // top first, each dot from its place in the old form, swirling out a little on the way
+        u = o[0] + (u - o[0]) * p + Math.sin(phs + p * 6) * sw * .18; v = o[1] + (v - o[1]) * p - sw * .1; z = o[2] + (z - o[2]) * p + Math.cos(phs + p * 6) * sw * .18;
+        if (p < 1) c = `rgb(${o[6].map((a, k) => a + (rgb[k] - a) * p | 0)})`; rim = p > .5 ? rim : o[5]; }
+      if (ballE > .01) { const p = ease(cl(ballE * 1.6 - (v + 1.3) / 2.6 * .6)), r = i % 4, a = (i * .618 % 1) * 6.283 + tick * (.04 + r * .012) * (r % 2 ? -1 : 1), tl = [.3, 1.1, 1.9, 2.6][r], rad = .85 + r * .16; // as you move, it unravels into three rings spinning round your cursor; at rest it comes back out, head first
+        u += (Math.cos(a) * rad - u) * p; v += (Math.sin(a) * rad * Math.cos(tl) - v) * p; z += (Math.sin(a) * rad * Math.sin(tl) - z) * p; if (p > .5) { rim = 1; c = WAVE_C[r]; } } // each ring in one system's colour
+      const X = u * ca + z * sa, Z = -u * sa + z * ca, jit = still || cloud.pic ? 0 : .008 * Math.sin(t * 1.2 + phs), s = 1 / (1 + Z * .35), del = Math.min(1, Math.max(0, (v + 1.3) / 2.6)) * .85 + phs / 6.283 * .15; // top first, like a ribbon
+      const ox = (X + jit) * sc * s, oy = (v + jit * .6) * sc * s, B = ph === "go" ? body(ease(cl(fg * 1.25 - del * .25))) : ph === "back" ? body(ease(cl(fb * 1.25 - del * .25))) : C; // in flight the lower dots trail a little
+      let qx = B[0] + ox * mx, qy = B[1] + oy * my;
+      if (asm < 1.6 && N && !still) { const a = ease(asm * 1.4 - del * .4), src = proj[(i * 7919) % N]; if (src) { qx = src.x + (qx - src.x) * a; qy = src.y + (qy - src.y) * a; } } // born out of the mesh: each dot flies in from a node
+      if (ej !== undefined) { eyeQ[ej] = [qx, qy]; return; } // an eye's anchor: where its cut-out goes
+      const lit = (workE > .05 || ph === "work") && Math.sin(v * 5 - tick * .08 + phs * .2) > .6, eaten = eatC && i % 7 < trip.ate ? eatC[i % 7] : null; // a wave of the working colour runs through it; flecks of what it took in ride in it
+      g.globalAlpha = alpha * k * (rim ? 1 : Z < 0 ? (cloud.pic ? .82 + .18 * folE : .55 + .3 * folE) : cloud.pic ? .1 : .22) * (still || cloud.pic ? 1 : .85 + .15 * Math.sin(t * 1.5 + phs)); { const fs = lit ? tc : eaten || c; if (fs !== lastFs) { g.fillStyle = fs; lastFs = fs; } }
+      const d = (rim ? (cloud.pic ? 1.2 : 2.2) : Z < 0 ? (cloud.pic ? 1.15 : 1.6) : 1.1) * (.72 + .28 * Math.min(1, C[2])) * (1 + .3 * folE) * zg; g.fillRect(qx - d / 2, qy - d / 2, d, d); }); // following you, small: bigger, solider dots keep it crisp
+    if (cloud.eyeImg && eyeQ.length === 6 && !mo && ballE < .05) cloud.eyeImg.forEach((E, j) => { const a0 = eyeQ[j * 3], ax = eyeQ[j * 3 + 1], ay = eyeQ[j * 3 + 2], BIG = 1.2, ux = [(ax[0] - a0[0]) / E.r * BIG, (ax[1] - a0[1]) / E.r * BIG], uy = [(a0[0] - ay[0]) / E.r * BIG, (a0[1] - ay[1]) / E.r * BIG];
+      const pitch = 1.6 * Math.max(1, zg), st = pitch / Math.max(.2, Math.hypot(ux[0], ux[1])), dsz = 1.1 * Math.max(1, zg), L = lids[j], r = E.r, af = L.arch > 0 ? L.arch / Math.max(L.k, .001) : 0, A = alpha * k * (asm < 1.6 && !still ? cl(asm - .6) : 1); // picture pixels, sampled a screen dot apart
+      for (let dy = -E.R2, row = 0; dy <= E.R2; dy += st * .866, row++) for (let dx0 = -E.R2; dx0 <= E.R2; dx0 += st) { const dx = dx0 + (row % 2) * st / 2; // a staggered grid of dots, like a halftone, not squares
+        const o = ((Math.round(dy) + E.R2) * E.n + Math.round(dx) + E.R2) * 4; if (o < 0 || o >= E.d.length || E.d[o + 3] < 20) continue;
+        let col = E.cols[o >> 2];
+        if (L.k > .03 || L.sad > .03) { const q = Math.min(1, Math.abs(dx) / r), meet = .1 * r - .55 * r * (1 - q * q) * af, top = -r * 1.25 + (meet + r * 1.25) * Math.max(L.k, L.sad), bot = r * 1.25 + (meet - r * 1.25) * L.k, ed = r * .09; // lids, in dots: skin over, a lash line at the edge
+          if (dy < top - ed || (L.k > .03 && dy > bot + ed)) col = cloud.eyeCol[j][0]; else if (dy < top + ed || (L.k > .03 && dy > bot - ed)) col = cloud.eyeCol[j][1]; }
+        g.globalAlpha = A * E.d[o + 3] / 255; g.fillStyle = col; g.fillRect(a0[0] + dx * ux[0] + dy * uy[0] - dsz / 2, a0[1] + dx * ux[1] + dy * uy[1] - dsz / 2, dsz, dsz); }
+      if (L.k < .5 && L.sad < .5) { const gx = -.38 * r, gy = -.4 * r, tw = .75 + .25 * Math.sin(tick * .05 + j); g.globalAlpha = A * tw * (1 - L.k * 2); g.fillStyle = "#fff"; const gs = dsz * 1.3; g.fillRect(a0[0] + gx * ux[0] + gy * uy[0] - gs / 2, a0[1] + gx * ux[1] + gy * uy[1] - gs / 2, gs, gs); } }); // a glint of light in each eye
+    lastFs = null;
+    if (cloud.pic && xp.t > .05) for (let j = 0; j < 3; j++) { g.globalAlpha = xp.t * (.3 + .7 * Math.max(0, Math.sin(tick * .08 - j * .9))); g.fillStyle = "#fff"; const d = 3 * Math.max(1, zg); g.fillRect(C[0] + (.55 + j * .2) * sc - d / 2, C[1] - (1.95 + j * .12) * sc - d / 2, d, d); } // a little "…" while it thinks
+    g.globalCompositeOperation = "lighter";
+    if (trip && ph === "work") workScene(role, beat, wb, wf, tq, tc);
+    if (trip && ph === "work") { const w = ease(Math.min(1, (f - T5) / 40, (T6 - f) / 40)) * .35; // a faint ring of dots turns round the node while it works
+      if (role !== "ask" && (wf === (BT * 1.5 | 0) || wf === (BT * 2 | 0) - 1)) { trip.n.flash = 50; sparks.push({ n: trip.n, t: 0 }); } // each tap lands: the node flashes
+      for (let j = 0; j < 18; j++) { const a = j / 18 * 6.283 + tick * .02, rr = (17 + 2 * Math.sin(tick * .04)) * K + 10; g.globalAlpha = w * (.35 + .65 * (.5 + .5 * Math.cos(a - tick * .05))); g.fillStyle = tc; g.fillRect(tq.x + Math.cos(a) * rr - 1.2, tq.y + Math.sin(a) * rr * .5 - 1.2, 2.4, 2.4); } }
+    g.globalCompositeOperation = "source-over";
+    if (emo && !trip) { g.globalAlpha = .85 * env; g.font = "10px ui-monospace, monospace"; g.letterSpacing = "1.6px"; g.textAlign = "center"; g.fillStyle = SIG; g.fillText(EMO[ek][1], C[0], C[1] + R * C[2] * 1.05 + 14); g.letterSpacing = "0px"; g.globalAlpha = 1; }
+    if (trip) { const word = { look: "looking", decide: "decided", med: trip.ate ? `meditating · taking in ${trip.ate}` : "meditating", go: "going", land: "landing", work: `${trip.verb || "working"} · ${SCRIPT[role][0][Math.max(0, beat)]}`, back: "coming back", pop: "ta-da" }[ph]; // the film's caption, under where it is
+      const fade = ph === "look" ? cl(f / 20) : ph === "pop" ? 1 - cl(fp * 1.6) : 1, atHome = ph === "look" || ph === "decide", lx = atHome ? x : ph === "work" || ph === "land" ? tq.x : C[0], ly = atHome ? y + R * .95 : ph === "work" || ph === "land" ? tq.y + 30 * K + 12 : C[1] + R * C[2] * .95 + 6;
+      g.globalAlpha = .9 * fade; g.font = "10px ui-monospace, monospace"; g.letterSpacing = "1.4px"; g.textAlign = "center"; g.fillStyle = ph === "look" ? "#fff" : tc; g.fillText(String(word).toUpperCase(), lx, ly); g.letterSpacing = "0px"; }
+    g.globalAlpha = 1;
+    let [fu, fv, fsz, fz = 0] = cloud.face; if (mo) { const p = ease(cl(mf)), [a, b, c, d = 0] = cloud.from.face; fu = a + (fu - a) * p; fv = b + (fv - b) * p; fsz = c + (fsz - c) * p; fz = d + (fz - d) * p; } // its eyes slide from the old face to the new
+    [fu, fv] = bend(fu, fv, 0); [fu, fv, fz] = pose(fu, fv, fz, 0); // and ride the body as it breathes, leans, sits and dances
+    if (ballE > .01) { fu *= 1 - ballE; fv *= 1 - ballE; fz *= 1 - ballE; fsz *= 1 - .7 * ballE; } // small, so they don't hide what you're looking at // in the rings: its eyes sit at the centre, on your cursor
+    const em = (mx + my) / 2, fZ = -fu * sa + fz * ca, fs = 1 / (1 + fZ * .35); // its eyes ride with it; closed while it meditates
+    return { x: C[0] + (fu * ca + fz * sa) * sc * fs * mx, y: C[1] + fv * sc * fs * my, s: fsz * (.4 + .6 * k) * em * (ek === "spin" ? Math.max(0, ca) : 1), ink: "#fff", pic: cloud.pic, calm: ph === "med" && fm > .08 && fm < .94 };
   }
   function liquid() { // while it speaks: the letters firm up out of a blob, and a droplet with its eyes roams the words, hopping and peeking at your pointer
     wet += ((slab ? 0 : 1) - wet) * .045; fx.querySelector("#sw-fat").setAttribute("radius", (.5 + wet * 7).toFixed(2)); fx.querySelector("#sw-soft").setAttribute("stdDeviation", (1.3 + wet * 9).toFixed(2));
@@ -262,56 +732,131 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     if (!root.isConnected) return; requestAnimationFrame(frame);
     if (root.querySelector(".sp-steer-modal")) return; // a dialog is open over it: rest
     tick++; if (talk > 0) talk--; if (litT > 0 && !--litT) lit = -1;
-    const asleep = root.classList.contains("asleep"), mood = root.dataset.mood || "", quiet = asleep || root.dataset.mode === "quiet";
-    if (!drag && !still) yaw += quiet ? .0008 : .0026;
-    if (tick % 20 === 0) { const r = root.querySelector(".sp-rest"); if (r && !r.hidden && r.textContent) status.textContent = r.textContent; // the job line space.js writes
+    const asleep = root.classList.contains("asleep") || root.dataset.mode === "sleeping", mood = root.dataset.mood || "", quiet = asleep || root.dataset.mode === "quiet";
+    if (!drag && !still) { yaw += (quiet ? .0006 : .0016) + spinV; spinV *= .95; } // a slow, steady turn; a fling keeps it spinning, easing off
+    if (tick % 20 === 0) { const r = root.querySelector(".sp-rest"); if (root.dataset.mode === "sleeping") status.textContent = "Asleep · not answering · not learning"; else if (r && !r.hidden && r.textContent) status.textContent = r.textContent; // the job line space.js writes
       const rv = getComputedStyle(root).getPropertyValue("--dot").trim(); if (rv && rv !== tint) { tint = rv; markTint(); }
       lamps.querySelectorAll("span").forEach((l) => l.classList.toggle("on", busy ? (tick / 20 | 0) % 4 === [2, 1, 0, 3].indexOf(+l.dataset.s) : +l.dataset.s === lit)); }
-    grow += (growTo - grow) * (still ? 1 : .05); lift += ((detached ? .04 : 1) - lift) * (still ? 1 : .04); liquid(); g.clearRect(0, 0, W, H);
+    const stage = !cmds.hidden ? cmds : (slab && !bubble.hidden && !bubble.classList.contains("out")) || (hold > tick && !bubble.hidden) ? bubble : null, replying = !!stage; lay += ((replying ? 1 : 0) - lay) * (still ? 1 : .04); root.classList.toggle("sw-replying", replying); if (replying && trip) trip = null; // a reply or the command list: both take the stage the same way
+    { const e = lay * lay * (3 - 2 * lay); zoom += (zt - zoom) * .12; cx = bcx + (W * .24 - bcx) * e; K = bK * (1 - .5 * e) * zoom; } // the wheel or a pinch zooms into the mesh // while it replies: the mind slides to one side and shrinks, its dots build the reply's box, and Dot sits on the box
+    if (replying) { const b = stage.getBoundingClientRect(), r = cv.getBoundingClientRect(); sit = [b.right - r.left - 46, b.top - r.top]; stageR = [b.left - r.left, b.top - r.top, b.width, b.height]; }
+    { const ear = root.querySelector(".sp-ear"), e = lay * lay * (3 - 2 * lay); if (ear) { // the chat box goes with the stage: under its box, as wide as it, linked to it
+      if (fol || folE > .002) { /* following: follower() places it */ } else if (e < .002) { if (earOn) { ear.style.transform = ""; ear.style.width = ""; earOn = false; } const q = ear.getBoundingClientRect(), r = cv.getBoundingClientRect(); earNat = [q.left - r.left, q.top - r.top, q.width, q.height]; }
+      else if (earNat && stageR) { earOn = true; ear.style.width = `${earNat[2] + (stageR[2] - earNat[2]) * e}px`;
+        ear.style.transform = `translate(${(stageR[0] + stageR[2] / 2 - earNat[0] - earNat[2] / 2) * e}px, ${(stageR[1] + stageR[3] + 18 - earNat[1]) * e}px)`; } } }
+    grow += (growTo - grow) * (still ? 1 : .05); lift += (1 - lift) * (still ? 1 : .04); dimD += ((detached ? 1 : 0) - dimD) * (still ? 1 : .03); liquid(); g.clearRect(0, 0, W, H); // no model: it keeps its shape and just powers down
     proj = nodes.map((n) => P(n.x, n.y, n.z)); const items = [], show = (n) => !hide.has(n.layer);
-    for (const [k, R] of Object.entries(planes)) { if (hide.has(k)) continue; g.strokeStyle = "#8b93a7"; g.globalAlpha = .14; g.lineWidth = 1; g.setLineDash([2, 7]); g.beginPath(); // each layer's plane
-      for (let a = 0; a <= 6.4; a += .15) { const q = P(R * Math.cos(a), bandY[k], R * Math.sin(a)); a ? g.lineTo(q.x, q.y) : g.moveTo(q.x, q.y); } g.stroke(); g.setLineDash([]);
-      const q = P(-R - 18, bandY[k], 0); g.globalAlpha = .7; g.fillStyle = "#8b93a7"; g.font = "11px ui-monospace, monospace"; g.textAlign = "right"; g.fillText(LY[k].t, q.x, q.y + 4); g.globalAlpha = 1; }
+    // focus + context: the node under the pointer (or the one whose card is open) and what it is wired to stay lit, the rest steps back
+    let foc = -1; if (ptr && !drag) { let bd = 18; proj.forEach((q, i) => { if (!show(nodes[i]) || q.z > RS * .6) return; const d = Math.hypot(q.x - ptr[0], q.y - ptr[1]); if (d < bd) { bd = d; foc = i; } }); }
+    if (foc < 0 && pinned && !note.hidden) foc = nodes.indexOf(pinned);
+    if (foc < 0 && trip && tripF > T4 && tripF < T6) foc = nodes.indexOf(trip.n); // on its node, the rest of the mesh steps back
+    const nb = foc < 0 ? null : new Set([foc, ...edges.filter((e) => e.includes(foc)).map((e) => e[0] === foc ? e[1] : e[0])]), dim = (i) => nb && !nb.has(i) ? .16 : 1;
+    const SR = RS * 1.1; { // the mind's shell: rings of dots like a dot-matrix globe, the near side bright and bigger, the far side faint, turning with the view
+      const fade = (1 - morph * .7) * (nb ? .55 : 1) * (1 - folE) * (1 - .6 * dimD); g.fillStyle = "#fff"; // following you: no shell, no motes, no structure lines
+      // one slow wave of the four systems' colours flows across the shell; while it works the colours deepen and the wave quickens a little
+      const wsys = lit >= 0 ? lit : eyeTask && tick < eyeTask.until ? eyeTask.sys : null; workE += ((busy || learning || wsys != null ? 1 : 0) - workE) * (still ? 1 : .02);
+      workCol = SYSC[wsys] || "#ffffff"; const sat = .55 + .35 * workE, flow = tick * (.0012 + .0012 * workE);
+      if (!SHELLPAL[0]) for (let i = 0; i < 64; i++) { const f = i / 64 * 4, A = WAVE[f | 0], B = WAVE[(f + 1 | 0) % 4], m = f % 1, e = m * m * (3 - 2 * m); SHELLPAL[i] = A.map((x, k) => x + (B[k] - x) * e); } // a smooth loop violet → amber → cyan → green
+      const tintOf = (i) => { const c = SHELLPAL[i]; return `rgb(${c.map((x) => Math.round(255 + (x - 255) * sat)).join(",")})`; }, PAL = SHELLPAL.map((_, i) => tintOf(i)); // washed toward white at rest
+      const amp = still ? 0 : .012 + .014 * workE, bt = tick * .006; // a slow swell and a fine ripple over it: soothing, never a shake
+      // a node's card open: the shell's dots pour out of the sphere and lay themselves into the card's box, its border bright; closed, they flow home
+      const boxEl = !note.hidden ? note : stage; boxE += ((boxEl ? 1 : 0) - boxE) * (still ? 1 : .035); if (boxEl) lastBox = boxEl.getBoundingClientRect(); const nr = boxE > .002 ? lastBox : null, cr = nr && cv.getBoundingClientRect(); // closed, it measures nothing: the dots flow home from where the card was
+      const bx0 = nr ? nr.left - cr.left : 0, by0 = nr ? nr.top - cr.top : 0, cols = nr ? Math.max(1, nr.width / 5 | 0) : 1, rows = nr ? Math.max(1, nr.height / 5 | 0) : 1, cells = cols * rows; let k = 0;
+      for (let r = 1; r < 100; r++) { const v = -1 + r / 50, rr = Math.sqrt(1 - v * v) * SR, n = Math.max(24, Math.round(380 * rr / SR)); // dense and faint: a veil of dots rather than a cage
+        for (let j = 0; j < n; j++) { const a = j / n * 6.283 + r * .37, b = 1 + amp * (Math.sin(2 * a + v * 3 + bt) + .5 * Math.sin(3 * a - v * 2 - bt * 1.3) + .35 * Math.sin(9 * a + v * 11 + bt * 2.2));
+          const q = P(Math.cos(a) * rr * b, v * SR * b, Math.sin(a) * rr * b), z = q.z / SR, d = z < 0 ? .9 + .8 * -z : .8;
+          const w = a / 6.283 + v * .35 + flow, ci = ((w % 1 + 1) % 1) * 64 | 0, glow2 = .75 + .25 * Math.sin((a + v * 2) * 2 - tick * .01); g.fillStyle = PAL[ci];
+          let al = (z < 0 ? .07 + .24 * -z : .045 - .028 * z) * glow2 * (1 + .4 * workE) * fade, qx = q.x, qy = q.y; k++;
+          if (nr) { const c = (k * 7919) % cells, cx2 = c % cols, cy2 = c / cols | 0, edge = cx2 === 0 || cy2 === 0 || cx2 === cols - 1 || cy2 === rows - 1, p = ease(cl(boxE * 1.7 - (k * .618 % 1) * .7)), tx = bx0 + cx2 * 5 + 2.5, ty = by0 + cy2 * 5 + 2.5;
+            qx += (tx - qx) * p; qy += (ty - qy) * p - Math.sin(p * Math.PI) * 40; al += ((edge ? 1 : .12) * (k < cells * 1.2 ? 1 : .3) - al) * p; }
+          g.globalAlpha = al; g.fillRect(qx - d / 2, qy - d / 2, d, d); } }
+
+      g.globalCompositeOperation = "lighter"; for (const p of MOTES) { const tt = tick * .0025 + p.ph, q = P((p.x + Math.sin(tt) * .03) * SR * .9, (p.y + Math.cos(tt * 1.3) * .03) * SR * .9, (p.z + Math.sin(tt * .7) * .03) * SR * .9), tw = still ? .6 : .4 + .6 * Math.abs(Math.sin(tt * 3));
+        g.globalAlpha = (q.z < 0 ? .55 : .22) * tw * fade; g.fillStyle = p.c; const d = q.z < 0 ? 1.6 : 1; g.fillRect(q.x - d / 2, q.y - d / 2, d, d); } g.globalCompositeOperation = "source-over"; // motes drifting through its mind
+      const o = P(0, 0, 0); g.strokeStyle = "#fff"; g.lineWidth = 1; g.globalAlpha = .16 * fade * (1 - workE); g.beginPath(); g.ellipse(o.x, o.y, SR * o.s, SR * o.s * Math.max(.04, lift), 0, 0, 6.283); g.stroke(); // a faint outline, so it reads as one sphere
+      for (const wr of wires) { if (hide.has(wr.layer)) continue; const pts = wr.line.map((p) => P(...p)), z = pts.reduce((s2, q) => s2 + q.z, 0) / pts.length; // each structure in its system's colour, yellow while that system works
+        g.strokeStyle = wr.sys != null && (lit === wr.sys || (eyeTask && tick < eyeTask.until && eyeTask.sys === wr.sys)) ? SIG : wr.sys != null ? SYSC[wr.sys] : "#fff";
+        g.globalAlpha = Math.max(.08, Math.min(.5, .3 - z / (RS * 3))) * fade * (nb ? .5 : 1); g.setLineDash(wr.dash || []); g.beginPath(); pts.forEach((q, i) => i ? g.lineTo(q.x, q.y) : g.moveTo(q.x, q.y)); g.stroke(); }
+      g.setLineDash([]); g.globalAlpha = 1; }
     edges.forEach((e, i) => { if (show(nodes[e[0]]) && show(nodes[e[1]])) items.push({ z: (proj[e[0]].z + proj[e[1]].z) / 2, t: "e", a: proj[e[0]], b: proj[e[1]], i }); });
-    nodes.forEach((n, i) => { if (!show(n)) return; items.push({ z: proj[i].z, t: "n", n, q: proj[i] }); });
-    if (!quiet && edges.length) for (let k = 0; k < Math.min(7, edges.length); k++) { const e = edges[(k * 7 + (tick / 140 | 0)) % edges.length], a = nodes[e[0]], b = nodes[e[1]], u = ((tick + k * 37) % 140) / 140; if (!show(a) || !show(b)) continue;
-      items.push({ z: 0, t: "p", q: P(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u, a.z + (b.z - a.z) * u) }); items.at(-1).z = items.at(-1).q.z; } // sparks along what it has linked
+    nodes.forEach((n, i) => { if (!show(n)) return; items.push({ z: proj[i].z, t: "n", n, q: proj[i], i }); });
+    if (!quiet && !still && folE < .5) edges.slice(0, 120).forEach((e, k) => { const a = nodes[e[0]], b = nodes[e[1]]; if (!show(a) || !show(b)) return; const u = ((tick * .0035 + k * .618) % 1); // a signal running along every link, in the colour of where it starts
+      const q = P(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u, a.z + (b.z - a.z) * u); items.push({ z: q.z, t: "p", q, c: colour(a), fade: Math.sin(u * Math.PI) }); });
     sparks = sparks.filter((s) => (s.t += .028) < 1); for (const s of sparks) { const q = P(s.n.x * (1 - s.t), s.n.y * (1 - s.t), s.n.z * (1 - s.t)); items.push({ z: q.z, t: "p", q, big: 1 }); if (s.t > .96) rings.push(0); }
-    if (!hide.has("var")) vars.forEach((v, i) => { const a = tick * (quiet ? .004 : .011) + i * 6.283 / vars.length, r = 135, q = P(r * Math.cos(a), r * Math.sin(a) * .35, r * Math.sin(a)); items.push({ z: q.z, t: "v", q, v }); });
-    items.push({ z: 0, t: "dot" }); items.sort((a, b) => b.z - a.z);
-    for (const it of items) { const near = it.z < 0, al = Math.max(.14, Math.min(1, .62 - it.z / 440)) * (it.t === "dot" ? 1 : 1 - morph * .7); // the web steps back while it speaks
+    if (!hide.has("var") && folE < .5) vars.forEach((v, i) => { const a = tick * (quiet ? .004 : .011) + i * 6.283 / vars.length, r = 185, q = P(r * Math.cos(a), r * Math.sin(a) * .35, r * Math.sin(a)); items.push({ z: q.z, t: "v", q, v }); });
+    items.push({ z: 0, t: "dot" }); items.sort((a, b) => b.z - a.z); const labs = [];
+    for (const it of items) { const near = it.z < 0, al = Math.max(.14, Math.min(1, .62 - it.z / 440)) * (it.t === "dot" ? 1 : (1 - morph * .7) * (1 - .6 * dimD)); // the web steps back while it speaks
+      if (it.t === "dot" && (fol || folE > .002)) continue;
       if (it.t === "dot") { const T = eyeTask && tick < eyeTask.until && eyeTask.n && proj[nodes.indexOf(eyeTask.n)];
-        if (T && !hide.has(eyeTask.n.layer) && !agents.length) { const c = SYSC[eyeTask.sys] || tint, f = Math.min(1, (eyeTask.until - tick) / 40); // where the work is: a beam from Dot to the node it is on, with what it is doing
+        if (T && !hide.has(eyeTask.n.layer) && !agents.length && !trip) { const c = SYSC[eyeTask.sys] || tint, f = Math.min(1, (eyeTask.until - tick) / 40); // where the work is: a beam from Dot to the node it is on, with what it is doing
           g.save(); g.strokeStyle = g.fillStyle = c; g.globalAlpha = .75 * f; g.lineWidth = 1.6; g.setLineDash([6, 6]); g.lineDashOffset = still ? 0 : -tick * .8; g.beginPath(); g.moveTo(cx, cy); g.lineTo(T.x, T.y); g.stroke(); g.setLineDash([]);
-          const tag = VERB_OF[EYES[eyeTask.kind]] || eyeTask.kind; g.font = "600 11px ui-monospace, monospace"; const w = g.measureText(tag).width + 14; g.globalAlpha = .92 * f; g.fillStyle = "#0b0f17"; g.beginPath(); g.roundRect(T.x - w / 2, T.y - 30, w, 18, 9); g.fill(); g.strokeStyle = c; g.stroke(); g.fillStyle = c; g.textAlign = "center"; g.fillText(tag, T.x, T.y - 17); g.restore(); }
-        dot(mood, asleep); continue; }
-      if (it.t === "e" || it.t === "s") { g.strokeStyle = tint; g.globalAlpha = al * (it.t === "s" ? .1 : .3); g.lineWidth = near ? 1.1 : .7; g.beginPath(); g.moveTo(it.t === "s" ? cx : it.a.x, it.t === "s" ? cy : it.a.y); g.lineTo((it.b || it.q).x, (it.b || it.q).y); g.stroke(); }
-      else if (it.t === "n") { const n = it.n, q = it.q, c = colour(n); if (n.born < 1) n.born = Math.min(1, n.born + .03);
-        const r = (n.layer === "trait" ? 10 : n.layer === "note" ? 7 : n.layer === "chat" ? 4.5 : n.layer === "name" ? 3.6 + Math.min(n.n || 1, 6) * .9 : 5.5) * q.s * n.born; g.fillStyle = g.strokeStyle = c;
-        if (n.flash > 0) { n.flash--; g.globalAlpha = n.flash / 70; g.lineWidth = 1.6; g.beginPath(); g.arc(q.x, q.y, r + (70 - n.flash) * .5, 0, 6.283); g.stroke(); }
-        g.globalAlpha = n.layer === "trait" ? Math.max(al, .85) : al; g.beginPath(); if (n.layer === "trait") { // traits are hexagons: who it is, from its persona prompt; filled and haloed once you have grown them
-          for (let i = 0; i < 6; i++) { const a = i * 1.0472 + .5236; g.lineTo(q.x + Math.cos(a) * r, q.y + Math.sin(a) * r); } g.closePath(); g.lineWidth = 2;
-          if (n.state === "grown") { g.fill(); g.globalAlpha = al * (.35 + .25 * Math.sin(tick * .05)); g.beginPath(); g.arc(q.x, q.y, r + 6, 0, 6.283); g.stroke(); } else { g.fillStyle = "#1a0d16"; g.fill(); g.stroke(); }
-          g.globalAlpha = Math.max(al, .75); g.font = `600 ${Math.round(10 + 2 * q.s)}px ui-monospace, monospace`; g.textAlign = "center"; g.fillStyle = c;
-          if (near || n.state === "grown" || hoverAt(q)) g.fillText(n.label.length > 34 ? `${n.label.slice(0, 33)}…` : n.label, q.x, q.y - r - 9); continue; }
-        if (n.kind === "summary" || n.layer === "plan") g.rect(q.x - r, q.y - r * .7, r * 2, r * 1.4); else if (n.layer === "question") { g.moveTo(q.x, q.y - r); g.lineTo(q.x + r, q.y); g.lineTo(q.x, q.y + r); g.lineTo(q.x - r, q.y); } else g.arc(q.x, q.y, r, 0, 6.283); g.fill(); // plans are blocks, questions diamonds, the rest dots
-        if (n.state === "verified" || n.state === "ok") { g.lineWidth = 1.2; g.globalAlpha = al * .8; g.beginPath(); g.arc(q.x, q.y, r + 3.5, 0, 6.283); g.stroke(); } // the Verifier's ring
-        const hover = ptr && Math.hypot(q.x - ptr[0], q.y - ptr[1]) < 30;
-        if (near && (hover || n.layer === "plan" || n.layer === "question" || (n.layer === "name" && n.state === "known"))) { g.font = `${n.kind === "idea" ? "italic " : ""}${Math.round(10 + 3 * q.s)}px ui-monospace, monospace`; g.textAlign = "center"; g.fillStyle = c; g.fillText(n.label.length > 30 ? `${n.label.slice(0, 29)}…` : n.label, q.x, q.y + r + 14); } }
-      else if (it.t === "p") { g.globalAlpha = al; g.fillStyle = "#fff6b0"; g.beginPath(); g.arc(it.q.x, it.q.y, (it.big ? 4.5 : 2.4) * it.q.s, 0, 6.283); g.fill(); }
-      else { const q = it.q; g.globalAlpha = al; g.strokeStyle = g.fillStyle = "#ffb347"; g.lineWidth = 2; g.beginPath(); g.arc(q.x, q.y, 8 * q.s, 0, 6.283); g.stroke(); if (near) { g.font = "12px ui-monospace, monospace"; g.textAlign = "left"; g.fillText(`${it.v.name} ${it.v.value}`, q.x + 13, q.y + 4); } }
+          const tag = VERB_OF[EYES[eyeTask.kind]] || eyeTask.kind; g.font = "600 11px ui-monospace, monospace"; const w = g.measureText(tag).width + 14; g.globalAlpha = .92 * f; g.fillStyle = "#000"; g.beginPath(); g.rect(T.x - w / 2, T.y - 30, w, 18); g.fill(); g.strokeStyle = c; g.stroke(); g.fillStyle = c; g.textAlign = "center"; g.fillText(tag, T.x, T.y - 17); g.restore(); }
+        { const e = lay * lay * (3 - 2 * lay), c0 = cx, y0 = cy; if (sit && e > .001) { cx += (sit[0] - cx) * e; cy += (sit[1] - 24 * bK - Math.sin(cl((lay - .55) / .4) * Math.PI) * 16 * bK - cy) * e; } dot(mood, asleep); cx = c0; cy = y0; } continue; }
+      if (it.t === "e" || it.t === "s") { const e = edges[it.i], on = nb && e && e.includes(foc); g.strokeStyle = on ? SIG : e ? colour(nodes[e[0]]) : "#fff"; g.globalAlpha = (on ? .85 : al * (it.t === "s" ? .06 : .26) * (nb ? .3 : 1)) * (1 - .6 * folE); g.lineWidth = on ? 1.2 : near ? 1 : .6; g.beginPath(); g.moveTo(it.t === "s" ? cx : it.a.x, it.t === "s" ? cy : it.a.y); g.lineTo((it.b || it.q).x, (it.b || it.q).y); g.stroke(); }
+      else if (it.t === "n" && folE > .5) { const q = it.q, c = colour(it.n), tw = still ? .8 : .55 + .45 * Math.sin(tick * .05 + it.i * 1.7), r = 1.1 + Math.min(it.n.deg || 0, 6) * .3; // following you: the graph is a quiet sky, each node a twinkling star
+        g.globalCompositeOperation = "lighter"; glow(q.x, q.y, r * 7, c, .22 * tw * al); g.globalCompositeOperation = "source-over"; g.globalAlpha = tw * al; g.fillStyle = c; g.fillRect(q.x - r, q.y - r, r * 2, r * 2);
+        if (r > 2) { g.strokeStyle = c; g.lineWidth = .6; g.globalAlpha = .45 * tw * al; g.beginPath(); g.moveTo(q.x - r * 3.5, q.y); g.lineTo(q.x + r * 3.5, q.y); g.moveTo(q.x, q.y - r * 3.5); g.lineTo(q.x, q.y + r * 3.5); g.stroke(); } g.globalAlpha = 1; } // the bigger ones sparkle
+      else if (it.t === "n") { const n = it.n, q = it.q, c = n.flash > 0 || it.i === foc ? SIG : colour(n), lit2 = nb?.has(it.i); if (n.born < 1) n.born = Math.min(1, n.born + .03);
+        if (it.z > RS * .3 && !lit2 && n.flash <= 0 && n.layer !== "trait") { g.globalCompositeOperation = "lighter"; glow(q.x, q.y, 6, c, .25 * al * dim(it.i)); g.globalCompositeOperation = "source-over"; g.globalAlpha = al * .7 * dim(it.i); g.fillStyle = c; g.fillRect(q.x - 1, q.y - 1, 2, 2); g.globalAlpha = 1; continue; } // far off: a soft speck, so the near side reads sharp
+        const r = (n.layer === "trait" ? 10 : n.layer === "note" ? 7 : n.layer === "chat" ? 4.5 : n.layer === "name" ? 3.6 + Math.min(n.n || 1, 6) * .9 : 5.5) * q.s * n.born * .8 * (1 + Math.min(n.deg || 0, 8) * .07) * (1 - .75 * (n.eat || 0)); if (n.eat > 0 && !trip) n.eat = Math.max(0, n.eat - .008); g.fillStyle = g.strokeStyle = c; g.lineWidth = 1;
+        if (n.flash > 0) { n.flash--; g.globalAlpha = n.flash / 70; const o = r + (70 - n.flash) * .5; g.strokeRect(q.x - o, q.y - o, o * 2, o * 2); } // what just lit, in the signal colour
+        if (!nb || lit2) { g.globalCompositeOperation = "lighter"; glow(q.x, q.y, r * (4 + (still ? 0 : .6 * Math.sin(tick * .02 + it.i))), c, (lit2 ? .55 : .3) * al); g.globalCompositeOperation = "source-over"; } // it glows, and breathes
+        g.fillStyle = g.strokeStyle = c; g.globalAlpha = (n.layer === "trait" ? Math.max(al, .85) : lit2 ? 1 : al) * dim(it.i); // every node a square, as in the story: filled once settled, hollow while still open
+        if (hollow(n)) g.strokeRect(q.x - r, q.y - r, r * 2, r * 2); else g.fillRect(q.x - r, q.y - r, r * 2, r * 2);
+        if (n.state === "verified" || n.state === "ok" || (n.layer === "trait" && n.state === "grown")) { g.globalAlpha = al * .6; g.strokeRect(q.x - r - 3.5, q.y - r - 3.5, r * 2 + 7, r * 2 + 7); } // the Verifier's frame
+        const hover = it.i === foc, top = hover ? 1e4 : n.flash > 0 ? 9e3 : lit2 ? 8500 : nb ? -1e5 : n.layer === "trait" && n.state === "grown" ? 8e3 : 0;
+        if (n.layer !== "chat" && top > -1e5 && (top || it.z < RS * .3)) labs.push({ x: q.x, y: q.y + r + 12, n, c, hover, pri: top + (n.deg || 0) * 40 - it.z / RS * 60 + (n.layer === "plan" || n.layer === "trait" ? 50 : 0) }); }
+      else if (it.t === "p") { const c = it.c || SIG, f = (it.fade ?? 1) * (nb ? .3 : 1), z = (it.big ? 4 : 1.6) * it.q.s; g.globalCompositeOperation = "lighter"; glow(it.q.x, it.q.y, z * 5, c, .5 * al * f); g.globalCompositeOperation = "source-over";
+        g.globalAlpha = al * f; g.fillStyle = it.big ? SIG : "#fff"; g.fillRect(it.q.x - z / 2, it.q.y - z / 2, z, z); }
+      else { const q = it.q; g.globalAlpha = al; g.strokeStyle = g.fillStyle = "#fff"; g.lineWidth = 1; const z = 6 * q.s; g.strokeRect(q.x - z, q.y - z, z * 2, z * 2); if (near) { g.font = "11px ui-monospace, monospace"; g.textAlign = "left"; g.fillText(`${it.v.name} ${it.v.value}`, q.x + 13, q.y + 4); } }
       g.globalAlpha = 1; }
-    walk();
-    gulp = gulp.filter((u) => (u.t += .03) < 1); for (const u of gulp) { const e = u.t * u.t; g.globalAlpha = 1 - e; g.fillStyle = "#e8ecf4"; g.font = `${Math.round(15 * (1 - e * .6))}px ui-sans-serif, system-ui, sans-serif`; g.textAlign = "center"; g.fillText(u.text, cx, H - 90 + (cy - (H - 90)) * e); if (u.t > .93) rings.push(0); } g.globalAlpha = 1;
+    labels(labs, SR);
+    if (fol || folE > .002) follower(mood, asleep);
+    walk(); showWhat(); linkUp();
+    gulp = gulp.filter((u) => (u.t += .03) < 1); for (const u of gulp) { const e = u.t * u.t; g.globalAlpha = 1 - e; g.fillStyle = "#fff"; g.font = `${Math.round(14 * (1 - e * .6))}px ui-monospace, monospace`; g.textAlign = "center"; g.fillText(u.text, u.from ? u.from[0] + (u.to[0] - u.from[0]) * e : cx, u.from ? u.from[1] + (u.to[1] - u.from[1]) * e : H - 90 + (cy - (H - 90)) * e); if (u.t > .93) rings.push(0); } g.globalAlpha = 1;
   }
+  function labels(labs, SR) { // node names, best-connected and nearest first, each only where it does not cover another; then each structure's callout, as the story labels Dot's systems
+    const fade = (1 - morph * .7) * (1 - folE) * (1 - .6 * dimD), boxes = [], free = (b) => !boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]), MAX = Math.max(6, Math.min(16, W / 70));
+    const back = (x, y, w, h2) => { g.globalAlpha = .72 * fade; g.fillStyle = "#000"; g.fillRect(x, y, w, h2); };
+    g.textBaseline = "middle"; g.letterSpacing = "0px";
+    // the callouts first, so names give way to them
+    const side = { trait: -1, plan: 1, question: -1, note: 1, name: -1, chat: 1 }, o = P(0, 0, 0), edge = SR * o.s, out = [];
+    for (const [k, S] of Object.entries(SHAPE)) { if (!S.n || hide.has(k) || lift < .6 || immerse || lay > .2) continue; const d = side[k]; // detached, the mind lies flat and its structures have no sides to label
+      let best = null; nodes.forEach((n, i) => { if (n.layer === k && (!best || (proj[i].x - best.x) * d > 0)) best = proj[i]; }); if (best) out.push({ k, S, d, a: best, y: best.y }); }
+    { const r0 = root.getBoundingClientRect(), box = (sel) => { const e = root.querySelector(sel)?.getBoundingClientRect(); return e && e.width ? [e.left - r0.left, e.top - r0.top, e.right - r0.left, e.bottom - r0.top] : null; };
+      labels.pan = [box(".sw-left"), box(".sw-right")]; } // the side panels the callouts keep clear of
+    const clear = (y, d) => { const b = labels.pan[d > 0 ? 1 : 0]; return b && y > b[1] - 24 && y < b[3] + 24 ? (d > 0 ? b[0] - 12 : b[2] + 12) : (d > 0 ? W - 12 : 12); };
+    g.font = "10px ui-monospace, monospace"; for (const c of out) c.need = Math.max(g.measureText(`00  ${LY[c.k].t.toUpperCase()}`).width * 1.15, g.measureText(c.S.sub).width) + 34;
+    for (const c of out) { const b = labels.pan[c.d > 0 ? 1 : 0], lim = clear(c.y, c.d); // a panel in the way would push it over the sphere: drop it below the panel instead
+      if (b && (c.d > 0 ? lim - c.need < o.x + edge * .7 : lim + c.need > o.x - edge * .7)) c.y = Math.max(c.y, b[3] + 30); }
+    for (const d of [-1, 1]) { const col = out.filter((c) => c.d === d).sort((a, b) => a.y - b.y); col.forEach((c, i) => { if (i) c.y = Math.max(c.y, col[i - 1].y + 36); }); }
+    for (const c of out) { const need = c.need, lim = clear(c.y, c.d);
+      const lx = c.d > 0 ? Math.min(o.x + edge + 18, lim - need) : Math.max(o.x - edge - 18, lim + need), tx = lx + c.d * 10, al = .9 * fade;
+      g.globalAlpha = .45 * fade; g.strokeStyle = "#fff"; g.lineWidth = 1; g.beginPath(); g.moveTo(c.a.x, c.a.y); g.lineTo(lx - c.d * 10, c.y); g.lineTo(lx, c.y); g.stroke();
+      g.font = "10px ui-monospace, monospace"; g.letterSpacing = "1.4px"; const t = `${String(out.indexOf(c) + 1).padStart(2, "0")}  ${LY[c.k].t.toUpperCase()}`, tw = g.measureText(t).width; g.letterSpacing = "0px"; const sw = g.measureText(c.S.sub).width, w = Math.max(tw, sw) + 18;
+      const bx = c.d > 0 ? tx - 4 : tx - w + 4; back(bx, c.y - 10, w, 30); boxes.push([bx, c.y - 10, bx + w, c.y + 20]);
+      g.globalAlpha = al; g.fillStyle = c.S.sys != null ? SYSC[c.S.sys] : "#fff"; const mx = c.d > 0 ? tx : tx - 7; g.fillRect(mx, c.y - 3, 6, 6);
+      g.textAlign = c.d > 0 ? "left" : "right"; g.fillStyle = "#fff"; g.letterSpacing = "1.4px"; g.fillText(t, tx + c.d * 12, c.y); g.letterSpacing = "0px";
+      g.globalAlpha = .6 * fade; g.fillText(c.S.sub, tx + c.d * 12, c.y + 13); }
+    { const R = 92 * K; boxes.push([cx - R, cy - R * 1.1, cx + R, cy + R * 1.25]); if (lastDot && form) { const r = 80 * K * Math.min(1.5, Math.sqrt(Math.max(1, zoom))); boxes.push([lastDot[0] - r, lastDot[1] - r, lastDot[0] + r, lastDot[1] + r * 1.9]); } } // Dot's own space: no names over it
+    labs.sort((a, b) => b.pri - a.pri); let shown = 0;
+    for (const L of labs) { if (shown >= MAX && !L.hover) break; const n = L.n, k = L.hover ? 60 : 26, txt = n.label.length > k ? `${n.label.slice(0, k - 1)}…` : n.label;
+      g.font = `${n.kind === "idea" ? "italic " : ""}${L.hover ? 12 : 10}px ui-monospace, monospace`; const w = g.measureText(txt).width + 8, b = [L.x - w / 2, L.y - 7, L.x + w / 2, L.y + 7];
+      if (!L.hover && !free(b)) continue; boxes.push(b); shown++;
+      back(b[0], b[1], w, 14); g.globalAlpha = (L.hover || n.flash > 0 ? 1 : .78) * fade; g.fillStyle = L.c; g.textAlign = "center"; g.fillText(txt, L.x, L.y); }
+    g.textBaseline = "alphabetic"; g.globalAlpha = 1; }
   const at = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
   cv.addEventListener("pointerdown", (e) => { drag = [e.clientX, e.clientY, yaw, pitch]; moved = 0; cv.setPointerCapture(e.pointerId); cv.classList.add("grab"); });
-  cv.addEventListener("pointermove", (e) => { ptr = at(e); if (!drag) return; moved += Math.abs(e.movementX) + Math.abs(e.movementY); yaw = drag[2] + (e.clientX - drag[0]) * .008; pitch = Math.max(-1.2, Math.min(1.2, drag[3] + (e.clientY - drag[1]) * .008)); });
+  cv.addEventListener("pointermove", (e) => { ptr = at(e); cv.style.cursor = eyeHit && Math.hypot(ptr[0] - eyeHit[0], ptr[1] - eyeHit[1]) < eyeHit[2] ? "pointer" : ""; if (!drag) return; moved += Math.abs(e.movementX) + Math.abs(e.movementY); const y1 = drag[2] + (e.clientX - drag[0]) * .011; spinV = spinV * .5 + (y1 - yaw) * .5; yaw = y1; pitch = Math.max(-1.2, Math.min(1.2, drag[3] + (e.clientY - drag[1]) * .011)); });
   cv.addEventListener("pointerleave", () => { ptr = null; });
-  cv.addEventListener("pointerup", (e) => { cv.classList.remove("grab"); if (drag && moved < 6) { const p = at(e); let best = null, bd = 24;
+  cv.addEventListener("wheel", (e) => { e.preventDefault(); zt = Math.max(.5, Math.min(4, zt * Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0015)))); }, { passive: false }); // a trackpad pinch arrives as a wheel with ctrl held
+  cv.addEventListener("dblclick", () => { zt = 1; });
+  cv.addEventListener("pointerup", (e) => { cv.classList.remove("grab"); if (drag && moved < 6 && lastDot && form && !(eyeHit && Math.hypot(at(e)[0] - eyeHit[0], at(e)[1] - eyeHit[1]) < eyeHit[2]) && Math.hypot(at(e)[0] - lastDot[0], at(e)[1] - lastDot[1] - 30 * K) < 70 * K) { emote(); nextEmo = tick + 600; }
+    if (drag && !fol && moved < 6 && eyeHit && Math.hypot(at(e)[0] - eyeHit[0], at(e)[1] - eyeHit[1]) < eyeHit[2]) { setImmerse(!immerse); drag = null; return; } // its eyes: filled hides the dashboard, open brings it back
+    if (drag && moved < 6) { const p = at(e); let best = null, bd = 24;
       nodes.forEach((n, i) => { if (hide.has(n.layer) || proj[i].z >= 0) return; const d = Math.hypot(proj[i].x - p[0], proj[i].y - p[1]); if (d < bd) { bd = d; best = n; } });
       if (best) { best.flash = 70; openNote(best); } } drag = null; });
-  cv.addEventListener("keydown", (e) => { const k = { ArrowLeft: [-.15, 0], ArrowRight: [.15, 0], ArrowUp: [0, -.12], ArrowDown: [0, .12] }[e.key]; if (e.key === "Escape") note.hidden = true; if (!k) return; e.preventDefault(); yaw += k[0]; pitch = Math.max(-1.2, Math.min(1.2, pitch + k[1])); });
+  cv.addEventListener("keydown", (e) => { const k = { ArrowLeft: [-.15, 0], ArrowRight: [.15, 0], ArrowUp: [0, -.12], ArrowDown: [0, .12] }[e.key]; if (e.key === "Escape") note.hidden = true; if (e.key === "i") setImmerse(!immerse); if (!k) return; e.preventDefault(); yaw += k[0]; pitch = Math.max(-1.2, Math.min(1.2, pitch + k[1])); });
   new MutationObserver(() => { status.title = status.textContent; }).observe(status, { childList: true, characterData: true, subtree: true }); // clamped to 2 lines: the full text is the tooltip
 
   // ---- report mode: a plain readout of the experiment, the harness as sub-engines (/report-mode, /scene, or the menu) ----
@@ -801,9 +1346,10 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     reporting = on; root.classList.toggle("sw-reporting", on); panel.hidden = !on; reportBtn.textContent = on ? "← Mesh" : "Report"; reportBtn.setAttribute("aria-pressed", String(on));
     clearInterval(rTimer); rTimer = 0; rSeen = null; if (on) { pullReport(); rTimer = setInterval(pullReport, 2000); }
   }
-  menu.append(h("small", {}, "View"), h("span", {}, h("button", { type: "button", onclick: () => { shut(); report(); } }, "Report")));
+  menu.append(h("small", {}, "View"), h("span", {}, h("button", { type: "button", onclick: () => { shut(); report(); } }, "Report"), h("button", { type: "button", title: "Or click its eyes, or press i", onclick: () => { shut(); setImmerse(!immerse); } }, "Immersive")));
   // the page always opens on the mesh, so you see it grow; the report is one click away
   markTint(); refresh(); frame();
   function expand(on = !growTo) { growTo = on ? 1 : 0; if (on) Object.keys(seen).filter((k) => HOME[k]).forEach(agentOf); rings.push(0); status.textContent = on ? "Dot holds the whole net now. /expand-to-net again to gather it back." : "Dot gathers back to its centre."; }
-  return { expand, report, palette, data, say, heard, fire, stepped, refresh, reform: (c) => { if (c) form = c; }, busy: () => { busy = true; } };
+  return { expand, report, palette, data, say, heard, fire, stepped, refresh, reform: (c) => { if (c) form = c; }, follow, emote: (k) => { want = EMO[k] ? k : Object.keys(EMO)[Math.random() * Object.keys(EMO).length | 0]; }, chatOff: () => root.classList.contains("asleep") ? "I'm asleep. Commands still work: type /. Or knock on me three times." : learning ? "I'm learning the way you told me to grow, so chat is paused for now. Commands still work: type /." : root.dataset.mode === "sleeping" ? "I'm asleep, so chat is off. Type /wake to wake me, or / for the other commands." : "",
+    dotAt: () => lastDot && lay > .3 ? [...lastDot] : null, busy: () => { busy = true; } };
 }

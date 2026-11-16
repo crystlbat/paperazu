@@ -1,4 +1,27 @@
 /* ---------- Dot space: always dark, everything is dots ---------- */
+/* /align-eyes: its picture large, a circle to drag onto each eye */
+.sp-eyemodal { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: rgb(0 0 0 / .78); padding: 16px; }
+.sp-eyebox { background: #000; border: 1px solid #2a2d33; padding: 16px; max-width: min(720px, 100%); font-family: var(--mono); color: #e9fbff; display: grid; gap: 12px; }
+.sp-eyebox header { display: grid; gap: 4px; } .sp-eyebox header b { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; } .sp-eyebox header span { font-size: 12px; color: #9aa3ad; }
+.sp-eyestage { position: relative; justify-self: center; line-height: 0; user-select: none; }
+.sp-eyestage img { display: block; max-width: min(640px, calc(100vw - 64px)); max-height: 62vh; }
+.sp-eyering { position: absolute; translate: -50% -50%; border: 2px solid #ffe347; border-radius: 50%; box-shadow: 0 0 0 1px #000, inset 0 0 0 1px #000; cursor: grab; touch-action: none; box-sizing: border-box; min-width: 10px; min-height: 10px; }
+.sp-eyering::after { content: ""; position: absolute; left: 50%; top: 50%; width: 3px; height: 3px; translate: -50% -50%; background: #ffe347; }
+.sp-tracesvg .gap { fill: none; stroke: #ffe347; stroke-width: 1.5px; stroke-dasharray: 4 5; opacity: .7; vector-effect: non-scaling-stroke; } .sp-tracesvg .start { fill: rgb(255 227 71 / .25); stroke: #ffe347; stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+.sp-tracestage { cursor: crosshair; touch-action: none; overflow: hidden; } .sp-tracestage.panning { cursor: grab; }
+.sp-tracewrap { position: relative; transform-origin: 0 0; }
+.sp-traceside { display: grid; gap: 8px; justify-items: start; } .sp-traceside small { font: 10px ui-monospace, monospace; letter-spacing: 1.4px; text-transform: uppercase; color: #999; }
+.sp-tracezoom { display: flex; gap: 4px; } .sp-tracezoom button { min-width: 36px; min-height: 32px; }
+.sp-eyebox.sp-tracebox { max-width: 100%; max-height: 100%; } /* tracing wants the picture as big as the window allows */
+.sp-tracerow { display: flex; gap: 12px; align-items: flex-start; justify-content: center; } .sp-tracerow .sp-eyestage img { max-width: none; max-height: none; } /* sized to fill the window in space.js, small pictures too */
+@media (max-width: 700px) { .sp-tracerow { flex-wrap: wrap; } }
+.sp-traceprev { width: 160px; height: auto; background: repeating-conic-gradient(#222 0 25%, #111 0 50%) 0 0 / 16px 16px; border: 1px solid #333; } .sp-tracesvg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.sp-tracesvg .shade { fill: rgb(0 0 0 / .62); } .sp-tracesvg .line { fill: none; stroke: #ffe347; stroke-width: 2px; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.sp-eyering.held { cursor: grabbing; } .sp-eyering:focus-visible { outline: 2px solid #6ff7ff; outline-offset: 3px; }
+.sp-eyesize { display: flex; gap: 10px; align-items: center; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; } .sp-eyesize input { flex: 1; accent-color: #ffe347; }
+.sp-eyebtns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.sp-eyebtns button { font: inherit; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; background: #000; color: #e9fbff; border: 1px solid #3a3f47; padding: 8px 12px; cursor: pointer; }
+.sp-eyebtns button.on { background: #ffe347; color: #000; border-color: #ffe347; }
 .page-space, .page-verse, .page-char { position: relative; overflow: hidden; background: #0b0d12; color: #e9fbff; }
 .sp { --holo: #6ff7ff; position: absolute; inset: 0; font-family: var(--mono);
   background: radial-gradient(rgb(111 247 255 / .07) 1px, transparent 1.6px) 0 0 / 22px 22px, radial-gradient(ellipse at 50% 40%, #121722, #0b0d12 70%); }
@@ -1321,3 +1344,91 @@ body:has(.st) .sp-ear { position: fixed; z-index: 70; }
 .kg-counts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 28px; font-size: 12px; color: rgb(255 255 255 / .6); }
 .kg-counts b { color: #fff; font-weight: 400; } .kg-counts i { color: #ffe600; font-style: normal; }
 .kg-plot svg { display: block; width: 100%; height: auto; font-family: var(--mono, monospace); overflow: visible; }
+
+/* ── the mesh in the story's language: black with the fine dither, one mono face, tiny tracked uppercase labels, hairlines, square; white for what it knows, yellow only for what is live ── */
+.sp-web { --sig: #ffe600; --hair: rgb(255 255 255 / .16); background: #000 radial-gradient(rgb(255 255 255 / .045) 1px, transparent 1.2px) 0 0 / 5px 5px; }
+.sp-web .sw-top { padding: 0; border-radius: 0; background: none; top: 18px; left: 20px; gap: 16px; font: 11px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: rgb(255 255 255 / .55); }
+.sp-web .sw-top b { font: 11px/1 var(--mono); letter-spacing: .16em; color: #fff; }
+.sw-lamps i, .sw-lay::before, .sw-engmodel i, .sw-engrow i { border-radius: 0 !important; }
+.sw-mode, .sw-mode::after { border-radius: 0; } .sw-mode { background: var(--sig); color: #000; font: 10px/1.3 var(--mono); letter-spacing: .14em; padding: 4px 8px; }
+.sw-mode[data-halo="asleep"]::after { background: conic-gradient(var(--sig) calc(var(--p, 0) * 360deg), transparent 0); }
+:is(.sw-reportbtn, .sw-menubtn, .sw-x, .sw-menu button:not(.sw-tints button), .sw-menu a) { border-radius: 0 !important; border: 1px solid var(--hair) !important; background: none !important; color: rgb(255 255 255 / .8) !important; font: 11px/1 var(--mono) !important; letter-spacing: .14em; text-transform: uppercase; }
+:is(.sw-reportbtn, .sw-menubtn, .sw-x, .sw-menu button:not(.sw-tints button), .sw-menu a):is(:hover, :focus-visible, [aria-expanded="true"]) { color: #fff !important; border-color: #fff !important; outline: 0; }
+.sw-reporting .sw-reportbtn, .sw-menu .sw-modes button[aria-checked="true"] { background: var(--sig) !important; color: #000 !important; border-color: var(--sig) !important; }
+.sw-menu .sw-lay { color: #fff !important; } .sw-menu .sw-lay[aria-pressed="false"] { opacity: .4; }
+:is(.sw-menu, .sw-note, .sw-cmds, .sw-eng) { border-radius: 0 !important; background: rgb(0 0 0 / .92) !important; border: 1px solid var(--hair) !important; }
+:is(.sw-menu small, .sw-note > small, .sw-tel small, .sw-facts small, .sw-enghead, .sw-dial small, .sw-num, .sw-cur) { font: 10px/1.3 var(--mono) !important; letter-spacing: .14em; text-transform: uppercase; color: rgb(255 255 255 / .55) !important; }
+.sw-note h3 { font: 400 16px/1.35 var(--mono); color: #fff; } .sw-note :is(p, h4) { font-family: var(--mono); color: rgb(255 255 255 / .8); } .sw-note article { border-color: var(--hair); }
+.sw-wired button { border-radius: 0; color: #fff; } .sw-wired button:is(:hover, :focus-visible) { outline-color: var(--sig); }
+.sw-tel { background: none; border-top: 1px solid var(--hair); padding: 8px 0 4px; } .sw-tel-dial { border-radius: 0; }
+.sw-tel b { font: 400 15px/1.2 var(--mono); color: #fff; } .sw-tel-dial:focus-visible { outline-color: var(--sig); }
+.sw-dial input { accent-color: var(--sig); } .sw-dial output { color: var(--sig); } .sw-track { color: rgb(255 255 255 / .55) !important; }
+.sw-num input { border-radius: 0; background: transparent; border-color: var(--hair); color: #fff; }
+.sw-now { border-right: 1px solid var(--sig); background: none; font: 11px/1.5 var(--mono); color: rgb(255 255 255 / .85); }
+.sw-facts p { color: #fff; }
+.sw-engmodel, .sw-engrow b { color: #fff; } .sw-engmodel i.ok { background: var(--sig); border-color: var(--sig); }
+/* each engine as one of the story's cells: filled did something, hollow found nothing, red failed */
+.sw-engrow { border-radius: 0; } .sw-engrow i { border-color: rgb(255 255 255 / .35); }
+.sw-engrow[data-st="ok"] i { background: #fff; border-color: #fff; } .sw-engrow[data-st="skipped"] i { background: none; border-color: rgb(255 255 255 / .35); }
+.sw-engrow[data-st="ok"] span { color: rgb(255 255 255 / .85); } .sw-engrow[data-st="skipped"] span { color: rgb(255 255 255 / .45); }
+@keyframes sw-engflash { from { background: rgb(255 230 0 / .3); } to { background: transparent; } }
+.sw-hint { font: 11px/1.5 var(--mono); letter-spacing: .04em; color: rgb(255 255 255 / .55); }
+.sw-cmds button { border-radius: 0; font: 13px/1.3 var(--mono); } .sw-cmds button:is(:hover, [aria-selected="true"]) { background: rgb(255 255 255 / .06); box-shadow: inset 2px 0 0 var(--sig); }
+.sw-cmd-tip { font: 12px/1.5 var(--mono); border-color: var(--hair); color: rgb(255 255 255 / .7); }
+.sw-cmd-eyes i { background: none; border: 1.5px solid #fff; box-sizing: border-box; }
+.sp-web:not(.sw-reporting) .sw-top :is(.sw-reportbtn, .sw-menubtn) { background: #000 !important; } /* labels drawn on the canvas pass behind the bar */
+.sw-menu .sw-modes { background: none !important; border-radius: 0 !important; padding: 0 !important; box-shadow: none !important; }
+.sp-web .sw-top { background: #000; padding: 6px 10px; left: 10px; top: 12px; } /* a solid bar: the labels on the canvas pass behind it */
+.sp-web.sw-reporting .sw-top .sw-reportbtn { background: var(--sig) !important; color: #000 !important; border-color: var(--sig) !important; }
+.sw-note .sw-x { position: absolute; right: 8px; top: 8px; width: 28px; height: 28px; padding: 0; display: grid; place-items: center; box-sizing: border-box; }
+/* immersion: click Dot's eyes (they fill) and the dashboard steps away */
+.sp-web > .sw-left, .sp-web > .sw-right, .sp-web > .sw-hint, .sp-web > .sw-top { transition: opacity .45s ease, visibility 0s; }
+.sp-web.sw-immerse > .sw-left, .sp-web.sw-immerse > .sw-right, .sp-web.sw-immerse > .sw-hint, .sp-web.sw-immerse > .sw-top { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .45s ease, visibility 0s .45s; }
+/* a node's card: the mesh's dots lay themselves into its box first, then the card fades in over them, see-through so they glow behind it */
+.sp-web > .sw-note { background: rgb(0 0 0 / .45) !important; border-color: transparent !important; } /* the dots draw its border */
+.sp-web > .sw-note:not([hidden]) { animation: sw-card .5s .55s both; }
+@keyframes sw-card { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .sp-web > .sw-note:not([hidden]) { animation: none; } }
+/* a reply: the mind slides left, its dots build this box on the right, and Dot sits on the box's corner (its own eyes, so the droplet in the words goes) */
+.sp-web .sw-say { left: 64%; right: auto; top: 50%; bottom: auto; translate: -50% -50%; max-width: min(540px, 52%); max-height: 62%; background: rgb(0 0 0 / .45); transition: opacity .9s, left .6s ease; }
+.sp-web .sw-say .sw-drop, .sp-web .sw-say .sw-peek { display: none; }
+.sp-web > .sw-left, .sp-web > .sw-right { transition: opacity .45s ease, visibility 0s; }
+.sp-web.sw-replying > .sw-left, .sp-web.sw-replying > .sw-right { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .45s ease, visibility 0s .45s; }
+/* the reply as an LED dot-matrix: the real text, in the mono face, seen through a fine grid of round dots, so every letter is made of even dots and still reads */
+.sp-web .sw-say .sw-ink { filter: none !important; }
+.sp-web .sw-say .sw-ink p { font-family: var(--mono) !important; font-weight: 700 !important; letter-spacing: .02em; line-height: 1.45; color: #f4f6fb !important; text-shadow: none !important;
+  -webkit-mask-image: radial-gradient(circle, #000 1.05px, transparent 1.3px); mask-image: radial-gradient(circle, #000 1.05px, transparent 1.3px); -webkit-mask-size: 3px 3px; mask-size: 3px 3px; }
+/* nothing breaks the moment while it replies: the bars and the hint step away like the panels; the reply's tags are faint mono words, not pills */
+.sp-web > .sw-top, .sp-web > .sw-hint { transition: opacity .45s ease, visibility 0s; }
+.sp-web.sw-replying > .sw-top, .sp-web.sw-replying > .sw-hint { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .45s ease, visibility 0s .45s; }
+.sp-web .sw-say .sw-chips span { background: none !important; border: 0 !important; padding: 0 6px; font: 10px/1.4 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: rgb(255 255 255 / .45) !important; }
+/* the command list takes the stage like a reply: the mesh's dots draw its box, Dot sits on its corner (so its old eyes inside go), no panel of its own */
+.sp-web .sw-cmds { left: 64%; top: 50%; translate: -50% -50%; width: min(420px, 46%); max-height: 62%; overflow: auto; background: rgb(0 0 0 / .45) !important; border-color: transparent !important; padding: 18px 14px 12px; }
+.sp-web .sw-cmds .sw-cmd-eyes { display: none; }
+/* asleep: the chat box reads as switched off (dashed, dim, no glow), so it is plain you cannot chat; /wake still works in it */
+.sp-web[data-mode="sleeping"] .sp-ear { opacity: .55; box-shadow: none !important; border: 1px dashed rgb(255 255 255 / .35); background: rgb(0 0 0 / .4); }
+.sp-web[data-mode="sleeping"] .sp-ear:focus-within { opacity: .9; }
+.sp-web[data-mode="sleeping"] .sw-mode { background: none; color: #9fb4ff; box-shadow: inset 0 0 0 1px #9fb4ff; }
+
+/* the bottom and the right wear the story's skin too: no pill, no glow, no boxed log; nothing sticks out of the scene */
+.sp-web .sp-ear { bottom: 18px; height: 40px; border-radius: 0; background: rgb(0 0 0 / .55); box-shadow: none !important; border: 1px solid rgb(255 255 255 / .16); backdrop-filter: none; opacity: .8; }
+.sp-web .sp-ear:hover { opacity: 1; border-color: rgb(255 255 255 / .32); }
+.sp-web .sp-ear:focus-within { opacity: 1; border-color: #ffe347; }
+.sp-web .sp-ear input { font: 12px var(--mono); letter-spacing: .04em; color: #fff; }
+.sp-web .sp-ear input::placeholder { color: rgb(255 255 255 / .42); }
+.sp-web .sp-go { width: 28px; height: 28px; margin-right: 5px; border-radius: 0; background: none; color: #ffe347; border: 1px solid rgb(255 227 71 / .5); font-size: 13px; }
+.sp-web .sp-go:hover { background: #ffe347; color: #000; }
+.sp-web .sw-hint { bottom: 66px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: rgb(255 255 255 / .38); }
+.sp-web .sw-eng { background: none !important; border: 0 !important; border-left: 1px solid rgb(255 255 255 / .12) !important; padding: 2px 0 2px 10px; max-height: calc(100vh - 420px); opacity: .45; transition: opacity .25s; }
+.sp-web .sw-eng:hover { opacity: 1; }
+/* following you: the dashboard steps away, the chat box goes where Dot goes */
+.sp-web.sw-following > .sw-left, .sp-web.sw-following > .sw-right, .sp-web.sw-following > .sw-hint, .sp-web.sw-following > .sw-top { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .45s ease, visibility 0s .45s; }
+.sp-web.sw-following .sp-ear { transition: none; z-index: 6; }
+/* following: the box is drawn in Dot's own dots on the canvas; the field itself is just its words */
+.sp-web.sw-following .sp-ear { background: none !important; border: 0 !important; box-shadow: none !important; }
+.sp-web.sw-following .sp-ear input { color: var(--dot, #6ff7ff); caret-color: var(--dot, #6ff7ff); text-align: center; padding: 0 12px; }
+.sp-web.sw-following .sp-ear input::placeholder { color: rgb(255 255 255 / .35); }
+.sp-web.sw-following .sp-go, .sp-web.sw-following .sp-crew, .sp-web.sw-following .sp-learn-chips { display: none !important; }
+/* the 3D mind draws its own replies, but a pick card (looks, wardrobe, models) still needs the stage: show it alone, over the mind, above the input */
+.sp-web > .sp-stage:has(> .sp-card) { display: block !important; position: absolute; left: 50% !important; top: auto !important; bottom: 120px; z-index: 30; opacity: 1; }
+.sp-web > .sp-stage:has(> .sp-card) > :not(.sp-card) { display: none; }
