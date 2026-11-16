@@ -50,13 +50,42 @@ def _unchecked() -> list[Any]:
     return rows
 
 
+CHAT_FED = ("review", "sort", "practise")  # these read the chat: only a new turn gives them work
+
+
 def stale() -> set[str]:
-    """Commands whose last run was skipped with nothing new since: run again, they skip again. Any row but the harness's own bookkeeping counts as new."""
+    """Commands whose last run was skipped with nothing new for them since: run again, they skip again.
+    New for a step is what feeds it: a step upstream of it in char.TOOL_FLOW that did something, or a new chat turn for the steps that read the chat.
+    A step nothing feeds counts any row but bookkeeping as new (its mood rows and the judge's probes are bookkeeping too: every step writes them)."""
     con = db.connect()
-    rows = con.execute("SELECT title, content, MAX(id) AS id FROM char_memories WHERE source = 'sheet' AND title LIKE 'Run: %' AND id > ? GROUP BY title", (char._start(),)).fetchall()
-    new = con.execute("SELECT COALESCE(MAX(id), 0) AS m FROM char_memories WHERE NOT (source = 'sheet' AND (title LIKE 'Run: %' OR title = 'Tick' OR title LIKE 'Cycle: %' OR title LIKE 'Feedback: %' OR title LIKE 'Stuck: %' OR title LIKE 'Fail: %' OR title LIKE 'Correction: %'))").fetchone()["m"]
+    start = char._start()
+    runs = con.execute("SELECT title, content, id, created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Run: %' AND id > ? ORDER BY id", (start,)).fetchall()
+    new = con.execute("SELECT COALESCE(MAX(id), 0) AS m FROM char_memories WHERE NOT (source = 'sheet' AND (title LIKE 'Run: %' OR title IN ('Tick', 'Needs', 'Judge') OR title LIKE 'Cycle: %' OR title LIKE 'Feedback: %' OR title LIKE 'Stuck: %' OR title LIKE 'Fail: %' OR title LIKE 'Correction: %'))").fetchone()["m"]
+    last_turn = con.execute("SELECT COALESCE(MAX(created_at), '') AS t FROM char_turns").fetchone()["t"]
     con.close()
-    return {r["title"].removeprefix("Run: ") for r in rows if r["id"] > new and '"outcome": "skipped"' in r["content"]}
+    last: dict[str, Any] = {}
+    ok_at: dict[str, int] = {}
+    for r in runs:
+        k = r["title"].removeprefix("Run: ")
+        last[k] = r
+        if '"outcome": "ok"' in r["content"]:
+            ok_at[k] = r["id"]
+    feeds: dict[str, set[str]] = {}
+    for a, b in char.TOOL_FLOW:
+        feeds.setdefault(b, set()).add(a)
+    out = set()
+    for k, r in last.items():
+        if '"outcome": "skipped"' not in r["content"]:
+            continue
+        if k in CHAT_FED:
+            fresh = last_turn > r["created_at"]
+        elif k in feeds:
+            fresh = any(ok_at.get(a, 0) > r["id"] for a in feeds[k])
+        else:
+            fresh = new > r["id"]
+        if not fresh:
+            out.add(k)
+    return out
 
 
 STUCK_AFTER = 3  # cycles in a row that kept nothing: it is going round in circles
@@ -122,7 +151,7 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
     if (last := cycles(1)) and last[0].get("self", {}).get("stuck"):
         state.append("what it noticed about itself last cycle: " + last[0]["self"]["said"])
     dv = char.drive(d)
-    state.append(f"drive: explore {dv['E']} vs check {dv['C']} ({dv['open']} open questions, judge trusted {dv['judge']['value']}); it {'explores' if dv['p_explore'] >= 0.5 else 'checks'} with chance {max(dv['p_explore'], 1 - dv['p_explore']):.2f}")
+    state.append(f"drive: explore {dv['E']} vs check {dv['C']} ({dv['open']} questions and notes waiting, judge trusted {dv['judge']['value']}); it {'explores' if dv['p_explore'] >= 0.5 else 'checks'} with chance {max(dv['p_explore'], 1 - dv['p_explore']):.2f}")
     return [{"role": "system", "content": f"You plan the next steps of {who}'s learning. Pick at most {budget} commands from the catalogue. "
                                           "First line: why: then one short reason that names the numbers you went by. Then commands only, one per line, like: reflect \"a topic\" or check 12. No other text." + char._fix("planner")},
             {"role": "user", "content": "Goal:\n" + ("\n".join(f"- {p}" for p in plans) or f"- learn about {who}'s world") +
@@ -304,7 +333,7 @@ def steer(plan: list[dict[str, Any]], rejected: list[dict[str, str]], budget: in
     if mode == "check" and dv["open"]:
         held = [p for p in plan if p["name"] in char.EXPLORE]
         plan = [p for p in plan if p["name"] not in char.EXPLORE]
-        rejected = rejected + [{"cmd": _text(p), "why": f"checking first: {dv['open']} open questions, explore {dv['E']} lost to check {dv['C']}"} for p in held]
+        rejected = rejected + [{"cmd": _text(p), "why": f"checking first: {dv['open']} questions and notes waiting, explore {dv['E']} lost to check {dv['C']}"} for p in held]
     if not any(p["name"] in group for p in plan):
         _, blocked = char._blocks(True, force)
         idle, have = stale(), {p["name"] for p in plan}

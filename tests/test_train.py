@@ -124,3 +124,37 @@ def test_a_run_ends_in_its_own_words_when_it_has_nothing_left_to_try(monkeypatch
     train._loop(run_id, {**train.DEFAULTS, "max_steps": 50})
     r = train.status()["runs"][0]
     assert r["status"] == "done" and r["why"] == said and [x["kind"] for x in r["log"]] == ["start", "ok", "stuck"]
+
+
+def test_a_late_tick_does_not_split_one_stretch_of_work_into_two_lanes(monkeypatch):
+    import threading
+    from workbench import char, train
+    clock, ticks = [100.0], iter([0.1, 0.4, 0.1])  # the second sleep overshoots, as on a busy machine
+
+    def sleep(_):
+        clock[0] += next(ticks)
+    alive = iter([True, True, True, False])
+
+    class Run:
+        is_alive = staticmethod(lambda: next(alive))
+    monkeypatch.setattr(train.time, "sleep", sleep)
+    monkeypatch.setattr(train.time, "time", lambda: clock[0])
+    monkeypatch.setattr(train, "RUN", {"thread": Run(), "pause": threading.Event(), "lanes": [], "clock": 0.0})
+    monkeypatch.setattr(char, "NOW", {"sys": 2, "kind": "planner"})
+    train._sample(every=0.1)
+    assert train.RUN["lanes"] == [[2, "planner", 0.0, 0.6]]
+
+
+def test_a_sampler_stops_with_its_own_run_not_the_next_one(monkeypatch):
+    import threading, time as _t
+    from workbench import char, train
+    done = threading.Thread(target=lambda: None); done.start(); done.join()
+    old = {"thread": done, "pause": threading.Event(), "lanes": [], "clock": 0.0}
+    monkeypatch.setattr(train, "RUN", old)
+    nxt = threading.Thread(target=_t.sleep, args=(0.3,)); nxt.start()
+    monkeypatch.setattr(char, "NOW", {"sys": 2, "kind": "planner"})
+    sampler = threading.Thread(target=train._sample, kwargs={"every": 0.05}); sampler.start()
+    train.RUN = {"thread": nxt, "pause": threading.Event(), "lanes": [], "clock": 0.0}  # a new run starts while the old sampler is about
+    sampler.join(1)
+    assert not sampler.is_alive() and train.RUN["lanes"] == [] and old["lanes"] == []  # its run had ended: it drew nothing, in either
+    nxt.join()

@@ -65,7 +65,21 @@ def test_a_skipped_command_stays_off_the_plan_until_something_new_comes_in():
     plan, rejected = harness.validate([{"name": "tune", "arg": ""}])
     assert not plan and rejected[0]["why"] == "skipped last time and nothing has changed for it"
     char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")
+    char.add_memory("Needs", "{}", source="sheet")  # its mood, written after every step, is not news either
+    assert "tune" in harness.stale()  # a note is not what tune works on: only review feeds it
+    char._engine("review", "ok", "a reply judged")
     assert "tune" not in harness.stale()
+
+
+def test_a_step_that_reads_the_chat_waits_for_a_new_turn():
+    char._engine("review", "skipped", "no new reply to review")
+    char._engine("reflect", "ok", "a note")  # busy elsewhere: still nothing for review
+    assert "review" in harness.stale()
+    con = db.connect()
+    with con:
+        con.execute("INSERT INTO char_turns (role, text, created_at) VALUES ('dot', 'A new reply.', datetime('now', '+1 second'))")
+    con.close()
+    assert "review" not in harness.stale()
 
 
 def test_stuck_it_names_the_wall_tries_a_way_out_and_then_rests_without_you(monkeypatch):

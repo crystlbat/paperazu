@@ -1653,3 +1653,18 @@ def test_a_find_the_gate_turns_away_does_not_score_the_guess(monkeypatch):
     con = db.connect()
     assert con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE title LIKE 'Guess: %'").fetchone()["c"] == 0  # J's surprise is not dragged up by a miss of the search
     con.close()
+
+
+def test_chat_from_before_the_first_rest_belongs_to_the_character_and_a_new_one_cuts_it():
+    con = db.connect()
+    with con:
+        con.execute("INSERT INTO char_turns (role, text, created_at) VALUES ('user', 'hello from earlier', '2000-01-01 00:00:00')")
+    con.close()
+    char._since(True, "Sherlock")  # the first marker, written lazily on the first rest, seconds after the chat
+    assert [t["text"] for t in char._chat_since()] == ["hello from earlier"]  # was dropped whenever the clock had ticked over
+    char.add_memory("Resting: char Watson", "0", source="sheet")  # a new character
+    con = db.connect()
+    with con:
+        con.execute("INSERT INTO char_turns (role, text, created_at) VALUES ('user', 'hi Watson', '2999-01-01 00:00:00')")
+    con.close()
+    assert [t["text"] for t in char._chat_since()] == ["hi Watson"]

@@ -330,9 +330,8 @@ def state() -> dict[str, Any]:
     """Current state payload for the Space UI."""
     init_db()
     con = db.connect()
-    mark = con.execute("SELECT created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Resting: char %' ORDER BY id DESC LIMIT 1").fetchone()
     rows = con.execute(  # the live persona's own chat only, as _chat_since reads it: another persona's turns never show here
-        "SELECT * FROM (SELECT * FROM char_turns WHERE created_at >= ? ORDER BY id DESC LIMIT 40) ORDER BY id", (mark["created_at"] if mark else "",)
+        "SELECT * FROM (SELECT * FROM char_turns WHERE created_at >= ? ORDER BY id DESC LIMIT 40) ORDER BY id", (_turn_mark(con),)
     ).fetchall()
     mem_rows = con.execute(
         "SELECT id, title, content, source FROM char_memories WHERE source NOT IN ('lesson', 'sheet', 'question', 'entity') AND id > ? ORDER BY id DESC LIMIT 12", (_start(),)  # its notes: the moons on /char
@@ -509,12 +508,18 @@ def _ideas_of(note_id: int, text: str, names: list[str]) -> list[str]:
     return kept
 
 
+def _turn_mark(con: Any) -> str:
+    """Where the live persona's chat starts. Becoming a character writes a marker that cuts the chat before it; the empty marker _since
+    writes on a first rest only says resting began, so the chat already there stays (it used to drop any turn from an earlier second)."""
+    row = con.execute("SELECT content, created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Resting: char %' ORDER BY id DESC LIMIT 1").fetchone()
+    return row["created_at"] if row and row["content"] != "" else ""
+
+
 def _chat_since() -> list[Any]:
     """The current character's own chat: the turns since it was become."""
     init_db()
     con = db.connect()
-    mark = con.execute("SELECT created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Resting: char %' ORDER BY id DESC LIMIT 1").fetchone()
-    rows = con.execute("SELECT id, role, text, created_at FROM char_turns WHERE created_at >= ? ORDER BY id", (mark["created_at"] if mark else "",)).fetchall()
+    rows = con.execute("SELECT id, role, text, created_at FROM char_turns WHERE created_at >= ? ORDER BY id", (_turn_mark(con),)).fetchall()
     con.close()
     return rows
 
@@ -650,11 +655,10 @@ def mesh() -> dict[str, Any]:
     start = _start()
     con = db.connect()
     rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? ORDER BY id", (start,)).fetchall()
-    mark = next((r["created_at"] for r in con.execute("SELECT created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Resting: char %' ORDER BY id DESC LIMIT 1")), "")
-    turns = con.execute("SELECT id, role, text, created_at FROM char_turns WHERE created_at >= ? ORDER BY id DESC LIMIT 40", (mark,)).fetchall()[::-1]
+    turns = con.execute("SELECT id, role, text, created_at FROM char_turns WHERE created_at >= ? ORDER BY id DESC LIMIT 40", (_turn_mark(con),)).fetchall()[::-1]
     con.close()
     sheet = lambda p: {r["title"].removeprefix(p): r for r in rows if r["source"] == "sheet" and r["title"].startswith(p)}
-    checked, reviewed = sheet("Checked: "), sheet("Reviewed: ")
+    checked, reviewed, read_for_names = sheet("Checked: "), sheet("Reviewed: "), sheet("Entities: ")
     nodes: list[dict[str, Any]] = []
     edges: list[list[str]] = []
     note_at: dict[str, str] = {}  # a note's title (and its topic) -> node id, for linking
@@ -670,13 +674,15 @@ def mesh() -> dict[str, Any]:
         elif s in ("reflection", "summary") or s.startswith("job:") or (s == "sheet" and t.startswith("Reflection: ") and r["content"].startswith("(rejected)")):
             v = checked.get(str(rid))
             state = "rejected" if r["content"].startswith("(rejected)") or (v and v["content"] == "drop") else "verified" if v else "unchecked"
-            nodes.append({"id": f"m{rid}", "layer": "note", "label": t.split(": ", 1)[-1], "body": r["content"], "state": state, "kind": "summary" if s == "summary" else "research" if s.startswith("job:") else "note"})
+            read = str(rid) in read_for_names  # extract has read it: a note that named nothing has nothing left below it to find
+            nodes.append({"id": f"m{rid}", "layer": "note", "label": t.split(": ", 1)[-1], "body": r["content"], "state": state, "kind": "summary" if s == "summary" else "research" if s.startswith("job:") else "note", **({"spent": True} if state == "rejected" or read else {})})
             note_at[t] = note_at[t.split(": ", 1)[-1]] = f"m{rid}"
+    probed = {r["title"] for r in rows}  # a look-up that found nothing still leaves its marker: the question was asked of the world
     for n in nodes:  # a question answered by a note
-        if n["layer"] == "question" and (to := note_at.get(n.pop("key"))):
+        if n["layer"] == "question" and (to := note_at.get(key := n.pop("key"))):
             edges.append([n["id"], to]); n["state"] = "answered"
         elif n["layer"] == "question":
-            n["state"] = "open"
+            n["state"] = "spent" if key in probed else "open"  # spent: looked up, nothing to keep; Reddin's lens is spent once probed, answered or not
     g = graph(start)
     for x in g["nodes"]:
         nodes.append({"id": f"n:{x['name']}", "layer": "name", "label": x["name"], "state": "known" if x["known"] else "curious", "kind": "idea" if x["kind"] == "abstract" else "name", "n": x["n"]})
@@ -991,7 +997,7 @@ def frontier() -> dict[str, Any]:
     layer = {n["id"]: n["layer"] for n in m["nodes"]}
     count = {k: sum(v == k for v in layer.values()) for k in LAYERS}
     down = lambda a, b: layer[a] in LAYERS[:3] and layer[b] == LAYERS[LAYERS.index(layer[a]) + 1]
-    linked = {a for a, b in m["edges"] if down(a, b)}
+    linked = {a for a, b in m["edges"] if down(a, b)} | {n["id"] for n in m["nodes"] if n.get("state") == "spent" or n.get("spent")}  # a spent question, a rejected note or one read for names no longer pulls
     cs = {}
     for n, nxt in zip(LAYERS, LAYERS[1:]):
         o = sum(v == n and i not in linked for i, v in layer.items())
@@ -1214,13 +1220,18 @@ def drive(d: dict[str, Any] | None = None) -> dict[str, Any]:
     """The two drives and who wins (the virtual-clone softmax): explore E from curiosity, check C from open questions times
     how wrong its guesses run or how little the judge can be trusted, whichever is worse."""
     d = d or disposition()
-    u, jt = len(_open_questions(_start())), judge_trust()
+    start = _start()
+    con = db.connect()
+    unchecked = con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE source = 'reflection' AND id > ? AND CAST(id AS TEXT) NOT IN "
+                            "(SELECT substr(title, 10) FROM char_memories WHERE source = 'sheet' AND title LIKE 'Checked: %')", (start,)).fetchone()["c"]
+    con.close()
+    u, jt = len(_open_questions(start)) + unchecked, judge_trust()  # check-side work: questions to answer and notes to verify
     E = d["curiosity"] / (1 + d["curiosity"])
     C = u / (u + 1) * max(d["score"]["surprise"], 1 - jt["value"])
     tau = round(max(0.05, TAU0 * (1 - d["maturity"])), 3)
     p = 1 / (1 + math.exp(-(E - C) / tau))
     df = p * E + (1 - p) * C
-    return {"E": round(E, 3), "C": round(C, 3), "tau": tau, "p_explore": round(p, 3), "DF": round(df, 3), "rest": df < REST_AT, "open": u, "judge": jt}
+    return {"E": round(E, 3), "C": round(C, 3), "tau": tau, "p_explore": round(p, 3), "DF": round(df, 3), "rest": df < REST_AT, "open": u, "unchecked": unchecked, "judge": jt}
 
 
 def thompson(kinds: list[str]) -> str:

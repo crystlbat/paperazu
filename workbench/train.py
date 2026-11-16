@@ -237,22 +237,27 @@ def start(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sample(every: float = 1.0) -> None:
-    """While the run lives, once a second: the run's clock, and which system is at work, as lanes [sys, kind, t0, t1] the Story draws growing.
+    """While its run lives, once a second: the run's clock, and which system is at work, as lanes [sys, kind, t0, t1] the Story draws growing.
+    It holds on to the run it was started for: a sampler outliving its run must not draw into the next one.
     shortcut: lanes live in memory, so a past run's lanes are gone after a restart; store them on the run row if that matters."""
-    last = time.time()
-    while active():
+    run = RUN
+    th = run.get("thread")
+    last, prev = time.time(), {}
+    while th is not None and th.is_alive():
         time.sleep(every)
         now = time.time()
-        if RUN["pause"].is_set():
-            last = now
+        if run["pause"].is_set():
+            last, prev = now, {}
             continue
-        RUN["clock"] += now - last
+        t0 = round(run["clock"], 1)
+        run["clock"] += now - last
         last = now
-        lanes, w, t = RUN["lanes"], dict(char.NOW), round(RUN["clock"], 1)
-        if lanes and lanes[-1][0] == w.get("sys") and lanes[-1][1] == w.get("kind") and lanes[-1][3] >= t - every * 1.5:
+        lanes, w, t = run["lanes"], dict(char.NOW), round(run["clock"], 1)
+        if lanes and w and w == prev:  # the same work seen at the last tick too: one lane, however late this tick came (a busy machine oversleeps)
             lanes[-1][3] = t
         elif w.get("sys") is not None:
-            lanes.append([w["sys"], w["kind"], round(t - every, 1), t])
+            lanes.append([w["sys"], w["kind"], t0, t])
+        prev = w
 
 
 def control(action: str) -> dict[str, Any]:
