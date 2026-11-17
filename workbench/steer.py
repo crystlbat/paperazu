@@ -95,14 +95,17 @@ def states(texts: list[str], name: str | None = None) -> np.ndarray:
     """Last-token hidden state after every layer, as [layers, texts, width]."""
     import mlx.core as mx
 
-    m = _load(name or current())
-    out = []
-    for t in texts:
-        m["grab"] = {}
-        ids = mx.array(m["tok"].encode(_prompt(m["tok"], t)))[None]
-        m["model"](ids)
-        out.append(np.stack([np.array(m["grab"][i][0].astype(mx.float32)) for i in range(m["n"])]))
-    m["grab"] = None
+    with _gen_lock:  # unload and generate take it too: the model cannot leave mid-read
+        m = _load(name or current())
+        out = []
+        try:
+            for t in texts:
+                m["grab"] = {}
+                ids = mx.array(m["tok"].encode(_prompt(m["tok"], t)))[None]
+                m["model"](ids)
+                out.append(np.stack([np.array(m["grab"][i][0].astype(mx.float32)) for i in range(m["n"])]))
+        finally:
+            m["grab"] = None
     return np.stack(out, axis=1)
 
 

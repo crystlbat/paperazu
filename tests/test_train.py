@@ -226,3 +226,12 @@ def test_fit_all_fits_each_mlx_model_in_turn_one_in_memory(monkeypatch, tmp_path
     assert [(g["model"], g["world"], g["world_fit"], g["truth"]) for g in got] == [(llm.STEER, f"w-{llm.STEER}", 0.9, ""), ("mlx:org/gemma", "w-mlx:org/gemma", 0.9, "")]
     with pytest.raises(ValueError, match="in-process MLX"):
         train.fit_all(["dory"])
+
+
+def test_a_second_fit_waits_its_turn(monkeypatch):
+    train._fit_lock.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="already going"):
+            train.fit_all([llm.STEER])
+    finally:
+        train._fit_lock.release()

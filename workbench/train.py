@@ -164,6 +164,18 @@ def _pipeline_step(cfg: dict[str, Any], step: int) -> tuple[str, str]:
 
 def fit_all(models: list[str]) -> list[dict[str, Any]]:
     """Steering vectors for each MLX model from the same clean facts: one model in memory at a time, each fitted on its own states."""
+    if not _fit_lock.acquire(blocking=False):
+        raise RuntimeError("A fit is already going: each one swaps models, so they take turns.")
+    try:
+        return _fit_all(models)
+    finally:
+        _fit_lock.release()
+
+
+_fit_lock = threading.Lock()
+
+
+def _fit_all(models: list[str]) -> list[dict[str, Any]]:
     out = []
     for m in dict.fromkeys(models):
         if not llm.is_steer(m):
