@@ -1,7 +1,9 @@
 import json
 import threading
 
-from workbench import char, train
+import pytest
+
+from workbench import char, llm, settings, steer, train
 
 
 def _run(monkeypatch, curiosities, cfg):
@@ -12,6 +14,10 @@ def _run(monkeypatch, curiosities, cfg):
         level["c"] = next(it, level["c"])
         return "ok", "reflect: something"
     monkeypatch.setattr(train, "_one_step", step)
+    return _run_with(monkeypatch, cfg)
+
+
+def _run_with(monkeypatch, cfg):
     con = train._con()
     with con:
         run_id = con.execute("INSERT INTO train_runs (persona, config, status) VALUES (?, ?, 'running')", (char.get_profile()["name"], json.dumps(cfg))).lastrowid
@@ -160,3 +166,24 @@ def test_a_sampler_stops_with_its_own_run_not_the_next_one(monkeypatch):
     sampler.join(1)
     assert not sampler.is_alive() and old["lanes"] == []  # its run had ended: it drew nothing into the next one, and did not crash on the half-filled dict
     nxt.join()
+
+
+def test_a_pipeline_run_gathers_fits_then_steers_round_after_round(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    models, fits = [], []
+    monkeypatch.setattr(train, "_one_step", lambda: (models.append(settings.get_all().model_name), ("ok", "x"))[1])
+    monkeypatch.setattr(llm, "ensure", lambda s, m, **k: fits.append(m))
+    monkeypatch.setattr(steer, "world_concept", lambda: "w")
+    monkeypatch.setattr(steer, "truth_concept", lambda: "")
+    monkeypatch.setattr(char, "disposition", lambda: {"curiosity": 5.0, "maturity": 0.1})
+    run_id = _run_with(monkeypatch, {"gather": "dory", "gather_steps": 2, "steer_steps": 1, "max_steps": 8})
+    log = train.status()["runs"][0]["log"][1:]
+    assert [e["stage"] for e in log] == ["gather", "gather", "fit", "steer"] * 2
+    assert models == ["dory", "dory", llm.STEER, "dory", "dory", llm.STEER]
+    assert fits == [llm.STEER, llm.STEER] and "truth not enough facts yet" in log[2]["outcome"]
+    assert settings.OVERRIDE == {} and run_id
+
+
+def test_a_pipeline_run_refuses_the_steer_engine_to_gather_on():
+    with pytest.raises(ValueError, match="server engine"):
+        train.start({"gather": llm.STEER})

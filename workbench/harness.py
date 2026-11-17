@@ -379,15 +379,15 @@ def steer_arms() -> dict[float, tuple[float, float]]:
     return out
 
 
-def pick_steer(s: settings.Settings) -> tuple[str, float]:
-    """The controller's steering for this cycle: its world's concept, at the strength one Thompson draw picks."""
+def pick_steer(s: settings.Settings) -> tuple[str, float, str]:
+    """The controller's steering for this cycle: its world's concept, at the strength one Thompson draw picks, and the truth concept (\"\" if too few facts)."""
     if not steerable(s):
-        return "", 0.0
+        return "", 0.0, ""
     llm.ensure(s, llm.STEER)  # before the fit reads its hidden states: one model in memory at a time
     if not (concept := steering.world_concept()):
-        return "", 0.0
+        return "", 0.0, ""
     A = steer_arms()
-    return concept, max(steering.LEVELS, key=lambda e: random.betavariate(*A[e]))
+    return concept, max(steering.LEVELS, key=lambda e: random.betavariate(*A[e])), steering.truth_concept()
 
 
 def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[str, Any]:
@@ -426,11 +426,13 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         me = notice(n, plan, rejected, force)
         if me.get("try"):  # its own way out goes in, in place of the last pick if the plan is full
             plan = plan[:budget - 1] + [{"name": me["try"], "arg": "", "role": COMMANDS[me["try"]]["role"]}]
-        concept, eps = pick_steer(s)
+        concept, eps, truth = pick_steer(s)
         j0 = char.disposition()["score"]["J"] if concept else 0.0
         steering.ON.clear()
         if concept:
             steering.ON[concept] = eps  # at 0 too: the steps still run on the steer engine, unsteered, so the arms compare like with like
+            if truth and eps > 0:  # eps 0 stays the unsteered baseline for the arms
+                steering.ON[truth] = steering.TRUTH_EPS
         try:
             executed = execute(plan, s, swaps)
         finally:
@@ -438,7 +440,7 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         verdicts = [] if CANCEL.is_set() else verify(executed, s, swaps)
         sv = {}
         if concept:
-            sv = {"concept": concept, "eps": eps, "dJ": round(char.disposition()["score"]["J"] - j0, 4)}
+            sv = {"concept": concept, "eps": eps, "truth": truth, "dJ": round(char.disposition()["score"]["J"] - j0, 4)}
             char.add_memory("Steer", json.dumps(sv), source="sheet")
         out = {"cycle": n, "plan_text": text, "proposed": [_text(c) for c in proposed], "rejected": rejected,
                "executed": [{k: x[k] for k in ("cmd", "outcome", "detail")} for x in executed], "verdicts": verdicts,

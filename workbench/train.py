@@ -15,7 +15,7 @@ import threading
 import time
 from typing import Any
 
-from . import char, db
+from . import char, db, llm, settings, steer
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS train_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, persona TEXT NOT NULL, config TEXT NOT NULL, status TEXT NOT NULL,
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS train_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, per
 CREATE TABLE IF NOT EXISTS train_snaps (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, step INTEGER NOT NULL, why TEXT NOT NULL,
   data TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')));
 """
-DEFAULTS = {"minutes": 20.0, "lo": 0.0, "hi": 1.0, "max_steps": 60, "drop": 0.5, "rise": 0.05}
+DEFAULTS = {"minutes": 20.0, "lo": 0.0, "hi": 1.0, "max_steps": 60, "drop": 0.5, "rise": 0.05, "gather": "", "gather_steps": 4, "steer_steps": 4}
 IDLE_STOP = 6  # this many steps in a row that do nothing: there is nothing left to learn right now
 FAIL_STOP = 3  # this many failures in a row: stop rather than spin
 RUN: dict[str, Any] = {}  # the run in this process: id, its pause and stop flags, the thread
@@ -141,6 +141,27 @@ def _one_step() -> tuple[str, str]:
     return ("skipped", r.get("why") or "nothing to do") if r.get("done") else ("ok", f"{r['kind']}: {r['topic']}")
 
 
+def _stage(cfg: dict[str, Any], step: int) -> str:
+    g, i = cfg["gather_steps"], step % (cfg["gather_steps"] + 1 + cfg["steer_steps"])
+    return "gather" if i < g else "fit" if i == g else "steer"
+
+
+def _pipeline_step(cfg: dict[str, Any], step: int) -> tuple[str, str]:
+    """One step of the staged run: gather on a server engine, one fit, then steer on the in-process engine, round after round."""
+    stage = _stage(cfg, step)
+    model = cfg["gather"] if stage == "gather" else llm.STEER
+    settings.OVERRIDE.update({k: model for k in ("model_name", "chat_model", "planner_model", "judge_model")})
+    try:
+        if stage == "fit":
+            llm.ensure(settings.get_all(), llm.STEER)
+            w, t = steer.world_concept(), steer.truth_concept()
+            return "ok", f"fit: world {w or '-'} · truth {t or 'not enough facts yet'}"
+        outcome, detail = _one_step()
+        return outcome, f"{stage}: {detail}"
+    finally:
+        settings.OVERRIDE.clear()
+
+
 def _loop(run_id: int, cfg: dict[str, Any]) -> None:
     log: list[dict[str, Any]] = []
     steps = idle = fails = 0
@@ -184,7 +205,7 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
             break
         _set(run_id, status="running")
         try:
-            outcome, detail = _one_step()
+            outcome, detail = _pipeline_step(cfg, steps) if cfg["gather"] else _one_step()
             fails = 0
         except Exception as e:  # noqa: BLE001 — a run keeps going past one bad step, and stops after a few
             outcome, detail = "failed", str(e)[:200]
@@ -201,8 +222,9 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
         if snap:
             snapshot(run_id, steps, snap)
             mark = {"curiosity": d["curiosity"], "maturity": d["maturity"]}
-        log.append({"step": steps, "t": round(spent), "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": outcome, "outcome": detail[:300], "snap": bool(snap)})
+        log.append({"step": steps, "t": round(spent), "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": outcome, "outcome": detail[:300], "snap": bool(snap), **({"stage": _stage(cfg, steps - 1)} if cfg["gather"] else {})})
         _set(run_id, log=json.dumps(log))
+    settings.OVERRIDE.clear()
     from . import harness
     harness.CANCEL.clear()  # idle learning after the run is not cancelled
     snapshot(run_id, steps, f"end: {why}")
@@ -218,6 +240,8 @@ def start(cfg: dict[str, Any]) -> dict[str, Any]:
         if active():
             raise RuntimeError("A run is already going: pause or stop it first.")
         c = {k: type(v)(cfg.get(k, v)) for k, v in DEFAULTS.items()}
+        if c["gather"] == llm.STEER:
+            raise ValueError("gather on a server engine (dory or an Unsloth model), not the steer engine")
         if c["lo"] > c["hi"]:
             c["lo"], c["hi"] = c["hi"], c["lo"]
         c["minutes"], c["max_steps"] = max(0.5, min(c["minutes"], 600)), max(1, min(c["max_steps"], 2000))

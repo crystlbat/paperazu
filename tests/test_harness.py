@@ -429,7 +429,7 @@ def test_the_steer_engine_steers_the_characters_steps_and_nothing_else(monkeypat
     assert steps and all(on == {"world-x": r["steer"]["eps"]} for on in steps)  # the character's own step is
     assert steer.ON == {} and _sheet("Steer")
     settings.update({"chat_model": "dory"})  # pick another engine and nothing is steered
-    assert harness.pick_steer(settings.get_all()) == ("", 0.0)
+    assert harness.pick_steer(settings.get_all()) == ("", 0.0, "")
 
 
 def test_steer_arms_favour_the_strength_that_raised_j():
@@ -438,3 +438,31 @@ def test_steer_arms_favour_the_strength_that_raised_j():
     char.add_memory("Steer", json.dumps({"concept": "w", "eps": 0.0, "dJ": -0.02}), source="sheet")
     A = harness.steer_arms()
     assert A[0.03][0] > A[0.03][1] and A[0.0][1] > A[0.0][0] and A[0.02] == (1.0, 1.0)
+
+
+def test_the_truth_concept_steers_beside_the_world_when_the_world_strength_is_above_zero(monkeypatch):
+    from workbench import steer
+    note = char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")["id"]
+    seen: list[tuple[str, dict[str, float]]] = []
+    _models(monkeypatch, f"check {note}")
+    inner = jobs.complete
+
+    def complete(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
+        seen.append((messages[0]["content"][:20], dict(steer.ON)))
+        return inner(s, messages, **kw)
+
+    monkeypatch.setattr(jobs, "complete", complete)
+    monkeypatch.setattr(steer, "available", lambda: True)
+    monkeypatch.setattr(steer, "world_concept", lambda: "world-x")
+    monkeypatch.setattr(steer, "truth_concept", lambda: "truth-x")
+    monkeypatch.setattr(llm, "ensure", lambda s, m, **k: None)
+    monkeypatch.setattr(harness, "steer_arms", lambda: {e: (1 + 100 * e, 1.0) for e in steer.LEVELS})  # the strongest level wins every draw
+    monkeypatch.setattr(harness.random, "betavariate", lambda a, b: a / (a + b))
+    monkeypatch.setattr(harness.random, "random", lambda: 0.5)
+    settings.update({"chat_model": llm.STEER})
+    r = harness.cycle()
+    assert r["steer"]["eps"] > 0 and r["steer"]["truth"] == "truth-x"
+    steps = [on for who, on in seen if not who.startswith(("You plan", "You judge"))]
+    assert steps and all(on == {"world-x": r["steer"]["eps"], "truth-x": steer.TRUTH_EPS} for on in steps)
+    assert all(on == {} for who, on in seen if who.startswith(("You plan", "You judge")))
+    assert steer.ON == {}

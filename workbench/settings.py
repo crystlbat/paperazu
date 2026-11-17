@@ -67,8 +67,11 @@ def read_env(path: Path = ROOT / ".env") -> dict[str, str]:
     return {ENV_KEYS[k]: v for k, v in values.items() if k in ENV_KEYS and v != ""}
 
 
+OVERRIDE: dict[str, Any] = {}  # a pipeline stage's models; never written to the DB, so a crash cannot leave a stage's engine behind
+
+
 def get_all() -> Settings:
-    return Settings(**{**read_env(), **db.get_settings()})
+    return Settings(**{**read_env(), **db.get_settings(), **OVERRIDE})
 
 
 def update(patch: dict[str, Any]) -> Settings:
