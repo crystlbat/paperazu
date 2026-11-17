@@ -3,6 +3,8 @@ a Recursive Feature Machine finds one concept direction per layer from labelled 
 generation toward the concept (negative eps: away), and projecting onto it reads how much of the concept a text carries.
 The model runs in-process on MLX: the HTTP engines never expose hidden states."""
 import hashlib
+import json
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -170,9 +172,20 @@ _gen_lock = threading.Lock()  # one generation at a time: the taps read one shar
 GENERIC = """What should I eat for breakfast?|How do I fix a leaky tap?|Tell me about the weather today.|What is a good way to learn a language?|Describe your favourite place.|How do birds migrate?|What makes a good friend?|Explain how a car engine works.|What did you do last weekend?|How do I start running?|Why is the sky blue?|What is the best way to save money?|Tell me a short story.|How are mountains formed?|What do you think about music?|How do I make coffee?|What is your job like?|Describe the night sky.|What is the history of your town?|How do I grow tomatoes?|What scares you the most?|Who is your hero?|What would you do with a free day?|How does electricity work?|What is the meaning of home?|Describe a battle you remember.|How do you stay safe when travelling?|What tools do you carry?|What is the oldest thing you know of?|How do you deal with loss?|What is a moon made of?|Tell me about your neighbours.|What happens when we die?|What is the strongest material?|How do you pick a leader?|What languages do you speak?|What is the biggest threat to people?|How do you heal an injury?|What do you do at night?|Who built the ancient ruins?""".split("|")
 
 
+OTHER_WORLDS = (
+    "You live in Middle-earth, among hobbits and elves. Answer as someone from there. ",
+    "You live in the Star Wars galaxy, among Jedi and droids. Answer as someone from there. ",
+    "You live at Hogwarts, among wizards and owls. Answer as someone from there. ",
+    "You live in a medieval fantasy tavern town, among knights and bards. Answer as someone from there. ",
+)
+MIN_FACTS = 12  # fewer kept facts, or fewer negatives, and a fitted direction would only be noise
+TRUTH_EPS = 0.02  # the fixed push for the truth concept, beside the world's (up to 0.03): together under 0.06, where the model breaks
+
+
 def world_concept() -> str:
     """The concept of the character's own world, fitted the first time it is asked for and again whenever what is known of the world changes:
-    generic questions asked inside its world (named from its sheet and the names its world is made of) against the same questions plain.
+    generic questions asked inside its world (named from its sheet and the names its world is made of) against the same questions asked
+    inside other fictional worlds, so the direction means this world and not "being in a story".
     Empty when too little is known of its world to name it."""
     from . import char, chibi
 
@@ -181,13 +194,45 @@ def world_concept() -> str:
         return ""
     work = chibi.where_from(p["persona"])
     pre = f"You live in the world of {work or p['name']}, among {', '.join(words[:10])}. Answer as someone from there. "
-    concept = "world-" + hashlib.sha1(pre.encode()).hexdigest()[:10]
+    concept = "world-" + hashlib.sha1(("v2|" + pre).encode()).hexdigest()[:10]  # v2: the contrast changed, so old vectors are not reused
     if not (_dir() / f"{concept}.npz").exists():
-        fit(concept, [pre + q for q in GENERIC], GENERIC)
+        fit(concept, [pre + q for q in GENERIC], [OTHER_WORLDS[i % len(OTHER_WORLDS)] + q for i, q in enumerate(GENERIC)])
     return concept
 
 
-LEVELS = (0.0, 0.02, 0.04)  # eps the controller chooses between: off, a shifted tone, writing in its world; 0.1 broke the model
+def facts() -> tuple[list[str], list[str]]:
+    """The claim sentences the pruner kept and dropped for the live persona, oldest first, each once."""
+    from . import char
+
+    con = db.connect()
+    rows = [json.loads(r["content"]) for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Claims: %' AND id > ? ORDER BY id", (char._start(),))]
+    con.close()
+    return tuple(list(dict.fromkeys(s for r in rows for s in r[k])) for k in ("kept", "dropped"))  # type: ignore[return-value]
+
+
+def truth_concept() -> str:
+    """The "true about its world" concept: kept facts against dropped claims and against copies of the kept facts with one world name
+    swapped for another, so it tells a fact from a wrong one, not a world from another. Empty until there are MIN_FACTS of each.
+    The name hashes its texts, so new facts give a new name, and that is the refit."""
+    from . import char
+
+    kept, dropped = facts()
+    words = sorted(char.world_words())
+    bad = []
+    for f in kept:
+        m = next((m for m in re.finditer(r"[A-Za-z][\w'-]*", f) if m.group() in words), None)
+        if m:  # a fact naming nothing of its world has nothing to swap
+            bad.append(f[:m.start()] + words[(words.index(m.group()) + 1) % len(words)] + f[m.end():])
+    pos, neg = [f"Note: {s}" for s in kept], [f"Note: {s}" for s in dropped + bad]
+    if len(pos) < MIN_FACTS or len(neg) < MIN_FACTS:
+        return ""
+    concept = "truth-" + hashlib.sha1(json.dumps([sorted(pos), sorted(neg)]).encode()).hexdigest()[:10]
+    if not (_dir() / f"{concept}.npz").exists():
+        fit(concept, pos, neg)
+    return concept
+
+
+LEVELS = (0.0, 0.01, 0.02, 0.03)  # eps the controller chooses between: off, a hint, a shifted tone, writing in its world; 0.04 invents facts, 0.06 breaks
 
 
 def available() -> bool:

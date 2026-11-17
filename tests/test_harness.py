@@ -433,8 +433,8 @@ def test_the_steer_engine_steers_the_characters_steps_and_nothing_else(monkeypat
 
 
 def test_steer_arms_favour_the_strength_that_raised_j():
-    for dj in (0.05, 0.04, 0.03):
-        char.add_memory("Steer", json.dumps({"concept": "w", "eps": 0.04, "dJ": dj}), source="sheet")
+    for dj in (0.05, 0.03, 0.03):
+        char.add_memory("Steer", json.dumps({"concept": "w", "eps": 0.03, "dJ": dj}), source="sheet")
     char.add_memory("Steer", json.dumps({"concept": "w", "eps": 0.0, "dJ": -0.02}), source="sheet")
     A = harness.steer_arms()
-    assert A[0.04][0] > A[0.04][1] and A[0.0][1] > A[0.0][0] and A[0.02] == (1.0, 1.0)
+    assert A[0.03][0] > A[0.03][1] and A[0.0][1] > A[0.0][0] and A[0.02] == (1.0, 1.0)

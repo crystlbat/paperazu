@@ -1,3 +1,4 @@
+import json
 import numpy as np
 
 from workbench import steer
@@ -55,3 +56,47 @@ def test_only_one_engine_holds_a_model_at_a_time(monkeypatch):
     calls.clear()
     llm.ensure(s, "unsloth/Other")
     assert not state["loaded"] and ("POST", "load", {"model_path": "unsloth/Other"}) in calls  # and the steer engine leaves before Unsloth loads
+
+
+def _claims(kept, dropped=()):
+    from workbench import char
+    char.add_memory("Claims: 1", json.dumps({"kept": list(kept), "dropped": list(dropped)}), source="sheet")
+
+
+def test_facts_reads_kept_and_dropped_once_each_oldest_first():
+    _claims(["a", "b"], ["x"])
+    _claims(["b", "c"], ["x", "y"])
+    assert steer.facts() == (["a", "b", "c"], ["x", "y"])
+
+
+def test_truth_concept_waits_for_enough_facts_then_names_its_data(monkeypatch, tmp_path):
+    from workbench import char
+    monkeypatch.setattr(steer, "_dir", lambda: tmp_path)
+    monkeypatch.setattr(char, "world_words", lambda: {"Alpha", "Beta", "Gamma"})
+    fitted = []
+    monkeypatch.setattr(steer, "fit", lambda c, pos, neg: fitted.append((c, pos, neg)) or (tmp_path / f"{c}.npz").touch())
+    _claims([f"Alpha holds gate {i}." for i in range(11)], [f"junk {i}" for i in range(12)])
+    assert steer.truth_concept() == "" and not fitted  # 11 kept: too few
+    _claims(["Gamma rules the sea."])  # the last world word wraps round to the first
+    _claims(["The sea is wide."])  # names nothing of its world: no corrupted copy
+    c1 = steer.truth_concept()
+    _, pos, neg = fitted[0]
+    assert c1.startswith("truth-") and len(pos) == 13 and len(neg) == 12 + 12  # 12 dropped + 12 copies, not 13
+    assert "Note: Beta holds gate 0." in neg and "Note: Alpha rules the sea." in neg and "Note: Alpha holds gate 0." in pos
+    assert steer.truth_concept() == c1 and len(fitted) == 1  # same data, already fitted
+    _claims(["Beta guards the keep."])
+    assert steer.truth_concept() != c1 and len(fitted) == 2  # a new fact is a new name, and a refit
+
+
+def test_world_concept_contrasts_its_world_with_the_other_worlds(monkeypatch, tmp_path):
+    from workbench import char, chibi
+    monkeypatch.setattr(steer, "_dir", lambda: tmp_path)
+    monkeypatch.setattr(char, "world_words", lambda: {"Alpha", "Beta", "Gamma"})
+    monkeypatch.setattr(chibi, "where_from", lambda persona: "Zed")
+    got = []
+    monkeypatch.setattr(steer, "fit", lambda c, pos, neg: got.append((pos, neg)))
+    steer.world_concept()
+    pos, neg = got[0]
+    assert all(p.startswith("You live in the world of Zed") for p in pos)
+    assert [n[:len(steer.OTHER_WORLDS[i % 4])] for i, n in enumerate(neg)] == [steer.OTHER_WORLDS[i % 4] for i in range(len(neg))]
+    assert [n.removeprefix(steer.OTHER_WORLDS[i % 4]) for i, n in enumerate(neg)] == steer.GENERIC
