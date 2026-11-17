@@ -1705,6 +1705,23 @@ def test_reflect_with_no_supported_claim_saves_only_the_marker(monkeypatch):
     assert json.loads(claims["content"]) == {"kept": [], "dropped": []}  # a failed check judged nothing: no negatives from it
 
 
+def test_polish_prunes_old_notes_against_their_saved_sources_once(monkeypatch):
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    src = json.dumps([{"title": "T", "url": "u", "snippet": "Holmes lives at Baker Street in London with Watson."}])
+    a = char.add_memory("Reflection: Baker Street", "Holmes lives at Baker Street in London. Moriarty commands zeppelins above Atlantis.", source="reflection")["id"]
+    b = char.add_memory("Reflection: Fog", "Moriarty commands zeppelins above Atlantis.", source="reflection")["id"]
+    for i in (a, b):
+        char.add_memory(f"Sources: {i}", src, source="sheet")
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "1. UNSUPPORTED")
+    assert char.polish() == {"checked": 2, "trimmed": 1, "dropped": 1, "failed": 0}
+    con = db.connect()
+    note = con.execute("SELECT content FROM char_memories WHERE id = ?", (a,)).fetchone()["content"]
+    gone = con.execute("SELECT content FROM char_memories WHERE title = ?", (f"Checked: {b}",)).fetchone()["content"]
+    con.close()
+    assert note == "Holmes lives at Baker Street in London." and gone == "drop"
+    assert char.polish()["checked"] == 0  # a note with a Claims row is done
+
+
 def test_claims_keeps_a_copied_sentence_without_asking_the_model(monkeypatch):
     def fail(*a: Any, **kw: Any) -> str:
         raise AssertionError("the model was called")

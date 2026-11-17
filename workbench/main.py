@@ -987,6 +987,22 @@ def char_reflect(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     return char.reflect(on_char=bool(body.get("char")))
 
 
+@app.post("/char/polish")
+def char_polish(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Prune the old notes on one engine (default: the saved model); the next fit refits the truth concept from what is left."""
+    model = (body.get("model") or "").strip()
+    if model == llm.STEER:
+        raise HTTPException(400, "polish on a server engine (dory or an Unsloth model), not the steer engine")
+    if model:
+        llm.ensure(settings.get_all(), model)
+        settings.OVERRIDE["model_name"] = model
+    try:
+        out = char.polish()
+    finally:
+        settings.OVERRIDE.pop("model_name", None)
+    return out
+
+
 @app.get("/char/systems")
 def char_systems() -> dict[str, Any]:
     return char.systems()

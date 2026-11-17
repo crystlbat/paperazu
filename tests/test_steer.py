@@ -27,6 +27,7 @@ def test_the_steer_engine_is_a_model_like_dory_and_unsloth(monkeypatch):
         return "<think>hm</think>Guardian reporting."
 
     monkeypatch.setattr(steer, "generate", gen)
+    monkeypatch.setattr(steer, "_M", {"name": steer.MODEL})  # already loaded: no real weights in a test
     s = settings.get_all().model_copy(update={"model_name": llm.STEER})
     assert llm.chat(s, [{"role": "user", "content": "hi"}]) == "Guardian reporting."  # no server: in-process, thinking stripped
     assert got["on"] == {}  # outside the harness's executor nothing is steered
@@ -47,6 +48,7 @@ def test_only_one_engine_holds_a_model_at_a_time(monkeypatch):
         return {"active_model": active[0], "loaded": [active[0]], "loading": []} if path == "status" else {}
 
     monkeypatch.setattr(llm, "_api", api)
+    monkeypatch.setattr(steer, "_M", {})
     monkeypatch.setattr(steer, "loaded", lambda: state["loaded"])
     monkeypatch.setattr(steer, "load", lambda name=steer.MODEL: state.update(loaded=True))
     monkeypatch.setattr(steer, "unload", lambda: (was := state["loaded"], state.update(loaded=False))[0])
@@ -56,6 +58,48 @@ def test_only_one_engine_holds_a_model_at_a_time(monkeypatch):
     calls.clear()
     llm.ensure(s, "unsloth/Other")
     assert not state["loaded"] and ("POST", "load", {"model_path": "unsloth/Other"}) in calls  # and the steer engine leaves before Unsloth loads
+
+
+def test_another_mlx_model_chats_in_process_unsteered_one_at_a_time(monkeypatch):
+    from workbench import harness, llm, settings
+    got, events = {}, []
+    monkeypatch.setattr(llm, "_api", lambda *a, **k: {})
+    monkeypatch.setattr(steer, "_M", {"name": steer.MODEL})
+    monkeypatch.setattr(steer, "unload", lambda: (events.append("unload"), steer._M.clear(), True)[2])
+    monkeypatch.setattr(steer, "load", lambda name=steer.MODEL: (events.append(name), steer._M.update(name=name)))
+    monkeypatch.setattr(steer, "generate", lambda messages, on, name=steer.MODEL, **k: (got.update(on=dict(on), name=name), "Ghost here.")[1])
+    monkeypatch.setitem(steer.ON, "world-x", 0.02)
+    s = settings.get_all().model_copy(update={"model_name": "mlx:org/gemma", "chat_model": "mlx:org/gemma"})
+    assert llm.chat(s, [{"role": "user", "content": "hi"}]) == "Ghost here."
+    assert events == ["unload", "org/gemma"] and got == {"on": {}, "name": "org/gemma"}  # Qwen out before gemma loads; Qwen's concepts not applied
+    assert not harness.steerable(s)  # the harness steers only the model its concepts were fitted on
+
+
+def test_the_tap_keeps_a_layers_own_fields_and_call_arguments(monkeypatch):
+    import mlx.core as mx
+    import mlx.nn as nn
+    import mlx_lm
+
+    class Layer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layer_type = "sliding_attention"
+
+        def __call__(self, x, mask=None, cache=None, per_layer_input=None):
+            return x + per_layer_input
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = [Layer()]
+
+    monkeypatch.setattr(mlx_lm, "load", lambda name: (Model(), None))
+    monkeypatch.setattr(steer, "_M", {})
+    m = steer._load("org/fake")
+    tap = m["model"].layers[0]
+    m["grab"] = {}
+    out = tap(mx.zeros((1, 2, 3)), None, None, per_layer_input=mx.ones((1, 2, 3)))
+    assert tap.layer_type == "sliding_attention" and out.tolist() == [[[1.0] * 3] * 2] and 0 in m["grab"]
 
 
 def _claims(kept, dropped=(), source="reflection", checked=""):

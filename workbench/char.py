@@ -883,6 +883,35 @@ def _claims(note: str, lines: list[str]) -> tuple[list[str], list[str]]:
     return [x for x, o in zip(sents, ok) if o], [x for i, (x, o) in enumerate(zip(sents, ok)) if not o and i not in skip]
 
 
+def polish() -> dict[str, Any]:
+    """Notes written before the claim checker were never pruned: check each now against the snippets it was written from, no new search."""
+    con = db.connect()
+    rows = con.execute("""SELECT m.id, m.content, s.content AS src FROM char_memories m JOIN char_memories s ON s.title = 'Sources: ' || m.id
+        WHERE m.source = 'reflection' AND m.id > ? AND NOT EXISTS (SELECT 1 FROM char_memories c WHERE c.title = 'Claims: ' || m.id)
+        AND NOT EXISTS (SELECT 1 FROM char_memories c WHERE c.title = 'Checked: ' || m.id AND c.content = 'drop')""", (_start(),)).fetchall()
+    con.close()
+    out = {"checked": 0, "trimmed": 0, "dropped": 0, "failed": 0}
+    for r in rows:
+        lines = [f"- {x.get('title') or ''}: {x.get('snippet') or ''}" for x in json.loads(r["src"]) if x.get("title") or x.get("snippet")]
+        kept, dropped = _claims(r["content"], lines)
+        if not kept and not dropped:  # the check failed: no Claims row, so the next polish tries again
+            out["failed"] += 1
+            continue
+        add_memory(f"Claims: {r['id']}", json.dumps({"kept": kept, "dropped": dropped}), source="sheet")
+        out["checked"] += 1
+        if not kept:  # nothing in it held up: the note is turned away, as the Verifier would
+            add_memory(f"Checked: {r['id']}", "drop", source="sheet")
+            out["dropped"] += 1
+        elif dropped:
+            con = db.connect()
+            with con:
+                con.execute("UPDATE char_memories SET content = ? WHERE id = ?", (" ".join(kept), r["id"]))
+            con.close()
+            out["trimmed"] += 1
+    _engine("polish", "ok" if out["checked"] else "skipped", f"{out['checked']} old notes checked, {out['trimmed']} trimmed, {out['dropped']} dropped, {out['failed']} failed")
+    return out
+
+
 def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
     """One look-up while asleep: the first topic not yet reflected on (or the one named), searched, noted, saved."""
     if on_char:

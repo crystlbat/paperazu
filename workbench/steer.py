@@ -56,8 +56,14 @@ def _load(name: str = MODEL) -> dict[str, Any]:
             super().__init__()
             self.layer, self.i, self.is_linear = layer, i, getattr(layer, "is_linear", False)
 
-        def __call__(self, x: Any, mask: Any = None, cache: Any = None) -> Any:
-            h = self.layer(x, mask=mask, cache=cache)
+        def __getattr__(self, k: str) -> Any:  # a model may read its layers' own fields (Gemma: layer_type)
+            try:
+                return super().__getattr__(k)
+            except AttributeError:
+                return getattr(super().__getattr__("layer"), k)
+
+        def __call__(self, x: Any, *a: Any, **kw: Any) -> Any:  # other models pass more than mask and cache
+            h = self.layer(x, *a, **kw)
             if (v := _M["add"].get(self.i)) is not None:
                 h = h + v
             if _M["grab"] is not None:

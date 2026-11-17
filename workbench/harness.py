@@ -361,7 +361,7 @@ def steer(plan: list[dict[str, Any]], rejected: list[dict[str, str]], budget: in
 
 def steerable(s: settings.Settings) -> bool:
     """The character's steps run on the steer engine (its chat model, or the model when no chat model is set): pick dory or an Unsloth model and nothing is steered."""
-    return llm.is_steer(s.chat_model or s.model_name) and steering.available()
+    return (s.chat_model or s.model_name) == llm.STEER and steering.available()  # another MLX model has no fitted concepts
 
 
 def steer_arms() -> dict[float, tuple[float, float]]:
