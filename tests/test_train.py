@@ -198,3 +198,17 @@ def test_a_pipeline_run_starts_in_planner_mode_and_needs_a_step_to_run(monkeypat
 def test_a_pipeline_run_refuses_the_steer_engine_to_gather_on():
     with pytest.raises(ValueError, match="server engine"):
         train.start({"gather": llm.STEER})
+
+
+def test_a_pipeline_run_can_steer_another_mlx_model(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    models, fits = [], []
+    monkeypatch.setattr(train, "_one_step", lambda: (models.append(settings.get_all().model_name), ("ok", "x"))[1])
+    monkeypatch.setattr(llm, "ensure", lambda s, m, **k: fits.append(m))
+    monkeypatch.setattr(steer, "world_concept", lambda: "w")
+    monkeypatch.setattr(steer, "truth_concept", lambda: "")
+    monkeypatch.setattr(char, "disposition", lambda: {"curiosity": 5.0, "maturity": 0.1})
+    _run_with(monkeypatch, {"gather": "dory", "gather_steps": 1, "steer_steps": 1, "max_steps": 3, "steer_model": "mlx:org/gemma"})
+    assert models == ["dory", "mlx:org/gemma"] and fits == ["mlx:org/gemma"]
+    with pytest.raises(ValueError, match="in-process MLX"):
+        train.start({"gather": "dory", "steer_model": "dory"})

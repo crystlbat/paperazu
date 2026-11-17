@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS train_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, per
 CREATE TABLE IF NOT EXISTS train_snaps (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, step INTEGER NOT NULL, why TEXT NOT NULL,
   data TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')));
 """
-DEFAULTS = {"minutes": 20.0, "lo": 0.0, "hi": 1.0, "max_steps": 60, "drop": 0.5, "rise": 0.05, "gather": "", "gather_steps": 4, "steer_steps": 4}
+DEFAULTS = {"minutes": 20.0, "lo": 0.0, "hi": 1.0, "max_steps": 60, "drop": 0.5, "rise": 0.05, "gather": "", "gather_steps": 4, "steer_steps": 4, "steer_model": llm.STEER}
 IDLE_STOP = 6  # this many steps in a row that do nothing: there is nothing left to learn right now
 FAIL_STOP = 3  # this many failures in a row: stop rather than spin
 RUN: dict[str, Any] = {}  # the run in this process: id, its pause and stop flags, the thread
@@ -149,11 +149,11 @@ def _stage(cfg: dict[str, Any], step: int) -> str:
 def _pipeline_step(cfg: dict[str, Any], step: int) -> tuple[str, str]:
     """One step of the staged run: gather on a server engine, one fit, then steer on the in-process engine, round after round."""
     stage = _stage(cfg, step)
-    model = cfg["gather"] if stage == "gather" else llm.STEER
+    model = cfg["gather"] if stage == "gather" else cfg["steer_model"]
     settings.OVERRIDE.update({k: model for k in ("model_name", "chat_model", "planner_model", "judge_model")})
     try:
         if stage == "fit":
-            llm.ensure(settings.get_all(), llm.STEER)
+            llm.ensure(settings.get_all(), cfg["steer_model"])
             w, t = steer.world_concept(), steer.truth_concept()
             return "ok", f"fit: world {w or '-'} · truth {t or 'not enough facts yet'}"
         outcome, detail = _one_step()
@@ -240,8 +240,10 @@ def start(cfg: dict[str, Any]) -> dict[str, Any]:
         if active():
             raise RuntimeError("A run is already going: pause or stop it first.")
         c = {k: type(v)(cfg.get(k, v)) for k, v in DEFAULTS.items()}
-        if c["gather"] == llm.STEER:
+        if llm.is_steer(c["gather"]):
             raise ValueError("gather on a server engine (dory or an Unsloth model), not the steer engine")
+        if not llm.is_steer(c["steer_model"]):
+            raise ValueError("steer on an in-process MLX model: the steer engine or mlx:<repo>")
         c["gather_steps"], c["steer_steps"] = max(0, c["gather_steps"]), max(0, c["steer_steps"])
         if c["gather"] and c["gather_steps"] + c["steer_steps"] < 1:
             raise ValueError("a pipeline run needs at least one gather or steer step")

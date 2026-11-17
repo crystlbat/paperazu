@@ -21,6 +21,11 @@ def load(name: str = MODEL) -> None:
     _load(name)
 
 
+def current() -> str:
+    """The MLX model steering works on: the loaded one, else the default."""
+    return _M.get("name") or MODEL
+
+
 def loaded() -> bool:
     return bool(_M.get("name"))
 
@@ -85,11 +90,11 @@ def _prompt(tok: Any, text: str | list[dict[str, str]]) -> str:
         return tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
 
 
-def states(texts: list[str], name: str = MODEL) -> np.ndarray:
+def states(texts: list[str], name: str | None = None) -> np.ndarray:
     """Last-token hidden state after every layer, as [layers, texts, width]."""
     import mlx.core as mx
 
-    m = _load(name)
+    m = _load(name or current())
     out = []
     for t in texts:
         m["grab"] = {}
@@ -127,7 +132,7 @@ def rfm(X: np.ndarray, y: np.ndarray, iters: int = 5, ridge: float = 1e-3) -> tu
     return (v if r >= 0 else -v), float(abs(r))
 
 
-def fit(concept: str, pos: list[str], neg: list[str], name: str = MODEL) -> dict[str, Any]:
+def fit(concept: str, pos: list[str], neg: list[str], name: str | None = None) -> dict[str, Any]:
     """Learn the concept from texts that show it (pos) and texts that do not (neg); saved under data/steer/<concept>.npz.
     The per-layer mean state norm is kept too, so eps is a fraction of a layer's own scale."""
     S = states(pos + neg, name)
@@ -141,7 +146,10 @@ def fit(concept: str, pos: list[str], neg: list[str], name: str = MODEL) -> dict
 
 
 def _dir() -> Path:
+    """Concepts are a model's own: the default model's in data/steer, any other's in a folder of its own."""
     p = Path(db.DB_PATH).parent / "steer"
+    if current() != MODEL:
+        p = p / current().replace("/", "--")
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -151,7 +159,7 @@ def vectors(concept: str) -> dict[str, np.ndarray]:
     return {k: z[k] for k in z.files}
 
 
-def generate(text: str | list[dict[str, str]], steer: dict[str, float] | None = None, max_tokens: int = 120, temp: float = 0.0, name: str = MODEL) -> str:
+def generate(text: str | list[dict[str, str]], steer: dict[str, float] | None = None, max_tokens: int = 120, temp: float = 0.0, name: str | None = None) -> str:
     """A reply (to a text, or to chat messages) with each concept in steer added at every layer, eps times that layer's mean state norm
     (negative: away from it). On Qwen3.5-4B: 0.01-0.02 shifts the tone, 0.04 writes in the concept, 0.1 and up breaks into repeated tokens
     (it adds at all 31 layers)."""
@@ -159,7 +167,7 @@ def generate(text: str | list[dict[str, str]], steer: dict[str, float] | None = 
     from mlx_lm import generate as gen
     from mlx_lm.sample_utils import make_sampler
 
-    m = _load(name)
+    m = _load(name or current())
     add: dict[int, Any] = {}
     for concept, eps in (steer or {}).items():
         z = vectors(concept)
@@ -254,7 +262,7 @@ def available() -> bool:
     return importlib.util.find_spec("mlx_lm") is not None
 
 
-def score(texts: list[str], concept: str, name: str = MODEL) -> list[float]:
+def score(texts: list[str], concept: str, name: str | None = None) -> list[float]:
     """How much of the concept each text carries: its projection on the concept, summed over layers weighted by how well each layer fit.
     shortcut: a fixed weighted sum, not the paper's trained predictor over all layers; train one once there are labels to train it on."""
     z = vectors(concept)

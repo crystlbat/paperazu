@@ -19,7 +19,7 @@ from .settings import Settings
 STEER = "steer (mlx)"  # the model name that means the steer engine: Qwen3.5-4B in this process, its hidden states read and steered
 
 
-MLX = "mlx:"  # "mlx:<repo>": any other local MLX model, run in this process like the steer engine but unsteered (its concepts were fitted on Qwen)
+MLX = "mlx:"  # "mlx:<repo>": any other local MLX model, run in this process like the steer engine, with concepts fitted on it
 
 
 def is_steer(model: str) -> bool:
@@ -29,6 +29,11 @@ def is_steer(model: str) -> bool:
 
 def _mlx_name(model: str) -> str:
     return steer.MODEL if model == STEER else model.removeprefix(MLX)
+
+
+def mlx_loaded() -> str:
+    """The model name of the in-process MLX model now loaded (the steer engine if none)."""
+    return STEER if steer.current() == steer.MODEL else MLX + steer.current()
 
 
 def client(s: Settings, timeout: float | None = None, base_url: str | None = None) -> OpenAI:
@@ -501,7 +506,7 @@ def chat(s: Settings, messages: list[dict[str, Any]], *, max_tokens: int | None 
         if steer._M.get("name") != name:
             ensure(s, s.model_name)  # the other engines' models out first
         try:
-            text = _strip_thinking(steer.generate(messages, steer.ON if name == steer.MODEL else {}, name=name, max_tokens=max_tokens or s.max_output_tokens,
+            text = _strip_thinking(steer.generate(messages, steer.ON, name=name, max_tokens=max_tokens or s.max_output_tokens,
                                                   temp=s.temperature if temperature is None else temperature))
         except Exception as e:
             raise ModelError(f"The steer engine failed: {str(e)[:200]}")

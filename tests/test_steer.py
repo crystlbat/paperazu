@@ -60,7 +60,7 @@ def test_only_one_engine_holds_a_model_at_a_time(monkeypatch):
     assert not state["loaded"] and ("POST", "load", {"model_path": "unsloth/Other"}) in calls  # and the steer engine leaves before Unsloth loads
 
 
-def test_another_mlx_model_chats_in_process_unsteered_one_at_a_time(monkeypatch):
+def test_another_mlx_model_chats_and_steers_in_process_one_at_a_time(monkeypatch):
     from workbench import harness, llm, settings
     got, events = {}, []
     monkeypatch.setattr(llm, "_api", lambda *a, **k: {})
@@ -71,8 +71,10 @@ def test_another_mlx_model_chats_in_process_unsteered_one_at_a_time(monkeypatch)
     monkeypatch.setitem(steer.ON, "world-x", 0.02)
     s = settings.get_all().model_copy(update={"model_name": "mlx:org/gemma", "chat_model": "mlx:org/gemma"})
     assert llm.chat(s, [{"role": "user", "content": "hi"}]) == "Ghost here."
-    assert events == ["unload", "org/gemma"] and got == {"on": {}, "name": "org/gemma"}  # Qwen out before gemma loads; Qwen's concepts not applied
-    assert not harness.steerable(s)  # the harness steers only the model its concepts were fitted on
+    assert events == ["unload", "org/gemma"] and got == {"on": {"world-x": 0.02}, "name": "org/gemma"}  # Qwen out before gemma loads
+    monkeypatch.setattr(steer, "available", lambda: True)
+    assert harness.steerable(s) and llm.mlx_loaded() == "mlx:org/gemma"
+    assert steer._dir().name == "org--gemma" and steer._dir().parent.name == "steer"  # gemma's concepts apart from Qwen's
 
 
 def test_the_tap_keeps_a_layers_own_fields_and_call_arguments(monkeypatch):
