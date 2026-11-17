@@ -74,6 +74,11 @@ def get_all() -> Settings:
     return Settings(**{**read_env(), **db.get_settings(), **OVERRIDE})
 
 
+def stored() -> Settings:
+    """What is saved, without a pipeline stage's override: what the Models panel shows and writes back."""
+    return Settings(**{**read_env(), **db.get_settings()})
+
+
 def update(patch: dict[str, Any]) -> Settings:
     """Validate the merged result first; store only the changed keys. Raises ValidationError."""
     new = Settings(**{**get_all().model_dump(), **patch})

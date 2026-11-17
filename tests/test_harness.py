@@ -4,7 +4,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from workbench import char, db, harness, jobs, llm, main, settings, websearch
+from workbench import char, db, harness, jobs, llm, main, settings, steer, websearch
 
 client = TestClient(main.app)
 
@@ -466,3 +466,25 @@ def test_the_truth_concept_steers_beside_the_world_when_the_world_strength_is_ab
     assert steps and all(on == {"world-x": r["steer"]["eps"], "truth-x": steer.TRUTH_EPS} for on in steps)
     assert all(on == {} for who, on in seen if who.startswith(("You plan", "You judge")))
     assert steer.ON == {}
+
+
+def test_get_settings_shows_what_is_stored_not_a_stage_override():
+    settings.update({"chat_model": "dory"})
+    settings.OVERRIDE["chat_model"] = llm.STEER
+    try:
+        assert settings.get_all().chat_model == llm.STEER
+        assert client.get("/settings").json()["chat_model"] == "dory"
+    finally:
+        settings.OVERRIDE.clear()
+
+
+def test_pick_steer_skips_the_truth_fit_when_eps_is_zero(monkeypatch):
+    monkeypatch.setattr(harness, "steerable", lambda s: True)
+    monkeypatch.setattr(harness.llm, "ensure", lambda *a, **k: None)
+    monkeypatch.setattr(steer, "world_concept", lambda: "w")
+    monkeypatch.setattr(steer, "truth_concept", lambda: "t")
+    monkeypatch.setattr(harness, "steer_arms", lambda: {0.0: (9.0, 1.0), 0.01: (1.0, 9.0), 0.02: (1.0, 9.0), 0.03: (1.0, 9.0)})
+    monkeypatch.setattr(harness.random, "betavariate", lambda a, b: a / (a + b))
+    assert harness.pick_steer(settings.get_all()) == ("w", 0.0, "")
+    monkeypatch.setattr(harness, "steer_arms", lambda: {0.0: (1.0, 9.0), 0.01: (1.0, 9.0), 0.02: (1.0, 9.0), 0.03: (9.0, 1.0)})
+    assert harness.pick_steer(settings.get_all()) == ("w", 0.03, "t")

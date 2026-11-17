@@ -1702,7 +1702,7 @@ def test_reflect_with_no_supported_claim_saves_only_the_marker(monkeypatch):
     claims = con.execute("SELECT content FROM char_memories WHERE title = 'Claims: 0'").fetchone()
     con.close()
     assert [(x["source"], x["content"]) for x in rows] == [("sheet", "(nothing supported)")]
-    assert json.loads(claims["content"]) == {"kept": [], "dropped": ["Moriarty commands zeppelins above Atlantis."]}
+    assert json.loads(claims["content"]) == {"kept": [], "dropped": []}  # a failed check judged nothing: no negatives from it
 
 
 def test_claims_keeps_a_copied_sentence_without_asking_the_model(monkeypatch):
@@ -1710,6 +1710,28 @@ def test_claims_keeps_a_copied_sentence_without_asking_the_model(monkeypatch):
         raise AssertionError("the model was called")
     monkeypatch.setattr(jobs, "complete", fail)
     assert char._claims("Holmes lives at Baker Street.", ["- T: Holmes lives at Baker Street in London."]) == (["Holmes lives at Baker Street."], [])
+
+
+def test_the_checker_and_the_gate_are_asked_unsteered_and_steering_comes_back(monkeypatch):
+    from workbench import steer
+    seen = []
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: (seen.append(dict(steer.ON)), "1. UNSUPPORTED")[1])
+    steer.ON["world-x"] = 0.02
+    assert char._claims("Moriarty commands zeppelins above Atlantis.", ["- T: nothing"]) == ([], ["Moriarty commands zeppelins above Atlantis."])
+    assert seen == [{}] and steer.ON == {"world-x": 0.02}
+    char._unsteered("s", "u", 5)
+    assert seen[-1] == {} and steer.ON == {"world-x": 0.02}
+    steer.ON.clear()
+
+
+def test_a_pruned_reflection_is_not_a_web_miss_the_character_asks_you_about(monkeypatch):
+    _reflect_mocks(monkeypatch)
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "Moriarty commands zeppelins above Atlantis.")
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "1. UNSUPPORTED")
+    out = char.rest(True, 1, force=True, only="reflect", target="Fog")
+    assert "no claim held up against its sources for Fog" in json.dumps(out)
+    assert char._want_from() is None
 
 
 def test_report_omits_the_marker_of_a_pruned_reflection(monkeypatch):

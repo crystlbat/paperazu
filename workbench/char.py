@@ -853,6 +853,18 @@ CLAIM_OVERLAP = 0.6
 CLAIM_STOP = set("this that with from their they them have been were which what when where also into than then about after before would could should".split())
 
 
+def _unsteered(system: str, user: str, max_tokens: int) -> str:
+    """A judge on the steer engine stays unsteered: steering must not shape the labels it is trained on."""
+    from . import steer
+
+    saved = dict(steer.ON)
+    steer.ON.clear()
+    try:
+        return _ask(system, user, max_tokens)
+    finally:
+        steer.ON.update(saved)
+
+
 def _claims(note: str, lines: list[str]) -> tuple[list[str], list[str]]:
     """A note is the model's summary, and a summary can add what no snippet says: each sentence is kept only if the snippets back it."""
     sents = [x for x in re.split(r"(?<=[.!?])\s+", note.strip()) if len(x.split()) >= 3]
@@ -860,13 +872,15 @@ def _claims(note: str, lines: list[str]) -> tuple[list[str], list[str]]:
     words = [[w for w in re.findall(r"[a-z]{4,}", x.lower()) if w not in CLAIM_STOP] for x in sents]
     ok = [not w or sum(v in have for v in w) / len(w) >= CLAIM_OVERLAP for w in words]  # exact, no model
     todo = [i for i, o in enumerate(ok) if not o]
+    out = ""
     if todo:  # one call for all the rest; no verdict is unsupported
-        out = _ask("Judge each numbered sentence only against the snippets. Reply one line per sentence: its number, then SUPPORTED or UNSUPPORTED.",
-                   "Snippets:\n" + "\n".join(lines) + "\n\nSentences:\n" + "\n".join(f"{n + 1}. {sents[i]}" for n, i in enumerate(todo)), 60)
+        out = _unsteered("Judge each numbered sentence only against the snippets. Reply one line per sentence: its number, then SUPPORTED or UNSUPPORTED.",
+                         "Snippets:\n" + "\n".join(lines) + "\n\nSentences:\n" + "\n".join(f"{n + 1}. {sents[i]}" for n, i in enumerate(todo)), 60)
         for n, v in re.findall(r"(?im)^\D*?(\d+)\W+(SUPPORTED|UNSUPPORTED)\b", out):
             if v.upper() == "SUPPORTED" and 0 < int(n) <= len(todo):
                 ok[todo[int(n) - 1]] = True
-    return [x for x, o in zip(sents, ok) if o], [x for x, o in zip(sents, ok) if not o]
+    skip = set(todo) if not out else set()  # a failed call judged nothing: those sentences are neither kept nor dropped
+    return [x for x, o in zip(sents, ok) if o], [x for i, (x, o) in enumerate(zip(sents, ok)) if not o and i not in skip]
 
 
 def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
@@ -963,7 +977,7 @@ def _intake(i: int, who: str, topic: str, note: str, lines: list[str]) -> bool |
     elif anchors and not any(a in f"{topic} {note}".lower() for a in anchors):  # exact, no model: a small judge passed notes that only matched their own topic
         ok, why = False, f"not about {who}'s world: it mentions nothing {who} knows"
     else:
-        out = _ask(f"You decide what enters {who}'s memory. Admit the note only if the snippets support it, it answers the topic, and it is about {who}'s own world, "
+        out = _unsteered(f"You decide what enters {who}'s memory. Admit the note only if the snippets support it, it answers the topic, and it is about {who}'s own world, "
                    f"not a fan mod, another game or work, or something else with a similar name. Reply ADMIT or REJECT, then a reason of at most twelve words.",
                    f"Topic: {topic}\nSnippets:\n" + "\n".join(lines)[:1500] + f"\nNote: {note}", 30).strip()
         if not out:
@@ -2108,6 +2122,8 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             r = reflect(on_char, target)
             if r["done"]:
                 return no("nothing left to look up")
+            if r.get("pruned"):
+                return no(f"no claim held up against its sources for {r['topic']}")
             return (r["topic"], r["note"]) if r["note"] else no(f"nothing found on the web for {r['topic']}")
         if kind == "extract":  # the names in the newest note not yet read for names: the graph grows from these
             done_ids = {r["title"].removeprefix("Entities: ") for r in titles("source = 'sheet' AND title LIKE 'Entities: %'")}

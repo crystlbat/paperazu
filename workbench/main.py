@@ -68,7 +68,7 @@ def _fw_of(paper_id: str) -> framework.Framework:
 
 @app.get("/settings")
 def get_settings() -> dict[str, Any]:
-    return settings.get_all().model_dump()
+    return settings.stored().model_dump()
 
 
 @app.patch("/settings")

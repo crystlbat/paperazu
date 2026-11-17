@@ -58,15 +58,26 @@ def test_only_one_engine_holds_a_model_at_a_time(monkeypatch):
     assert not state["loaded"] and ("POST", "load", {"model_path": "unsloth/Other"}) in calls  # and the steer engine leaves before Unsloth loads
 
 
-def _claims(kept, dropped=()):
+def _claims(kept, dropped=(), source="reflection", checked=""):
     from workbench import char
-    char.add_memory("Claims: 1", json.dumps({"kept": list(kept), "dropped": list(dropped)}), source="sheet")
+    i = char.add_memory("Reflection: t", "a note", source=source)["id"] if kept or dropped else 0
+    if checked:
+        char.add_memory(f"Checked: {i}", checked, source="sheet")
+    char.add_memory(f"Claims: {i}", json.dumps({"kept": list(kept), "dropped": list(dropped)}), source="sheet")
 
 
 def test_facts_reads_kept_and_dropped_once_each_oldest_first():
     _claims(["a", "b"], ["x"])
     _claims(["b", "c"], ["x", "y"])
     assert steer.facts() == (["a", "b", "c"], ["x", "y"])
+
+
+def test_facts_count_kept_claims_only_of_notes_still_admitted():
+    _claims(["good"], ["bad"])
+    _claims(["turned away"], source="sheet")  # the intake gate made it a sheet row
+    _claims(["unchecked"], checked="drop")  # the Verifier dropped it
+    _claims(["verified"], checked="keep")
+    assert steer.facts() == (["good", "verified"], ["bad", "turned away", "unchecked"])
 
 
 def test_truth_concept_waits_for_enough_facts_then_names_its_data(monkeypatch, tmp_path):
@@ -79,10 +90,11 @@ def test_truth_concept_waits_for_enough_facts_then_names_its_data(monkeypatch, t
     assert steer.truth_concept() == "" and not fitted  # 11 kept: too few
     _claims(["Gamma rules the sea."])  # the last world word wraps round to the first
     _claims(["The sea is wide."])  # names nothing of its world: no corrupted copy
+    _claims(["The Alpha of the sea."])  # only world words are swapped, never "of" or "the"
     c1 = steer.truth_concept()
     _, pos, neg = fitted[0]
-    assert c1.startswith("truth-") and len(pos) == 13 and len(neg) == 12 + 12  # 12 dropped + 12 copies, not 13
-    assert "Note: Beta holds gate 0." in neg and "Note: Alpha rules the sea." in neg and "Note: Alpha holds gate 0." in pos
+    assert c1.startswith("truth-") and len(pos) == 14 and len(neg) == 12 + 13  # 12 dropped + 13 copies, not 14
+    assert "Note: Beta holds gate 0." in neg and "Note: Alpha rules the sea." in neg and "Note: The Beta of the sea." in neg and "Note: Alpha holds gate 0." in pos
     assert steer.truth_concept() == c1 and len(fitted) == 1  # same data, already fitted
     _claims(["Beta guards the keep."])
     assert steer.truth_concept() != c1 and len(fitted) == 2  # a new fact is a new name, and a refit

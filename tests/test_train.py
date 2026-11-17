@@ -184,6 +184,17 @@ def test_a_pipeline_run_gathers_fits_then_steers_round_after_round(monkeypatch):
     assert settings.OVERRIDE == {} and run_id
 
 
+def test_a_pipeline_run_starts_in_planner_mode_and_needs_a_step_to_run(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    monkeypatch.setattr(train, "_loop", lambda run_id, c: None)
+    monkeypatch.setattr(train, "_sample", lambda *a: None)
+    with pytest.raises(ValueError, match="at least one"):
+        train.start({"gather": "dory", "gather_steps": 0, "steer_steps": -3})
+    assert char.mode() == "curious"
+    train.start({"gather": "dory"})
+    assert char.mode() == "planner"
+
+
 def test_a_pipeline_run_refuses_the_steer_engine_to_gather_on():
     with pytest.raises(ValueError, match="server engine"):
         train.start({"gather": llm.STEER})

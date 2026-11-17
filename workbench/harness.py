@@ -387,7 +387,8 @@ def pick_steer(s: settings.Settings) -> tuple[str, float, str]:
     if not (concept := steering.world_concept()):
         return "", 0.0, ""
     A = steer_arms()
-    return concept, max(steering.LEVELS, key=lambda e: random.betavariate(*A[e])), steering.truth_concept()
+    eps = max(steering.LEVELS, key=lambda e: random.betavariate(*A[e]))
+    return concept, eps, steering.truth_concept() if eps > 0 else ""  # the truth fit is only needed when it will steer
 
 
 def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[str, Any]:
@@ -431,7 +432,7 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         steering.ON.clear()
         if concept:
             steering.ON[concept] = eps  # at 0 too: the steps still run on the steer engine, unsteered, so the arms compare like with like
-            if truth and eps > 0:  # eps 0 stays the unsteered baseline for the arms
+            if truth:  # every eps > 0 arm also carries the truth push; eps 0 stays the unsteered baseline (pick_steer gives no truth then)
                 steering.ON[truth] = steering.TRUTH_EPS
         try:
             executed = execute(plan, s, swaps)
@@ -446,7 +447,7 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
                "executed": [{k: x[k] for k in ("cmd", "outcome", "detail")} for x in executed], "verdicts": verdicts,
                "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps], "self": me, "why": why, "drive": dv, "steer": sv,
                "reason": "; ".join(x for x in ((f"{dv['mode']}: explore {dv['E']} vs check {dv['C']} at τ {dv['tau']}, P explore {dv['p_explore']}" if dv.get("mode") else ""),
-                                              (f"steered toward its world at ε {eps}" if concept else ""), (f"planner: {why}" if why else "")) if x), **({"planner_failed": failed} if failed else {})}
+                                              (f"steered toward its world at ε {eps}" + (f", truth {steering.TRUTH_EPS}" if truth else "") if concept else ""), (f"planner: {why}" if why else "")) if x), **({"planner_failed": failed} if failed else {})}
         char.add_memory(f"Feedback: {n}", json.dumps(verdicts), source="sheet")
         char.add_memory(f"Cycle: {n}", json.dumps(out), source="sheet")
         kept = sum(v["keep"] for v in verdicts)

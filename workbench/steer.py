@@ -205,9 +205,17 @@ def facts() -> tuple[list[str], list[str]]:
     from . import char
 
     con = db.connect()
-    rows = [json.loads(r["content"]) for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Claims: %' AND id > ? ORDER BY id", (char._start(),))]
+    rows = con.execute("SELECT title, content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Claims: %' AND id > ? ORDER BY id", (char._start(),)).fetchall()
+    live = {r["id"] for r in con.execute("SELECT id FROM char_memories WHERE source = 'reflection' AND id > ?", (char._start(),))}  # a rejected note is a sheet row now
+    dead = {r["title"].removeprefix("Checked: ") for r in con.execute("SELECT title FROM char_memories WHERE title LIKE 'Checked: %' AND content = 'drop' AND id > ?", (char._start(),))}
     con.close()
-    return tuple(list(dict.fromkeys(s for r in rows for s in r[k])) for k in ("kept", "dropped"))  # type: ignore[return-value]
+    kept, dropped = [], []
+    for r in rows:
+        c, i = json.loads(r["content"]), r["title"].removeprefix("Claims: ")
+        good = int(i) in live and i not in dead  # claims of a note that was turned away are not facts
+        kept += c["kept"] if good else []
+        dropped += c["dropped"] + ([] if good else c["kept"])
+    return list(dict.fromkeys(kept)), list(dict.fromkeys(dropped))
 
 
 def truth_concept() -> str:
@@ -220,7 +228,7 @@ def truth_concept() -> str:
     words = sorted(char.world_words())
     bad = []
     for f in kept:
-        m = next((m for m in re.finditer(r"[A-Za-z][\w'-]*", f) if m.group() in words), None)
+        m = next((m for m in re.finditer(r"[A-Z][\w'-]*", f) if m.group() in words), None)  # capitalised only: "of" and "the" are never swapped
         if m:  # a fact naming nothing of its world has nothing to swap
             bad.append(f[:m.start()] + words[(words.index(m.group()) + 1) % len(words)] + f[m.end():])
     pos, neg = [f"Note: {s}" for s in kept], [f"Note: {s}" for s in dropped + bad]

@@ -242,10 +242,15 @@ def start(cfg: dict[str, Any]) -> dict[str, Any]:
         c = {k: type(v)(cfg.get(k, v)) for k, v in DEFAULTS.items()}
         if c["gather"] == llm.STEER:
             raise ValueError("gather on a server engine (dory or an Unsloth model), not the steer engine")
+        c["gather_steps"], c["steer_steps"] = max(0, c["gather_steps"]), max(0, c["steer_steps"])
+        if c["gather"] and c["gather_steps"] + c["steer_steps"] < 1:
+            raise ValueError("a pipeline run needs at least one gather or steer step")
         if c["lo"] > c["hi"]:
             c["lo"], c["hi"] = c["hi"], c["lo"]
         c["minutes"], c["max_steps"] = max(0.5, min(c["minutes"], 600)), max(1, min(c["max_steps"], 2000))
         char._since(True, char.get_profile()["name"])
+        if c["gather"]:
+            char.set_mode("planner")  # only the planner's cycles run on the steer engine with steering on
         c["mem0"] = _top()  # what it knew before: every mesh node past this id was made by this run
         con = _con()
         with con:
