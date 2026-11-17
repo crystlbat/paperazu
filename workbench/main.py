@@ -987,6 +987,15 @@ def char_reflect(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     return char.reflect(on_char=bool(body.get("char")))
 
 
+@app.post("/char/steer/fit")
+def char_steer_fit(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Fit the world and truth vectors for each named MLX model in turn (default: the steer engine)."""
+    try:
+        return {"fits": train.fit_all([str(m) for m in body.get("models") or [llm.STEER]])}
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, detail=str(e))
+
+
 @app.post("/char/polish")
 def char_polish(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     """Prune the old notes on one engine (default: the saved model); the next fit refits the truth concept from what is left."""

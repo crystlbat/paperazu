@@ -212,3 +212,17 @@ def test_a_pipeline_run_can_steer_another_mlx_model(monkeypatch):
     assert models == ["dory", "mlx:org/gemma"] and fits == ["mlx:org/gemma"]
     with pytest.raises(ValueError, match="in-process MLX"):
         train.start({"gather": "dory", "steer_model": "dory"})
+
+
+def test_fit_all_fits_each_mlx_model_in_turn_one_in_memory(monkeypatch, tmp_path):
+    import numpy as np
+    loaded = []
+    monkeypatch.setattr(llm, "ensure", lambda s, m, **k: loaded.append(m))
+    monkeypatch.setattr(steer, "world_concept", lambda: f"w-{loaded[-1]}")
+    monkeypatch.setattr(steer, "truth_concept", lambda: "")
+    monkeypatch.setattr(steer, "vectors", lambda c: {"corr": np.array([0.0, 0.4, 0.9])})
+    got = train.fit_all([llm.STEER, "mlx:org/gemma", llm.STEER])
+    assert loaded == [llm.STEER, "mlx:org/gemma"]  # each once, in order
+    assert [(g["model"], g["world"], g["world_fit"], g["truth"]) for g in got] == [(llm.STEER, f"w-{llm.STEER}", 0.9, ""), ("mlx:org/gemma", "w-mlx:org/gemma", 0.9, "")]
+    with pytest.raises(ValueError, match="in-process MLX"):
+        train.fit_all(["dory"])

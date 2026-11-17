@@ -102,6 +102,10 @@ def test_the_tap_keeps_a_layers_own_fields_and_call_arguments(monkeypatch):
     m["grab"] = {}
     out = tap(mx.zeros((1, 2, 3)), None, None, per_layer_input=mx.ones((1, 2, 3)))
     assert tap.layer_type == "sliding_attention" and out.tolist() == [[[1.0] * 3] * 2] and 0 in m["grab"]
+    Layer.__call__ = lambda self, x, mask=None, cache=None: (x, "kv", 7)  # Gemma's layers return (hidden, kv, offset)
+    m["add"] = {0: mx.ones((3,))}
+    h, kv, off = tap(mx.zeros((1, 2, 3)))
+    assert h.tolist() == [[[1.0] * 3] * 2] and (kv, off) == ("kv", 7) and m["grab"][0].tolist() == [[1.0] * 3]
 
 
 def _claims(kept, dropped=(), source="reflection", checked=""):

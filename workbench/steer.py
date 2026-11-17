@@ -68,12 +68,13 @@ def _load(name: str = MODEL) -> dict[str, Any]:
                 return getattr(super().__getattr__("layer"), k)
 
         def __call__(self, x: Any, *a: Any, **kw: Any) -> Any:  # other models pass more than mask and cache
-            h = self.layer(x, *a, **kw)
+            out = self.layer(x, *a, **kw)
+            h = out[0] if isinstance(out, tuple) else out  # Gemma's layers return (hidden, kv, offset)
             if (v := _M["add"].get(self.i)) is not None:
                 h = h + v
             if _M["grab"] is not None:
                 _M["grab"][self.i] = h[:, -1, :]
-            return h
+            return (h, *out[1:]) if isinstance(out, tuple) else h
 
     for i, layer in enumerate(inner.layers):  # pipeline_layers is the same list, so both paths see the taps
         inner.layers[i] = Tap(layer, i)

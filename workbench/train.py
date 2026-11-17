@@ -162,6 +162,24 @@ def _pipeline_step(cfg: dict[str, Any], step: int) -> tuple[str, str]:
         settings.OVERRIDE.clear()
 
 
+def fit_all(models: list[str]) -> list[dict[str, Any]]:
+    """Steering vectors for each MLX model from the same clean facts: one model in memory at a time, each fitted on its own states."""
+    out = []
+    for m in dict.fromkeys(models):
+        if not llm.is_steer(m):
+            raise ValueError(f"{m}: steering vectors need an in-process MLX model (the steer engine or mlx:<repo>)")
+    for m in dict.fromkeys(models):
+        if active():
+            raise RuntimeError("A run is going: fit when it ends, so the two do not swap models under each other.")
+        t0 = time.time()
+        llm.ensure(settings.get_all(), m)
+        w, t = steer.world_concept(), steer.truth_concept()
+        fit = lambda c: round(float(steer.vectors(c)["corr"].max()), 3) if c else None  # its best layer: how cleanly the concept separates
+        out.append({"model": m, "world": w, "world_fit": fit(w), "truth": t, "truth_fit": fit(t), "seconds": round(time.time() - t0)})
+        char._engine("fit", "ok" if w else "skipped", f"{m}: world {w or '-'} ({fit(w)}) · truth {t or 'not enough facts yet'} ({fit(t)})")
+    return out
+
+
 def _loop(run_id: int, cfg: dict[str, Any]) -> None:
     log: list[dict[str, Any]] = []
     steps = idle = fails = 0
