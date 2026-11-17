@@ -124,7 +124,7 @@ def _models(monkeypatch, planner: str, judge: str = "1 KEEP useful\n2 DROP repea
             return judge
         if "Reply KEEP or DROP" in sys_msg:
             return "KEEP"
-        return "Remember the London fog."
+        return "London fog over Baker Street."
 
     monkeypatch.setattr(jobs, "complete", complete)
     return calls

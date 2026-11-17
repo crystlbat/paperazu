@@ -652,7 +652,7 @@ def speak(text: str) -> bytes:
 def mind() -> dict[str, Any]:
     """Everything the character holds, newest first, and the prompts it last sent the model."""
     con = db.connect()
-    rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? AND NOT (source = 'sheet' AND (title LIKE 'Resting: %' OR title LIKE 'Entities: %' OR title LIKE 'Kept: %' OR title LIKE 'System: _' OR title = 'Mode' OR title LIKE 'Guess: %' OR title LIKE 'Checked: %' OR title LIKE 'Ground: %' OR title LIKE 'Sources: %' OR title LIKE 'Gate: %' OR title LIKE 'Dial: %' OR title IN ('Tick', 'Reply', 'Baked') OR title LIKE 'Fail: %' OR title LIKE 'Correction: %' OR title LIKE 'Reviewed: %' OR title LIKE 'Asking: %' OR title LIKE 'Answered: %' OR title LIKE 'Run: %' OR title LIKE 'Stuck: %')) ORDER BY id DESC", (_start(),)).fetchall()
+    rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? AND NOT (source = 'sheet' AND (title LIKE 'Resting: %' OR title LIKE 'Entities: %' OR title LIKE 'Kept: %' OR title LIKE 'System: _' OR title = 'Mode' OR title LIKE 'Guess: %' OR title LIKE 'Checked: %' OR title LIKE 'Ground: %' OR title LIKE 'Claims: %' OR title LIKE 'Sources: %' OR title LIKE 'Gate: %' OR title LIKE 'Dial: %' OR title IN ('Tick', 'Reply', 'Baked') OR title LIKE 'Fail: %' OR title LIKE 'Correction: %' OR title LIKE 'Reviewed: %' OR title LIKE 'Asking: %' OR title LIKE 'Answered: %' OR title LIKE 'Run: %' OR title LIKE 'Stuck: %')) ORDER BY id DESC", (_start(),)).fetchall()
     con.close()
     p = get_profile()
     return {"who": p["name"], "persona": p["persona"], "memories": [dict(r) for r in rows], "open": _open_questions(_start()), "prompts": list(PROMPTS)[::-1]}
@@ -849,6 +849,26 @@ def _speculated(q: str) -> str:
 SPECULATE = re.compile(r"(?is)guess:\s*(.+?)\s*question:\s*(.+)")
 
 
+CLAIM_OVERLAP = 0.6
+CLAIM_STOP = set("this that with from their they them have been were which what when where also into than then about after before would could should".split())
+
+
+def _claims(note: str, lines: list[str]) -> tuple[list[str], list[str]]:
+    """A note is the model's summary, and a summary can add what no snippet says: each sentence is kept only if the snippets back it."""
+    sents = [x for x in re.split(r"(?<=[.!?])\s+", note.strip()) if len(x.split()) >= 3]
+    have = set(re.findall(r"[a-z]{4,}", " ".join(lines).lower()))
+    words = [[w for w in re.findall(r"[a-z]{4,}", x.lower()) if w not in CLAIM_STOP] for x in sents]
+    ok = [not w or sum(v in have for v in w) / len(w) >= CLAIM_OVERLAP for w in words]  # exact, no model
+    todo = [i for i, o in enumerate(ok) if not o]
+    if todo:  # one call for all the rest; no verdict is unsupported
+        out = _ask("Judge each numbered sentence only against the snippets. Reply one line per sentence: its number, then SUPPORTED or UNSUPPORTED.",
+                   "Snippets:\n" + "\n".join(lines) + "\n\nSentences:\n" + "\n".join(f"{n + 1}. {sents[i]}" for n, i in enumerate(todo)), 60)
+        for n, v in re.findall(r"(?im)^\D*?(\d+)\W+(SUPPORTED|UNSUPPORTED)\b", out):
+            if v.upper() == "SUPPORTED" and 0 < int(n) <= len(todo):
+                ok[todo[int(n) - 1]] = True
+    return [x for x, o in zip(sents, ok) if o], [x for x, o in zip(sents, ok) if not o]
+
+
 def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
     """One look-up while asleep: the first topic not yet reflected on (or the one named), searched, noted, saved."""
     if on_char:
@@ -903,7 +923,15 @@ def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
     if on_char and _start() != start0:  # the persona changed while this step waited on the model: its find belongs to no one here
         _engine("reflect", "skipped", f"{topic}: dropped, the persona changed while it was being written")
         return {"done": False, "topic": topic, "note": "", "left": len(todo) - 1, "stale": True}
+    kept, dropped = _claims(note, lines)
+    if not kept:  # the same shape as "(nothing found)": a marker, and the dropped claims stay as negatives
+        add_memory(f"Reflection: {topic}"[:80], "(nothing supported)", source="sheet")
+        add_memory("Claims: 0", json.dumps({"kept": [], "dropped": dropped}), source="sheet")
+        _engine("reflect", "skipped", f"{topic}: no claim in it held up against its sources")
+        return {"done": False, "topic": topic, "note": "", "left": len(todo) - 1, "pruned": True}
+    note = " ".join(kept)
     saved = add_memory(f"Reflection: {topic}"[:80], note, source="reflection")
+    add_memory(f"Claims: {saved['id']}", json.dumps({"kept": kept, "dropped": dropped}), source="sheet")
     # grounding, for the Verifier: the share of the note's names that its sources also say. A name from nowhere is the model making it up.
     named = set(re.findall(r"(?<=[a-z,;] )[A-Z][a-z]{2,}", note))  # capitals inside a sentence, so not its first word
     add_memory(f"Ground: {saved['id']}", f"{sum(n in ' '.join(lines) for n in named) / len(named) if named else 1:.2f}", source="sheet")

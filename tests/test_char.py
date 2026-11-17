@@ -249,7 +249,7 @@ def _reflect_mocks(monkeypatch, found=True, model_ok=True):
 
     def search(s: Any, q: str) -> dict[str, Any]:
         topics.append(q)
-        return {"results": [{"title": "T1", "url": "u", "snippet": "S1"}, {"title": "T2", "url": "u", "snippet": "S2"}] if found else []}
+        return {"results": [{"title": "T1", "url": "u", "snippet": "S1 remember"}, {"title": "T2", "url": "u", "snippet": "S2"}] if found else []}
 
     def complete(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
         if not model_ok:
@@ -275,7 +275,7 @@ def test_reflect_walks_the_topics_then_is_done(monkeypatch):
 def test_reflect_falls_back_to_the_snippets_when_the_model_fails(monkeypatch):
     _reflect_mocks(monkeypatch, model_ok=False)
     r = char.reflect(on_char=True)
-    assert r["note"] == "- T1: S1 - T2: S2"
+    assert r["note"] == "- T1: S1 remember - T2: S2"
     assert char.reflect(on_char=True)["topic"] != r["topic"]  # the first one was saved
 
 
@@ -848,6 +848,7 @@ def test_a_note_naming_what_its_sources_do_not_is_rejected_without_the_model(mon
     _rest_mocks(monkeypatch)
     char.update_profile("Sherlock", "a detective", [], "#fff")
     monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "It was made by Jo Carrington in Gotham.")  # neither name is in the snippets
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "1. SUPPORTED")  # the claim checker lets it through; the gate is under test
     r = char.reflect(True)  # the intake gate reads the grounding exactly, before the model is asked
     assert r["admitted"] is False
     assert next(n for n in char.report(True, "m")["notes"] if n["topic"] == r["topic"])["gate"] == ["reject", "names things its sources do not say"]
@@ -1675,3 +1676,37 @@ def test_chat_from_before_the_first_rest_belongs_to_the_character_and_a_new_one_
         con.execute("INSERT INTO char_turns (role, text, created_at) VALUES ('user', 'hi Watson', '2999-01-01 00:00:00')")
     con.close()
     assert [t["text"] for t in char._chat_since()] == ["hi Watson"]
+
+
+def test_reflect_prunes_a_note_claim_by_claim_and_records_what_was_dropped(monkeypatch):
+    from workbench import websearch
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    monkeypatch.setattr(websearch, "search", lambda s, q: {"results": [{"title": "T", "url": "u", "snippet": "Holmes lives at Baker Street in London with Watson."}]})
+    note = "Holmes lives at Baker Street in London. Moriarty commands zeppelins above Atlantis."
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: note)
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "1. UNSUPPORTED")
+    r = char.reflect(on_char=True, topic="Baker Street")
+    assert r["note"] == "Holmes lives at Baker Street in London."
+    con = db.connect(); row = con.execute("SELECT content FROM char_memories WHERE title LIKE 'Claims: %' ORDER BY id DESC").fetchone(); con.close()
+    assert json.loads(row["content"]) == {"kept": ["Holmes lives at Baker Street in London."], "dropped": ["Moriarty commands zeppelins above Atlantis."]}
+
+
+def test_reflect_with_no_supported_claim_saves_only_the_marker(monkeypatch):
+    _reflect_mocks(monkeypatch)
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "Moriarty commands zeppelins above Atlantis.")
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "")  # no verdict is unsupported
+    r = char.reflect(on_char=True, topic="Fog")
+    assert r["pruned"] is True and r["note"] == ""
+    con = db.connect()
+    rows = con.execute("SELECT source, content FROM char_memories WHERE title = ?", ("Reflection: Fog",)).fetchall()
+    claims = con.execute("SELECT content FROM char_memories WHERE title = 'Claims: 0'").fetchone()
+    con.close()
+    assert [(x["source"], x["content"]) for x in rows] == [("sheet", "(nothing supported)")]
+    assert json.loads(claims["content"]) == {"kept": [], "dropped": ["Moriarty commands zeppelins above Atlantis."]}
+
+
+def test_claims_keeps_a_copied_sentence_without_asking_the_model(monkeypatch):
+    def fail(*a: Any, **kw: Any) -> str:
+        raise AssertionError("the model was called")
+    monkeypatch.setattr(jobs, "complete", fail)
+    assert char._claims("Holmes lives at Baker Street.", ["- T: Holmes lives at Baker Street in London."]) == (["Holmes lives at Baker Street."], [])
