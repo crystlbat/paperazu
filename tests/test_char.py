@@ -1710,3 +1710,12 @@ def test_claims_keeps_a_copied_sentence_without_asking_the_model(monkeypatch):
         raise AssertionError("the model was called")
     monkeypatch.setattr(jobs, "complete", fail)
     assert char._claims("Holmes lives at Baker Street.", ["- T: Holmes lives at Baker Street in London."]) == (["Holmes lives at Baker Street."], [])
+
+
+def test_report_omits_the_marker_of_a_pruned_reflection(monkeypatch):
+    _reflect_mocks(monkeypatch)
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "Moriarty commands zeppelins above Atlantis.")
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "")
+    assert char.reflect(on_char=True, topic="Fog")["pruned"] is True
+    assert char.report(True, "m")["notes"] == []

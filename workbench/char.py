@@ -1964,7 +1964,7 @@ def report(up: bool, label: str) -> dict[str, Any]:
 def _notes(start: int) -> list[dict[str, Any]]:
     """Every note the live persona wrote, with what the Verifier and the exact checks said about it."""
     con = db.connect()
-    rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? AND title LIKE 'Reflection: %' AND NOT (source = 'sheet' AND content = '(nothing found)') ORDER BY id DESC", (start,)).fetchall()
+    rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? AND title LIKE 'Reflection: %' AND NOT (source = 'sheet' AND content IN ('(nothing found)', '(nothing supported)')) ORDER BY id DESC", (start,)).fetchall()
     side = {r["title"]: r["content"] for r in con.execute("SELECT title, content FROM char_memories WHERE id > ? AND source = 'sheet' AND (title LIKE 'Checked: %' OR title LIKE 'Ground: %' OR title LIKE 'Guess: %' OR title LIKE 'Sources: %' OR title LIKE 'Gate: %')", (start,))}
     con.close()
     out = []
