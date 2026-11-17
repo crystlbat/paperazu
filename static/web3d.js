@@ -327,7 +327,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const state = s.on === false ? ["off", "switched off"] : blocked ? ["blocked", blocked] : failed && last?.outcome === "failed" ? ["failed", last.detail] : ok && last?.outcome === "ok" ? ["working", last.detail] : last ? ["waiting", last.detail] : ["idle", "has not run yet"];
     return { ok, runs, state }; };
   let fPrev = {}; // the values the last poll showed, so each term says which way it moved
-  const formulaBox = (D, G = {}, V = {}) => { const T = D.terms || {}, F = D.frontier || {}, O = D.optim || {}, S = D.score || {}, P = D.compression || {};
+  const formulaBox = (D, G = {}, V = {}, ST = {}) => { const T = D.terms || {}, F = D.frontier || {}, O = D.optim || {}, S = D.score || {}, P = D.compression || {}, SL = ST.last || {};
     const v = (k, x, tip) => { const p = fPrev[k], dir = typeof p?.x === "number" && typeof x === "number" && r2(p.x) !== r2(x) ? (x > p.x ? "↑" : "↓") : p?.dir || ""; fPrev[k] = { x, dir }; // the arrow stays until it moves again
       return h("span", { class: "sw-fv", title: tip, "data-dir": dir === "↑" ? "up" : dir === "↓" ? "down" : "" }, h("b", {}, x == null ? "–" : r2(x)), h("small", {}, `${k}${dir}`)); };
     const row = (k, x, tip, note) => h("li", {}, v(k, x, tip), h("p", {}, note));
@@ -338,6 +338,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
         v("tau", D.tau, "share of each name's questions still unanswered"), " × ", v("dnE", D.dnE, "names met since the last consolidation"), " × ", v("damper", T.damper, "e^(−nAE/nE) from the last consolidation: 1 − maturity"),
         " + ", v("D", F.D, "how many layers deep the mesh goes (max 4)"), " × ", v("F", F.F, "share of the mesh still open"), " + ", v("phase", T.phase, "how far compression fell since the last consolidation: a new chapter"), " ) + ", v("momentum", D.momentum, "the push your ups gave")),
       h("p", { class: "sw-fx" }, v("P explore", V.p_explore, "softmax of the two drives"), " = σ((", v("E", V.E, "explore drive: curiosity / (1 + curiosity)"), " − ", v("C", V.C, "check drive: open share × max(surprise, 1 − judge trust)"), ") / ", v("τ", V.tau, "temperature, cools as maturity rises"), ")  ", v("DF", V.DF, `driving force; under 0.05 it rests`), v("judge", V.judge?.value, `how often the judge agreed with an exact check it was shown blind (${n0(V.judge?.probes)} probes)`), v("S", P.S, `compression of its ideas: ${n0(P.K)} folded, spread ${r2(P.H)}`)),
+      SL.concept ? h("p", { class: "sw-fx" }, "steer: h + ", v("ε", SL.eps, "how hard the controller pushed its steps toward its world this cycle, a fraction of each layer's scale"), " · ‖h‖ · v_world  ", v("ΔJ", SL.dJ, "what that cycle did to J: the strengths that raise it get picked more"),
+        h("small", { class: "sw-dmut" }, "  arms ", Object.entries(ST.arms || {}).map(([e, [a, b]]) => `ε ${e}: ${r2(a / (a + b))}`).join(" · "))) : "",
       h("p", { class: "sw-dmut" }, `names term ${r2(T.names)} · frontier term ${r2(T.frontier)} · maturity ${r2(D.maturity)}`),
       h("ul", { class: "sw-optim" },
         row("momentum", D.momentum, "eased each step that did something", `× ${O.ease ?? "–"} per step that did something, to 0 under 0.05`),
@@ -718,7 +720,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
             feels(d.life), wishes(d.life),
             youBox(d),
             h("section", {}, h("h4", {}, "Curiosity"), h("p", { class: "sw-big" }, h("strong", {}, r2(D.curiosity)), h("span", {}, `maturity ${r2(D.maturity)}`)),
-              formulaBox(D, d.gains, d.drive), lineChart(d.series || [])))); },
+              formulaBox(D, d.gains, d.drive, d.steer), lineChart(d.series || [])))); },
       notes: () => split([h("p", { class: "sw-dmut sw-lhead" }, `${notes.length} notes · ${n0(L.verified)} let in · ${n0(L.rejected)} turned away`), h("ol", { class: "sw-dl sw-dnotes" }, ...notes.map(noteRow))], inspect()),
       activity: () => { const steps = trace.filter((t) => (tFilter === "all" || t.outcome === tFilter) && (!tEngine || t.kind === tEngine) && (rSys == null || t.system === rSys)), eng = [...new Set(trace.map((t) => t.kind))].sort();
         const btn = (k, t) => h("button", { type: "button", "aria-pressed": String(tFilter === k), onclick: () => { tFilter = k; paintReport(); } }, t);

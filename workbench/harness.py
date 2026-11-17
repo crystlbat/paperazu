@@ -7,6 +7,7 @@ import threading
 from typing import Any
 
 from . import char, db, jobs, llm, settings
+from . import steer as steering  # harness.steer is the drive
 
 DOES = {"plan": "write a short research plan (three topics) from what it has read",
         "bake": "consolidate: freeze the answer counts maturity is read from",
@@ -358,6 +359,37 @@ def steer(plan: list[dict[str, Any]], rejected: list[dict[str, str]], budget: in
     return plan, rejected, {**dv, "mode": mode}
 
 
+def steerable(s: settings.Settings) -> bool:
+    """The character's steps run on the steer engine (its chat model, or the model when no chat model is set): pick dory or an Unsloth model and nothing is steered."""
+    return llm.is_steer(s.chat_model or s.model_name) and steering.available()
+
+
+def steer_arms() -> dict[float, tuple[float, float]]:
+    """A Beta(a, b) per steering strength from the cycles it was used in: it pays when the cycle raised J. Discounted like the step arms."""
+    con = db.connect()
+    rows = [json.loads(r["content"]) for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Steer' AND id > ? ORDER BY id DESC LIMIT 100", (char._start(),))]
+    con.close()
+    out = {}
+    for e in steering.LEVELS:
+        a = b = 1.0
+        for i, x in enumerate(r["dJ"] for r in rows if r["eps"] == e):
+            w = char.DISCOUNT ** i
+            a, b = (a + w, b) if x > 1e-4 else (a, b + w) if x < -1e-4 else (a, b + char.STILL * w)
+        out[e] = (round(a, 3), round(b, 3))
+    return out
+
+
+def pick_steer(s: settings.Settings) -> tuple[str, float]:
+    """The controller's steering for this cycle: its world's concept, at the strength one Thompson draw picks."""
+    if not steerable(s):
+        return "", 0.0
+    llm.ensure(s, llm.STEER)  # before the fit reads its hidden states: one model in memory at a time
+    if not (concept := steering.world_concept()):
+        return "", 0.0
+    A = steer_arms()
+    return concept, max(steering.LEVELS, key=lambda e: random.betavariate(*A[e]))
+
+
 def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[str, Any]:
     """One full cycle: planner → controller → executor → Verifier. Persisted as "Cycle: n" and "Feedback: n" sheet rows.
     wait: seconds to wait for a cycle already running (a training run waits its turn; a click does not)."""
@@ -394,12 +426,25 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
         me = notice(n, plan, rejected, force)
         if me.get("try"):  # its own way out goes in, in place of the last pick if the plan is full
             plan = plan[:budget - 1] + [{"name": me["try"], "arg": "", "role": COMMANDS[me["try"]]["role"]}]
-        executed = execute(plan, s, swaps)
+        concept, eps = pick_steer(s)
+        j0 = char.disposition()["score"]["J"] if concept else 0.0
+        steering.ON.clear()
+        if concept:
+            steering.ON[concept] = eps  # at 0 too: the steps still run on the steer engine, unsteered, so the arms compare like with like
+        try:
+            executed = execute(plan, s, swaps)
+        finally:
+            steering.ON.clear()  # the judge and the next planner call are never steered
         verdicts = [] if CANCEL.is_set() else verify(executed, s, swaps)
+        sv = {}
+        if concept:
+            sv = {"concept": concept, "eps": eps, "dJ": round(char.disposition()["score"]["J"] - j0, 4)}
+            char.add_memory("Steer", json.dumps(sv), source="sheet")
         out = {"cycle": n, "plan_text": text, "proposed": [_text(c) for c in proposed], "rejected": rejected,
                "executed": [{k: x[k] for k in ("cmd", "outcome", "detail")} for x in executed], "verdicts": verdicts,
-               "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps], "self": me, "why": why, "drive": dv,
-               "reason": "; ".join(x for x in ((f"{dv['mode']}: explore {dv['E']} vs check {dv['C']} at τ {dv['tau']}, P explore {dv['p_explore']}" if dv.get("mode") else ""), (f"planner: {why}" if why else "")) if x), **({"planner_failed": failed} if failed else {})}
+               "swaps": [{k: w[k] for k in ("from", "to", "seconds")} for w in swaps], "self": me, "why": why, "drive": dv, "steer": sv,
+               "reason": "; ".join(x for x in ((f"{dv['mode']}: explore {dv['E']} vs check {dv['C']} at τ {dv['tau']}, P explore {dv['p_explore']}" if dv.get("mode") else ""),
+                                              (f"steered toward its world at ε {eps}" if concept else ""), (f"planner: {why}" if why else "")) if x), **({"planner_failed": failed} if failed else {})}
         char.add_memory(f"Feedback: {n}", json.dumps(verdicts), source="sheet")
         char.add_memory(f"Cycle: {n}", json.dumps(out), source="sheet")
         kept = sum(v["keep"] for v in verdicts)

@@ -1154,7 +1154,7 @@ def test_report_route_shape_counts_and_persona_scoping(monkeypatch):
     con.close()
     char.add_memory("Baked", '{"nE": 0, "nAE": 0}', source="sheet")
     r = client.get("/char/report").json()
-    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "drive", "series", "gains", "arms", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train", "letter", "now", "model_name", "models"}
+    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "drive", "series", "gains", "arms", "steer", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train", "letter", "now", "model_name", "models"}
     assert r["who"] == "Sherlock" and r["since"] and r["model"] == {"up": True, "label": "Model ready"}
     t = r["totals"]
     assert t["steps"] == t["ok"] + t["skipped"] + t["failed"] == len(r["trace"]) and t["ok"] == 3 and t["skipped"] >= 2  # reflect, the intake gate, and one more

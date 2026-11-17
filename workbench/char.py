@@ -1212,6 +1212,15 @@ def arms(last: int = 200) -> dict[str, tuple[float, float]]:
     return out
 
 
+def _steer_state() -> dict[str, Any]:
+    """The last cycle's steering (concept, strength, what it did to J) and each strength's Beta, for the formula panel."""
+    from . import harness  # harness imports char
+    con = db.connect()
+    r = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Steer' AND id > ? ORDER BY id DESC LIMIT 1", (_start(),)).fetchone()
+    con.close()
+    return {"last": json.loads(r["content"]) if r else {}, "arms": {str(k): v for k, v in harness.steer_arms().items()}}
+
+
 def judge_trust() -> dict[str, float]:
     """How often the judge model agreed with an exact check it was shown blind (Noisy but Valid: estimate the judge from items whose answer is known).
     A Beta mean, newest first and discounted; starts at a half."""
@@ -1921,7 +1930,7 @@ def report(up: bool, label: str) -> dict[str, Any]:
     return {"notes": notes, "who": get_profile()["name"], "you": you(), "life": life(), "since": mark["created_at"] if mark else "", "model": {"up": up, "label": label},
             "totals": {"steps": len(runs), "ok": outcomes.count("ok"), "skipped": outcomes.count("skipped"), "failed": outcomes.count("failed"), "cycles": cycles,
                        "replies": sum(t["role"] == "dot" and not t["text"].startswith(NOT_A_REPLY) for t in _chat_since())},
-            "corrections": corr, "learned": learned, "disposition": (dsp := disposition()), "drive": drive(dsp), "series": monitor()["series"], "gains": gains(), "arms": arms(), "harness": harness, "trace": runs[:300]}
+            "corrections": corr, "learned": learned, "disposition": (dsp := disposition()), "drive": drive(dsp), "series": monitor()["series"], "gains": gains(), "arms": arms(), "steer": _steer_state(), "harness": harness, "trace": runs[:300]}
 
 
 def _notes(start: int) -> list[dict[str, Any]]:

@@ -400,3 +400,41 @@ def test_a_starved_step_is_not_one_that_would_be_turned_away():
         char.add_memory("Run: reflect", '{"outcome": "ok"}', source="sheet")
     assert "review" in harness.unavailable()
     assert harness.starved([{"name": k, "arg": ""} for k in harness.COMMANDS if k != "review"]) == ""  # run 20 put a stale review up front every cycle
+
+
+def test_the_steer_engine_steers_the_characters_steps_and_nothing_else(monkeypatch):
+    from workbench import steer
+    note = char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")["id"]
+    seen: list[tuple[str, dict[str, float]]] = []
+    calls = _models(monkeypatch, f"check {note}")
+    inner = jobs.complete
+
+    def complete(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
+        seen.append((messages[0]["content"][:20], dict(steer.ON)))
+        return inner(s, messages, **kw)
+
+    monkeypatch.setattr(jobs, "complete", complete)
+    monkeypatch.setattr(steer, "available", lambda: True)
+    monkeypatch.setattr(steer, "world_concept", lambda: "world-x")
+    monkeypatch.setattr(llm, "ensure", lambda s, m, **k: None)
+    monkeypatch.setattr(harness.random, "random", lambda: 0.5)
+    monkeypatch.setattr(harness.random, "betavariate", lambda a, b: a / (a + b))
+    settings.update({"chat_model": llm.STEER})
+    r = harness.cycle()
+    assert r["steer"]["concept"] == "world-x" and r["steer"]["eps"] in steer.LEVELS and "steered toward its world" in r["reason"]
+    planner = [on for who, on in seen if who.startswith("You plan")]
+    judge = [on for who, on in seen if who.startswith("You judge")]
+    steps = [on for who, on in seen if not who.startswith(("You plan", "You judge"))]
+    assert planner == [{}] and all(on == {} for on in judge)  # the planner and the judge are never steered
+    assert steps and all(on == {"world-x": r["steer"]["eps"]} for on in steps)  # the character's own step is
+    assert steer.ON == {} and _sheet("Steer")
+    settings.update({"chat_model": "dory"})  # pick another engine and nothing is steered
+    assert harness.pick_steer(settings.get_all()) == ("", 0.0)
+
+
+def test_steer_arms_favour_the_strength_that_raised_j():
+    for dj in (0.05, 0.04, 0.03):
+        char.add_memory("Steer", json.dumps({"concept": "w", "eps": 0.04, "dJ": dj}), source="sheet")
+    char.add_memory("Steer", json.dumps({"concept": "w", "eps": 0.0, "dJ": -0.02}), source="sheet")
+    A = harness.steer_arms()
+    assert A[0.04][0] > A[0.04][1] and A[0.0][1] > A[0.0][0] and A[0.02] == (1.0, 1.0)

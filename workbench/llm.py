@@ -13,8 +13,14 @@ from typing import Any
 
 from openai import APIConnectionError, APIError, APIStatusError, AuthenticationError, OpenAI
 
-from . import context
+from . import context, steer
 from .settings import Settings
+
+STEER = "steer (mlx)"  # the model name that means the steer engine: Qwen3.5-4B in this process, its hidden states read and steered
+
+
+def is_steer(model: str) -> bool:
+    return model == STEER
 
 
 def client(s: Settings, timeout: float | None = None, base_url: str | None = None) -> OpenAI:
@@ -23,6 +29,15 @@ def client(s: Settings, timeout: float | None = None, base_url: str | None = Non
 
 
 def model_status(s: Settings) -> dict[str, Any]:
+    got = _model_status(s)
+    if steer.available():  # always on offer: it needs no server
+        got["models"] = [*got["models"], STEER]
+        if is_steer(s.model_name):
+            got.update(status="ready", label="steer engine" + (" loaded" if steer.loaded() else " (loads when needed)"))
+    return got
+
+
+def _model_status(s: Settings) -> dict[str, Any]:
     if is_dory(s, s.model_name):  # the dory engine starts on first use, so it counts as ready while Unsloth or its command is there
         try:
             models = [m.id for m in client(s, timeout=5).models.list()]
@@ -182,8 +197,8 @@ def _to_dory(s: Settings, timeout: float, poll: float) -> dict[str, Any] | None:
 
 def _engine_for(s: Settings, model: str) -> None:
     """Before a call: swap engines only when the call crosses them (dory wanted and not up, or an Unsloth model while our dory runs)."""
-    if (is_dory(s, model) and not (_dory_ours() or _up(s.dory_url, 1))) or (not is_dory(s, model) and _dory_ours()):
-        ensure(s, model)
+    if (is_dory(s, model) and not (_dory_ours() or _up(s.dory_url, 1))) or (not is_dory(s, model) and _dory_ours()) or steer.loaded():
+        ensure(s, model)  # the steer engine loaded and a server model wanted: it leaves first
 
 
 def ensure(s: Settings, model: str, timeout: float = 600, poll: float = 1.0) -> dict[str, Any] | None:
@@ -194,6 +209,32 @@ def ensure(s: Settings, model: str, timeout: float = 600, poll: float = 1.0) -> 
     if not model:
         return None
     with _swap_lock:
+        if is_steer(model):  # one model in memory at a time: dory stopped and Unsloth's model unloaded before this one loads
+            if steer.loaded():
+                return None
+            t0, cur = time.time(), ""
+            SWAP.update(busy=True, **{"from": "unsloth"}, to=STEER, phase="unloading", fraction=0.0, started=time.strftime("%H:%M:%S"))
+            if stop_dory():
+                cur = DORY
+            try:
+                st = _api(s, "GET", "status")
+                if isinstance(st, dict) and (cur := st.get("active_model") or cur) and cur != DORY:
+                    _api(s, "POST", "unload", {"model_path": cur}, timeout=timeout)
+            except Exception:
+                pass  # Unsloth down: nothing of it to unload
+            SWAP["phase"] = "loading"
+            try:
+                steer.load()
+                ok, why = True, ""
+            except Exception as e:
+                ok, why = False, f" ({str(e)[:120]})"
+            secs = round(time.time() - t0, 1)
+            SWAP.update(busy=False, phase="ready" if ok else "failed", fraction=1.0 if ok else 0.0)
+            _picked.clear()
+            char._engine("model", "ok" if ok else "failed", f"{cur or 'nothing'} → steer engine in {secs:.0f}s{why}")
+            return {"from": cur, "to": STEER, "seconds": secs, "ok": ok}
+        if steer.unload():  # leaving the steer engine: its model out of memory before another loads
+            char._engine("model", "ok", "steer engine unloaded")
         if is_dory(s, model):
             return _to_dory(s, timeout, poll)
         if stop_dory():  # the two engines do not share the memory: dory leaves before Unsloth loads
@@ -445,6 +486,17 @@ def chat(s: Settings, messages: list[dict[str, Any]], *, max_tokens: int | None 
     A request longer than the window is cut in its longest message first. When the server says its loaded
     window is smaller than the setting, that window is remembered and (with `trim`) the request is cut and sent
     once more. Raises ModelError."""
+    if is_steer(s.model_name):  # in-process, with the concept vectors the harness set for this step (none outside its executor)
+        if not steer.loaded():
+            ensure(s, STEER)  # the other engines' models out first
+        try:
+            text = _strip_thinking(steer.generate(messages, steer.ON, max_tokens=max_tokens or s.max_output_tokens,
+                                                  temp=s.temperature if temperature is None else temperature))
+        except Exception as e:
+            raise ModelError(f"The steer engine failed: {str(e)[:200]}")
+        if not text:
+            raise ModelError(ROOM if text is None else "The model gave an empty answer. Try again.")
+        return text
     out = reply_tokens(s, max_tokens)
     if trim:
         learned = _windows.get((s.base_url, s.model_name))

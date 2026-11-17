@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from . import db, library, llm, marks, settings, websearch
+from . import db, library, llm, marks, settings, steer, websearch
 from .settings import Settings
 
 # One call carries about 12_000 characters of the paper. A call that reads N papers gives each 1/N.
@@ -635,7 +635,10 @@ def _mark(paper_id: str, page: int | None, quote: str) -> dict[str, Any] | None:
 
 
 def complete(s: Settings, messages: list[dict[str, str]], **kw: Any) -> str:
-    """One model call. Tests replace this. Raises llm.ModelError (a RuntimeError)."""
+    """One model call. Tests replace this. Raises llm.ModelError (a RuntimeError).
+    While the harness steers the character's steps, they run on the steer engine whatever model the call's settings name."""
+    if steer.ON:
+        s = s.model_copy(update={"model_name": llm.STEER})
     return llm.chat(s, messages, **kw)
 
 
