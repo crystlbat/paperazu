@@ -4,10 +4,10 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 
-from harness_char import char, chibi, harness, space, train, verse
+from harness_char import browse, char, chibi, harness, space, train, verse
 from shared import llm, settings
 
 router = APIRouter()
@@ -253,6 +253,62 @@ def char_cycles(limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
     return {"cycles": harness.cycles(limit)}
 
 
+@router.get("/char/browse")
+def char_browse() -> dict[str, Any]:
+    """The browse in hand: task, intent, plan, each step as it happens, the page it is on, and its opinion."""
+    return browse.status()
+
+
+@router.get("/char/browse/live")
+def char_browse_live() -> StreamingResponse:
+    """The browser's live picture, as MJPEG for an <img> on Dot's screen."""
+    return StreamingResponse(browse.frames(), media_type="multipart/x-mixed-replace; boundary=frame", headers={"Cache-Control": "no-store"})
+
+
+@router.get("/char/browse/recipes")
+def char_recipes() -> dict[str, Any]:
+    """How it knows to do things on each site: learned from browses that worked, or taught by you."""
+    return {"recipes": browse.recipes(), "commands": browse.status()["commands"]}
+
+
+@router.post("/char/browse/recipes")
+def char_recipe_save(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Teach or change a recipe: {site, steps}. Steps are checked like a plan."""
+    try:
+        return browse.save_recipe(str(body.get("site") or ""), str(body.get("steps") or ""))
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+
+
+@router.delete("/char/browse/recipes/{site:path}")
+def char_recipe_forget(site: str) -> dict[str, Any]:
+    if not browse.forget_recipe(site):
+        raise HTTPException(404, detail="no recipe for that site")
+    return {"ok": True}
+
+
+@router.post("/char/browse")
+def char_browse_do(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """start (task), replan (note), go (plan: the commands as you edited them), stop, or close (the browser)."""
+    action = str(body.get("action") or "start")
+    try:
+        if action == "start":
+            return browse.start(str(body.get("task") or ""))
+        if action == "replan":
+            return browse.replan(str(body.get("note") or ""))
+        if action == "go":
+            return browse.go(body.get("plan") if isinstance(body.get("plan"), str) else None)
+        if action == "stop":
+            return browse.stop()
+        if action == "close":
+            return browse.close_browser()
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, detail=str(e))
+    raise HTTPException(422, detail=f"no action {action}")
+
+
 @router.get("/model/swap")
 def model_swap() -> dict[str, Any]:
     return dict(llm.SWAP)
@@ -262,6 +318,8 @@ def model_swap() -> dict[str, Any]:
 def char_rest(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     if body.get("char") and train.active() and not body.get("only"):  # a training run is driving it: idle learning stands aside, one step at a time
         return {"done": True, "kind": "", "topic": "", "note": "", "why": "a training run is driving it", "training": True, "questions": char._open_questions(char._start())[::-1][:3], "graph": char.graph()}
+    if body.get("char") and browse.active() and not body.get("only"):  # browsing holds the model: idle learning waits
+        return {"done": True, "kind": "", "topic": "", "note": "", "why": "it is browsing", "questions": char._open_questions(char._start())[::-1][:3], "graph": char.graph()}
     if body.get("char") and char.mode() == "planner" and not body.get("only"):  # planner mode: idle time runs one harness cycle instead of the rule loop; a step you ask for by name still runs
         try:
             c = harness.cycle()

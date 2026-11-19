@@ -1179,7 +1179,8 @@ CORRECTIONS = {"wonder": "Write exactly one question. Do not list the question w
                "goal": "Write exactly one question. Do not list the question words.",
                "plan": "Reply with topic names only, like three headings.",
                "reflect": "Use only what the snippets say about the topic. If they are about something else, write: nothing found.",
-               "planner": "Reply with commands only, one per line, like: check 12"}
+               "planner": "Reply with commands only, one per line, like: check 12",
+               "browse": "Never make up a web address: open the site's home page, then search it, then click what you find."}
 DECISION: dict[str, Any] = {}  # the Verifier's last choice, for the wiring screen
 
 

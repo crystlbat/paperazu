@@ -1433,3 +1433,65 @@ body:has(.st) .sp-ear { position: fixed; z-index: 70; }
 /* the 3D mind draws its own replies, but a pick card (looks, wardrobe, models) still needs the stage: show it alone, over the mind, above the input */
 .sp-web > .sp-stage:has(> .sp-card) { display: block !important; position: absolute; left: 50% !important; top: auto !important; bottom: 120px; z-index: 30; opacity: 1; }
 .sp-web > .sp-stage:has(> .sp-card) > :not(.sp-card) { display: none; }
+
+/* /browse: Dot's dots build a screen; the journey plays on it while a small Dot travels the page */
+.sw-screen { position: absolute; left: 50%; top: 47%; translate: -50% -50%; z-index: 6; width: min(1000px, calc(100% - 32px)); height: min(72vh, 680px); background: rgb(0 0 0 / .94);
+  border: 1px solid color-mix(in srgb, var(--dot, #6ff7ff) 60%, transparent); box-shadow: 0 0 0 4px rgb(0 0 0 / .6), 0 0 40px color-mix(in srgb, var(--dot, #6ff7ff) 22%, transparent);
+  background-image: radial-gradient(circle, rgb(255 255 255 / .05) 1px, transparent 1.4px); background-size: 12px 12px; animation: sw-screen-in .9s cubic-bezier(.2, 1, .3, 1); }
+.sw-screen[hidden] { display: none; }
+@keyframes sw-screen-in { 0% { clip-path: circle(4% at 50% 50%); opacity: .3; } 40% { clip-path: circle(12% at 50% 50%); opacity: 1; } 100% { clip-path: circle(80% at 50% 50%); } }
+.sp-b { position: relative; height: 100%; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; color: #e8ecf4; font: 14px/1.5 var(--mono); box-sizing: border-box; }
+.sp-b-head { display: flex; align-items: center; gap: 10px; }
+.sp-b-lights { display: flex; gap: 5px; } .sp-b-lights i { width: 8px; height: 8px; border-radius: 50%; background: var(--dot, #6ff7ff); opacity: .5; } .sp-b-lights i:first-child { opacity: 1; }
+.sp-b-bar { flex: 1; min-width: 0; padding: 5px 10px; border: 1px solid rgb(255 255 255 / .16); background: rgb(255 255 255 / .04); overflow: hidden; }
+.sp-b-url { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #cfe; }
+.sp-b-status { color: var(--dot, #6ff7ff); white-space: nowrap; }
+.sp-b button { all: unset; cursor: pointer; padding: 5px 12px; border: 1px solid rgb(255 255 255 / .22); color: #fff; }
+.sp-b button:hover, .sp-b button:focus-visible { background: rgb(255 255 255 / .1); outline: 1px solid var(--dot, #6ff7ff); }
+.sp-b .sp-b-go { background: var(--dot, #6ff7ff); color: #000; font-weight: 700; padding: 5px 22px; }
+.sp-b .sp-b-stop { border-color: #ff8f6b; color: #ffb59c; } .sp-b [hidden] { display: none !important; }
+.sp-b-task { margin: 0; color: #aab4c4; } .sp-b-task small { color: #7d8797; }
+.sp-b-intent { margin: 0; font-size: 15px; } .sp-b-intent b { color: var(--dot, #6ff7ff); }
+.sp-b-steer { display: grid; gap: 6px; padding: 10px; border: 1px dashed color-mix(in srgb, var(--dot, #6ff7ff) 50%, transparent); }
+.sp-b-lbl { color: #cfd6e2; } .sp-b-plan { font: 14px/1.5 var(--mono); background: #05070a; color: #fff; border: 1px solid rgb(255 255 255 / .2); padding: 8px; resize: vertical; }
+.sp-b-left { margin: 0; color: #ffb59c; } .sp-b-cmds { margin: 0; color: #7d8797; font-size: 12px; }
+.sp-b-row { display: flex; gap: 8px; flex-wrap: wrap; } .sp-b-note { flex: 1; min-width: 200px; font: 14px var(--mono); background: #05070a; color: #fff; border: 1px solid rgb(255 255 255 / .2); padding: 5px 8px; }
+.sp-b-body { flex: 1 1 0; display: grid; grid-template-columns: minmax(0, 3fr) minmax(200px, 1fr); gap: 10px; min-height: 120px; }
+.sp-b > :not(.sp-b-body) { flex: none; }
+.sp-b-empty { color: #7d8797; }
+.sp-b-feed { margin: 0; padding: 0; list-style: none; overflow: auto; display: grid; align-content: start; gap: 6px; }
+.sp-b-feed li { overflow-wrap: anywhere; display: grid; grid-template-columns: 18px 1fr; gap: 0 6px; padding: 6px 8px; border: 1px solid rgb(255 255 255 / .1); }
+.sp-b-feed li > :not(.sp-b-ic) { grid-column: 2; } .sp-b-feed small { color: #9aa4b4; } .sp-b-feed q { color: #e8ecf4; font-style: italic; }
+.sp-b-feed li[data-status="doing"] { border-color: var(--dot, #6ff7ff); } .sp-b-feed li[data-status="ok"] .sp-b-ic { color: #7dffa8; }
+.sp-b-feed li[data-status="failed"] { border-color: #ff8f6b; } .sp-b-feed li[data-status="failed"] .sp-b-ic, .sp-b-feed li[data-status="failed"] small { color: #ffb59c; }
+.sp-b-feed li[data-status="waiting"], .sp-b-feed li[data-status="skipped"] { opacity: .5; }
+.sp-b-end { padding: 10px 12px; border: 1px solid var(--dot, #6ff7ff); max-height: 30vh; overflow: auto; } .sp-b-end[data-kind="bad"] { border-color: #ff8f6b; }
+.sp-b-end h3 { margin: 0 0 4px; font-size: 15px; color: var(--dot, #6ff7ff); } .sp-b-end[data-kind="bad"] h3 { color: #ffb59c; } .sp-b-end p { margin: 0 0 4px; font-size: 15px; } .sp-b-end small { color: #9aa4b4; }
+.sp-bdot { position: absolute; left: 0; top: 0; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; background: var(--dot, #6ff7ff); pointer-events: none; z-index: 3;
+  box-shadow: 0 0 18px var(--dot, #6ff7ff); display: flex; align-items: center; justify-content: center; gap: 5px; }
+.sp-bdot i { width: 4px; height: 8px; border-radius: 2px; background: #000; animation: sw-blink 4s infinite; }
+.sp-bdot[data-mood="read"] i { height: 5px; translate: 2px 2px; } .sp-bdot[data-mood="look"] i { translate: 2px -1px; }
+.sp-bdot[data-mood="think"] i { translate: 0 -3px; } .sp-bdot[data-mood="happy"] i { height: 4px; border-radius: 4px 4px 0 0; }
+.sp-bdot[data-mood="sad"] { background: #ff8f6b; box-shadow: 0 0 18px #ff8f6b; } .sp-bdot[data-mood="think"] { animation: sp-bthink 1.2s ease-in-out infinite; }
+@keyframes sp-bthink { 50% { box-shadow: 0 0 34px var(--dot, #6ff7ff); scale: 1.12; } }
+.sp-b-ripple { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; border: 2px solid var(--dot, #6ff7ff); pointer-events: none; z-index: 2; animation: sp-bripple .7s ease-out forwards; }
+@keyframes sp-bripple { to { scale: 6; opacity: 0; } }
+
+
+.sp-b-live { position: relative; min-height: 0; display: grid; place-items: center; overflow: hidden; border: 1px solid rgb(255 255 255 / .12); background: #05070a; }
+.sp-b-img { max-width: 100%; max-height: 100%; display: block; box-shadow: 0 0 30px color-mix(in srgb, var(--dot, #6ff7ff) 18%, transparent); }
+.sp-b-live::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle, rgb(0 0 0 / .18) 1px, transparent 1.3px) 0 0 / 4px 4px; mix-blend-mode: multiply; } /* the page is drawn in its dots too */
+.sp-b-ring { position: absolute; border: 2px solid var(--dot, #6ff7ff); box-shadow: 0 0 14px var(--dot, #6ff7ff); pointer-events: none; transition: all .45s cubic-bezier(.2, 1, .3, 1); }
+.sp-b-thought { position: absolute; left: 12px; right: 12px; bottom: 12px; margin: 0; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--dot, #6ff7ff) 60%, transparent); border-radius: 14px 14px 14px 2px;
+  color: #fff; background: rgb(0 0 0 / .82); font-size: 15px; animation: sw-pour .4s cubic-bezier(.2, 1.4, .4, 1); }
+.sp-b-thought i { color: var(--dot, #6ff7ff); font-style: normal; }
+.sp-b[data-phase="run"] .sp-b-task { display: none; } .sp-b[data-phase="run"] .sp-b-intent { font-size: 13px; color: #aab4c4; } /* browsing: the page fills the screen */
+.sp-b .sp-b-off { border-color: rgb(255 255 255 / .3); color: #cfd6e2; }
+.sp-b-note8 { position: absolute; z-index: 4; pointer-events: none; color: var(--dot, #6ff7ff); font-size: 22px; text-shadow: 0 0 10px var(--dot, #6ff7ff); animation: sp-bnote 2.2s ease-out forwards; }
+@keyframes sp-bnote { from { opacity: 1; translate: 0 0; } to { opacity: 0; translate: var(--dx) -110px; rotate: 20deg; } }
+.sp-b.groove .sp-bdot { animation: sp-bgroove .5s ease-in-out infinite alternate; } @keyframes sp-bgroove { to { scale: 1.12 .9; rotate: 8deg; } }
+@media (max-width: 700px) { .sp-b-body { grid-template-columns: 1fr; grid-template-rows: minmax(0, 2fr) minmax(0, 1fr); } .sw-screen { height: 78vh; } }
+@media (prefers-reduced-motion: reduce) { .sw-screen, .sp-b-thought, .sp-bdot, .sp-b-note8, .sp-b.groove .sp-bdot { animation: none !important; } }
+.sp-recipes .sp-b { height: auto; max-height: 86vh; overflow: auto; } .sp-recipe { display: grid; gap: 6px; padding: 10px; margin-bottom: 10px; border: 1px solid rgb(255 255 255 / .14); }
+.sp-recipe h4 { margin: 0; font-size: 15px; color: var(--dot, #6ff7ff); } .sp-recipe h4 small { color: #9aa4b4; font-weight: 400; }
+.sp-b-learned { margin: 6px 0 0; color: #7dffa8; } .sp-b-learned button { margin-left: 6px; }

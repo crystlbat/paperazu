@@ -54,6 +54,8 @@ async function renderSpace(base = "/space") {
     { name: "/expand-to-net", also: ["/expand", "/contract"], does: "Dot swells out to the base ring and holds the whole net inside it; run it again to gather it back.", run: () => web.expand() },
     { name: "/scene", also: ["/back", "/hide-report"], does: "Back to the 3D scene from the report.", run: () => web.report(false) },
     { name: "/step", does: "Run one learning step now. The Verifier picks which engine runs; watch its row light up.", run: () => learnOne(true) },
+    { name: "/recipes", also: ["/how-to"], does: "Its browsing recipes: how it does things on each site. Read them, change them, or teach it one.", run: () => openRecipes() },
+    { name: "/browse", also: ["/web"], args: true, does: "Give it a web task, like /browse open wikipedia and check about jarvis. It plans, you steer, then it browses on a screen and tells you what it thinks.", run: (arg) => openBrowse(arg) },
     { name: "/mind", does: "Open its memory: every note, question and the prompts it last sent the model.", run: () => openMind() },
     { name: "/wiring", does: "Open the wiring: systems S0, S1, S2, the Verifier, your rules and its corrections.", run: () => openSystems() },
     { name: "/sleep", does: "Put it to sleep: no replies and no learning, so you can swap models and test without chatting by accident.", run: () => setMode("sleeping") },
@@ -1121,6 +1123,146 @@ async function renderSpace(base = "/space") {
     root.append(modal);
     if (!again) { modal.querySelector(".sp-steer-close").focus(); if (!still) svg.querySelectorAll(".sig, .sys, .mem").forEach((n, i) => n.animate([{ opacity: 0, translate: "0 10px" }, {}], { duration: 420, delay: i * 45, easing: "ease-out", fill: "backwards" })); }
   }
+  // /browse: a web task. It plans, you steer the plan, then its dots build a screen and a small Dot travels the page on it:
+  // to the address bar to type, onto a link to click, along the lines it reads. The server runs ahead; the show plays each step in order
+  let browsing = null;
+  async function openBrowse(task) {
+    task = (task || "").trim();
+    if (!task) { if (browsing) return browsing.show(); return web?.say({ text: "Give me a web task, like: /browse go to youtube and play a song you like.", events: [] }); }
+    let r; try { r = await api("/char/browse", { method: "POST", body: JSON.stringify({ action: "start", task }) }); }
+    catch (e) { return web?.say({ text: e.body?.detail || "I couldn't start browsing.", events: [] }); }
+    browsing?.close(); browsing = browseView(r);
+  }
+  // its recipes: how it does things on each site, written down. It writes one when a browse works; you can read, change, forget or teach one
+  async function openRecipes() {
+    root.querySelector(".sp-recipes")?.remove();
+    let r; try { r = await api("/char/browse/recipes"); } catch { return; }
+    const card = (x) => { const site = h("input", { type: "text", class: "sp-b-note", value: x?.site || "", placeholder: "Site, like youtube.com", "aria-label": "Site" });
+      const steps = h("textarea", { class: "sp-b-plan", rows: "5", spellcheck: "false", "aria-label": "Steps, one per line", placeholder: "One step per line, like:\nopen https://example.com/\nsearch <what you want>\nclick the first result" }); steps.value = x?.steps || "";
+      const msg = h("p", { class: "sp-b-left", "aria-live": "polite" });
+      const save = async () => { try { await api("/char/browse/recipes", { method: "POST", body: JSON.stringify({ site: site.value, steps: steps.value }) }); openRecipes(); } catch (e) { msg.textContent = e.body?.detail || "That didn't save."; } };
+      const forget = async () => { try { await api(`/char/browse/recipes/${encodeURIComponent(x.site)}`, { method: "DELETE" }); openRecipes(); } catch (e) { msg.textContent = e.body?.detail || "That didn't work."; } };
+      return h("article", { class: "sp-recipe" }, h("h4", {}, x ? x.site : "Teach it a new recipe",
+          ...(x ? [h("small", {}, x.by === "you" ? ` · taught by you · worked ${x.worked}×` : ` · it learned this · worked ${x.worked}×${x.task ? ` · from “${x.task}”` : ""}`)] : [])),
+        ...(x ? [] : [site]), steps, msg, h("div", { class: "sp-b-row" }, h("button", { type: "button", class: "sp-b-go", onclick: save }, x ? "Save my change" : "Teach it"), ...(x ? [h("button", { type: "button", onclick: forget }, "Forget")] : []))); };
+    const modal = h("div", { class: "sp-steer-modal sp-mind sp-recipes", role: "dialog", "aria-modal": "true", "aria-label": "Its browsing recipes" },
+      h("div", { class: "sp-steer-dialog sp-mind-dialog sp-b" },
+        h("header", { class: "sp-mind-head" }, h("h2", {}, "Its browsing recipes"), h("button", { type: "button", class: "sp-steer-close", "aria-label": "Close", onclick: () => modal.remove() }, "✕")),
+        h("p", { class: "sp-b-cmds" }, "When a browse works from start to end, it writes down how it did it. Every plan for that site starts from its recipe. Change one and yours is kept: it never overwrites what you taught. Write <what you want> where the words of each task go. Steps it knows: ", r.commands.map((c) => c.name).join(", "), "."),
+        h("div", { class: "sp-mind-body" }, ...(r.recipes.length ? r.recipes.map(card) : [h("p", { class: "sp-mind-empty" }, "No recipes yet. Give it a browse that works, or teach it one below.")]), card(null))));
+    modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+    root.append(modal);
+  }
+  function browseView(r0) {
+    const wait = (ms) => new Promise((ok) => setTimeout(ok, still ? 0 : ms));
+    const addr = h("span", { class: "sp-b-url" }, "about:blank"), statusEl = h("span", { class: "sp-b-status", "aria-live": "polite" });
+    const img = h("img", { class: "sp-b-img", alt: "What its browser shows, live", hidden: "" }), hush = h("p", { class: "sp-b-empty" }, "Its browser opens when you press Go.");
+    const ring = h("span", { class: "sp-b-ring", hidden: "" }), bubble = h("p", { class: "sp-b-thought", hidden: "" });
+    const live = h("div", { class: "sp-b-live" }, hush, img, ring, bubble);
+    const bdot = h("span", { class: "sp-bdot", "aria-hidden": "true" }, h("i", {}), h("i", {}));
+    const feed = h("ol", { class: "sp-b-feed", "aria-label": "What it did, step by step" });
+    const intent = h("p", { class: "sp-b-intent" }), steer = h("div", { class: "sp-b-steer", hidden: "" }), end = h("div", { class: "sp-b-end", hidden: "" });
+    const stopBtn = h("button", { type: "button", class: "sp-b-stop", onclick: () => act("stop") }, "Stop");
+    const bookBtn = h("button", { type: "button", class: "sp-b-off", title: "How it knows to do things on each site", onclick: () => openRecipes() }, "Recipes");
+    const offBtn = h("button", { type: "button", class: "sp-b-off", hidden: "", title: "Close its browser (stops any song playing)", onclick: () => act("close") }, "Close browser");
+    const el = h("div", { class: "sp-b", "data-phase": "plan" },
+      h("header", { class: "sp-b-head" }, h("span", { class: "sp-b-lights", "aria-hidden": "true" }, h("i", {}), h("i", {}), h("i", {})), h("span", { class: "sp-b-bar" }, addr), statusEl, stopBtn, bookBtn, offBtn,
+        h("button", { type: "button", class: "sp-b-close", title: "Hide the screen. A browse that is running keeps going; /browse shows it again.", "aria-label": "Hide", onclick: () => hide() }, "✕")),
+      h("p", { class: "sp-b-task" }, h("small", {}, "You asked "), r0.task), intent, steer,
+      h("div", { class: "sp-b-body" }, live, feed), end, bdot);
+    const seen = [], queue = []; let pos = [60, 60], polling = false, playing = false, gone = false, sweep = null, plan = "", typing = false, isLive = false;
+    const show = () => { web?.screen(el); if (!polling) poll(); if (isLive) stream(true); };
+    const hide = () => { stream(false); web?.screen(null); };
+    const close = () => { gone = true; hide(); };
+    const stream = (on) => { if (on && isLive) { if (!img.src.includes("/live")) img.src = `/char/browse/live?t=${Date.now()}`; img.hidden = false; hush.hidden = true; } else { img.removeAttribute("src"); img.hidden = true; hush.hidden = false; } };
+    img.addEventListener("error", () => { img.removeAttribute("src"); if (isLive && !gone) setTimeout(() => stream(true), 1500); }); // the stream dropped: pick it up again
+    async function act(action, extra = {}) {
+      try { apply(await api("/char/browse", { method: "POST", body: JSON.stringify({ action, ...extra }) })); if (!polling) poll(); }
+      catch (e) { statusEl.textContent = e.body?.detail || "That didn't work."; }
+    }
+    async function poll() { polling = true;
+      while (!gone) { let r; try { r = await api("/char/browse"); } catch { statusEl.textContent = "I can't reach the app."; break; }
+        apply(r); if (!r.active) break; await new Promise((ok) => setTimeout(ok, r.status === "running" ? 350 : 700)); }
+      polling = false; }
+    const WORDS = { planning: "Planning…", waiting: "Your turn: change the plan, or press Go", running: "Browsing…", done: "Done", failed: "It ran into a problem", stopped: "Stopped" };
+    function apply(r) {
+      if (gone || r.task !== r0.task) return;
+      const over = ["done", "failed", "stopped"].includes(r.status); // the server runs ahead of the show: the end is said when the show gets there
+      if (!over) statusEl.textContent = WORDS[r.status] || r.status; else if (r.status === "stopped" || r.error) stopBtn.hidden = true;
+      if (r.status === "running") el.dataset.phase = "run";
+      isLive = r.live; offBtn.hidden = !r.live; if (r.live && img.hidden && !gone) stream(true); if (!r.live && !img.hidden) stream(false);
+      if (!typing && r.url) addr.textContent = r.url;
+      intent.replaceChildren(...(r.intent ? [h("b", {}, "My plan: "), r.intent] : r.status === "planning" ? [h("i", {}, "Working out what to open and why…")] : []));
+      steer.hidden = r.status !== "waiting";
+      if (r.status === "waiting" && plan !== r.plan_text) { plan = r.plan_text; drawSteer(r); }
+      (r.steps || []).forEach((s, i) => { const k = `${s.status}|${s.detail}|${s.thought}|${s.box}`; if (seen[i] !== k) { seen[i] = k; queue.push({ i, s: { ...s } }); } });
+      if (over && !seen.final) { seen.final = 1; queue.push({ final: r }); }
+      if (!playing) play();
+    }
+    function drawSteer(r) {
+      const box = h("textarea", { class: "sp-b-plan", rows: String(Math.max(3, r.plan.length + 1)), spellcheck: "false", "aria-label": "The plan, one command per line. Change it, then press Go." });
+      box.value = r.plan_text;
+      const note = h("input", { type: "text", class: "sp-b-note", placeholder: "Or tell it in words, e.g. pick something calm", "aria-label": "Steer it in words" });
+      steer.replaceChildren(h("label", { class: "sp-b-lbl" }, "The plan, one step per line. Change any line, then press Go."), box,
+        ...(r.rejected.length ? [h("p", { class: "sp-b-left" }, h("b", {}, "Left out: "), r.rejected.map((x) => `${x.cmd} (${x.why})`).join(" · "))] : []),
+        h("p", { class: "sp-b-cmds" }, h("b", {}, "Steps it knows: "), r.commands.map((c) => c.name + (c.arg ? ` <${c.arg}>` : "")).join(" · ")),
+        h("div", { class: "sp-b-row" }, note, h("button", { type: "button", onclick: () => note.value.trim() && act("replan", { note: note.value }) }, "Plan again"),
+          h("button", { type: "button", class: "sp-b-go", onclick: () => act("go", { plan: box.value }) }, "Go")));
+      setTimeout(() => box.focus(), 50);
+    }
+    // ---- the little Dot, on the live page ----
+    const at = (node, fx = .5, fy = .5) => { const a = el.getBoundingClientRect(), b = node.getBoundingClientRect(); return [b.left - a.left + b.width * fx, b.top - a.top + b.height * fy]; };
+    const onPage = (fx, fy) => { const src = img.hidden ? live : img; return at(src, fx, fy); }; // a point on the browser's page, as fractions of it
+    async function travel(to, ms) { const d = Math.hypot(to[0] - pos[0], to[1] - pos[1]); ms = ms ?? Math.min(900, 250 + d * 1.2);
+      const lift = Math.min(60, d * .25), mid = [(pos[0] + to[0]) / 2, (pos[1] + to[1]) / 2 - lift];
+      if (!still) await bdot.animate([{ translate: `${pos[0]}px ${pos[1]}px` }, { translate: `${mid[0]}px ${mid[1]}px`, scale: "1.15 .9" }, { translate: `${to[0]}px ${to[1]}px` }],
+        { duration: ms, easing: "cubic-bezier(.45,0,.3,1)" }).finished.catch(() => {});
+      pos = to; bdot.style.translate = `${to[0]}px ${to[1]}px`; }
+    function click() { const r = h("span", { class: "sp-b-ripple", style: `left:${pos[0]}px;top:${pos[1]}px` }); el.append(r); setTimeout(() => r.remove(), 700);
+      bdot.animate?.([{ scale: "1" }, { scale: "1.25 .7" }, { scale: "1" }], { duration: 260 }); }
+    const mood = (m) => { bdot.dataset.mood = m || ""; };
+    function notes() { for (let k = 0; k < 5; k++) { const n = h("span", { class: "sp-b-note8", style: `left:${pos[0]}px;top:${pos[1]}px;--dx:${(k - 2) * 18}px;animation-delay:${k * 160}ms` }, k % 2 ? "♪" : "♫"); el.append(n); setTimeout(() => n.remove(), 2400); } }
+    async function type(text) { typing = true; addr.textContent = ""; for (const ch of text.slice(0, 70)) { addr.textContent += ch; await wait(16); } addr.textContent = text; typing = false; }
+    function aimAt(box) { const a = el.getBoundingClientRect(), src = (img.hidden ? live : img).getBoundingClientRect();
+      Object.assign(ring.style, { left: `${(box[0] * src.width + src.left - live.getBoundingClientRect().left)}px`, top: `${(box[1] * src.height + src.top - live.getBoundingClientRect().top)}px`, width: `${box[2] * src.width}px`, height: `${box[3] * src.height}px` });
+      ring.hidden = false; return onPage(box[0] + box[2] / 2, box[1] + box[3] / 2); }
+    function readLoop() { let on = true; (async () => { let y = .25; while (on && !gone) { await travel(onPage(.08, y), 240); await travel(onPage(.66, y), 950); y = y > .7 ? .25 : y + .09; } })(); return () => { on = false; }; }
+    function item(i, s) { let li = feed.children[i]; while (!li) { feed.append(h("li", {})); li = feed.children[i]; }
+      const ICON = { ok: "✓", failed: "✕", skipped: "–", doing: "…", waiting: "·" };
+      li.dataset.status = s.status; li.replaceChildren(h("span", { class: "sp-b-ic", "aria-hidden": "true" }, ICON[s.status] || "·"), h("b", {}, s.cmd),
+        ...(s.detail ? [h("small", {}, s.detail)] : []), ...(s.thought ? [h("q", {}, s.thought)] : [])); li.scrollIntoView?.({ block: "nearest" }); }
+    async function play() { playing = true;
+      while (queue.length && !gone) { const ev = queue.shift();
+        try { await step(ev); } catch { /* a show step that went wrong must not stop the rest */ } }
+      playing = false; }
+    let aimed = "";
+    async function step(ev) {
+      if (ev.final) return finish(ev.final);
+      const { i, s } = ev, verb = s.cmd.split(" ")[0], arg = s.cmd.slice(verb.length + 1); item(i, s);
+      if (s.status === "waiting") return;
+      if (sweep && !(s.status === "doing" && ["read", "scroll"].includes(verb))) { sweep(); sweep = null; }
+      el.classList.toggle("groove", verb === "wait" && s.status === "doing");
+      if (s.box && String(s.box) !== aimed) { aimed = String(s.box); mood("look"); await travel(aimAt(s.box)); await wait(350); click(); await wait(250); return; } // where it will click: Dot goes there and taps
+      if (s.status === "doing") { ring.hidden = true;
+        if (verb === "open" || (verb === "search" && s.url)) { if (s.url && addr.textContent !== s.url) { mood("look"); await travel(at(addr, .06)); click(); await type(s.url); } }
+        else if (["read", "scroll"].includes(verb) && !sweep) { mood("read"); sweep = readLoop(); }
+        else if (verb === "opinion") { mood("think"); await travel(onPage(.5, .45)); }
+        return; }
+      ring.hidden = true; mood(s.status === "failed" ? "sad" : "");
+      if (s.status === "failed") { bdot.animate?.([{ translate: `${pos[0]}px ${pos[1]}px` }, { translate: `${pos[0] - 8}px ${pos[1]}px` }, { translate: `${pos[0] + 8}px ${pos[1]}px` }, { translate: `${pos[0]}px ${pos[1]}px` }], { duration: 360 }); await wait(500); return; }
+      if (s.status !== "ok") return;
+      if (verb === "play") { mood("happy"); notes(); await wait(900); }
+      if (s.thought) { bubble.replaceChildren(h("i", {}, "thinking: "), s.thought); bubble.hidden = false; await travel(at(bubble, .02, .5), 500); mood("happy"); await wait(1400); mood(""); } }
+    async function finish(r) { if (sweep) { sweep(); sweep = null; } el.classList.remove("groove"); stopBtn.hidden = true; ring.hidden = true; statusEl.textContent = WORDS[r.status] || r.status;
+      if (r.opinion) { end.replaceChildren(h("h3", {}, "What I think"), h("p", {}, r.opinion),
+          h("small", {}, `Grounded ${Math.round((r.grounding ?? 1) * 100)}%: how many of the names in it it really saw.${r.note ? ` Saved as note #${r.note}.` : ""}`),
+          ...(r.learned ? [h("p", { class: "sp-b-learned" }, `It wrote down how it did this: a recipe for ${r.learned}. `, h("button", { type: "button", onclick: () => openRecipes() }, "See recipes"))] : [])); end.dataset.kind = "ok"; mood("happy"); }
+      else { end.replaceChildren(h("h3", {}, r.status === "stopped" ? "Stopped" : "It couldn't finish"), h("p", {}, r.error || (r.status === "stopped" ? "You stopped it. What it did so far is in the steps." : "Something went wrong."))); end.dataset.kind = "bad"; mood(r.status === "stopped" ? "" : "sad"); }
+      end.hidden = false; await travel(at(end, .97, .25)); }
+    bdot.style.translate = `${pos[0]}px ${pos[1]}px`; show(); apply(r0);
+    return { show, close, hide };
+  }
+  api("/char/browse").then((r) => { if ((r.active || r.live) && r.task && base === "/char") browsing = browseView(r); }).catch(() => {}); // a browse going on when the page loads comes back on its screen
   async function openMind() { // everything the character holds, and the exact prompts it sent the model
     root.querySelector(".sp-mind")?.remove();
     let m; try { m = await api("/char/mind"); } catch { return; }
@@ -1251,9 +1393,9 @@ async function renderSpace(base = "/space") {
     if (!t) return;
     form.say.value = "";
     if (web && t.startsWith("/")) { // a slash is always a command, never chat for the model
-      const c = command(t);
+      const c = command(t), w = t.split(/\s+/), withArg = !c && command(w[0])?.args ? command(w[0]) : null; // a command that takes words: /browse open wikipedia…
       web.palette(null);
-      if (c) c.run(); else web.say({ text: `${t} is not a command. Type / to see them all.`, events: [] });
+      if (withArg) withArg.run(t.slice(w[0].length).trim()); else if (c) c.run(); else web.say({ text: `${t} is not a command. Type / to see them all.`, events: [] });
       return;
     }
     const off = web?.chatOff?.(); if (off) { web.say({ text: off, events: [] }); return; } // asleep or learning: chat is off, commands still work

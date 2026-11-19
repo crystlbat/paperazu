@@ -28,6 +28,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     <feComposite in="shine" in2="goo" operator="in" result="shine2"/>
     <feMerge><feMergeNode in="lit"/><feMergeNode in="shine2"/></feMerge></filter></svg>`;
   const cmds = h("div", { class: "sw-cmds", hidden: "", role: "listbox", "aria-label": "Commands" }); // Dot, poured into the list of commands
+  const scr = h("div", { class: "sw-screen", hidden: "", role: "region", "aria-label": "Browsing" }); // Dot, morphed into a screen while it browses
   const bubble = h("div", { class: "sw-say", hidden: "" }, ink, peek, chipsEl), note = h("aside", { class: "sw-note", hidden: "", "aria-label": "Details" });
   // the mesh, top to bottom: what S2 planned, the questions S1 made of it, the notes S0 found (the Verifier's verdict is their colour), the names in them, and the chat
   const LAYERS = [["trait", "traits", -235], ["plan", "S2 plans", -170], ["question", "S1 questions", -85], ["note", "S0 notes", 5], ["name", "names", 100], ["chat", "chat", 190], ["var", "variables"]], hide = new Set();
@@ -41,7 +42,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     h("small", {}, "Look inside"), h("span", {}, stepBtn, h("button", { type: "button", onclick: () => { shut(); mind(); } }, "Mind"), h("button", { type: "button", onclick: () => { shut(); wiring(); } }, "Wiring")));
   const menuBtn = h("button", { type: "button", class: "sw-menubtn", "aria-label": "Controls", "aria-expanded": "false", onclick: () => { menu.hidden = !menu.hidden; menuBtn.setAttribute("aria-expanded", String(!menu.hidden)); } }, "⋯");
   const reportBtn = h("button", { type: "button", class: "sw-reportbtn", onclick: () => report() }, "Report");
-  root.append(cmds); root.append(fx, cv, h("div", { class: "sw-top" }, who, modeChip, lamps, reportBtn, menuBtn), menu, bubble, note,
+  root.append(cmds, scr); root.append(fx, cv, h("div", { class: "sw-top" }, who, modeChip, lamps, reportBtn, menuBtn), menu, bubble, note,
     h("aside", { class: "sw-left" }, tower), h("aside", { class: "sw-right" }, status, steps, facts), hint);
   const nav = root.querySelector(".sp-top"); if (nav) { nav.append(h("a", { href: "#verse", class: "sp-home sw-verse" }, "Verse")); menu.append(h("small", {}, "Go to"), nav); nav.addEventListener("click", (e) => { if (e.target.closest("a, button")) shut(); }); } // Library, Notes and History join the other controls
   root.addEventListener("pointerdown", (e) => { if (!menu.hidden && !e.target.closest(".sw-menu, .sw-menubtn")) shut(); });
@@ -298,7 +299,7 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     for (let k = 0; k < nb; k++) dt(X + (k - (nb - 1) / 2) * 12, Y + r * 1.18 + 34, k === b ? SIG : "#fff", k === b ? 1 : .35, 4);
     g.restore(); }
   function palette(list, active = 0, pick) { // the commands, as Dot: it shrinks away and the list takes its place, with its eyes on top
-    if (!list) { preview = null; if (!cmds.hidden) { cmds.hidden = true; if (bubble.hidden || bubble.classList.contains("out")) slab = null; } return; }
+    if (!list) { preview = null; if (!cmds.hidden) { cmds.hidden = true; if (scr.hidden && (bubble.hidden || bubble.classList.contains("out"))) slab = null; } return; }
     const tip = h("p", { class: "sw-cmd-tip", "aria-live": "polite" }, list[active]?.does || "No command starts like that.");
     cmds.replaceChildren(h("span", { class: "sw-cmd-eyes", "aria-hidden": "true" }, h("i", {}), h("i", {})),
       ...list.map((c, i) => h("button", { type: "button", role: "option", "aria-selected": String(i === active), title: c.does,
@@ -306,6 +307,9 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
         onmousedown: (e) => { e.preventDefault(); pick?.(c); } }, c.name)), tip);
     cmds.hidden = false; bubble.classList.add("out"); slab = { w: 1, h: 1 }; const nm = list[active]?.name; if (nm && preview?.name !== nm) preview = { name: nm, t0: tick };
   }
+  function screen(el) { // /browse: its dots build a screen and the journey plays on it; null gathers it back
+    if (!el) { if (!scr.hidden) { scr.hidden = true; scr.replaceChildren(); if (bubble.hidden || bubble.classList.contains("out")) slab = null; } return; }
+    if (scr.firstChild !== el) scr.replaceChildren(el); scr.hidden = false; bubble.classList.add("out"); slab = { w: 1, h: 1 }; }
   // ---- things space.js tells it ----
   function say(t) { // the reply IS Dot: it pours out of its sphere into liquid letters, and its eyes play along the words; then it gathers back
     rings.push(0); happy = 0;
@@ -737,7 +741,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     if (tick % 20 === 0) { const r = root.querySelector(".sp-rest"); if (root.dataset.mode === "sleeping") status.textContent = "Asleep · not answering · not learning"; else if (r && !r.hidden && r.textContent) status.textContent = r.textContent; // the job line space.js writes
       const rv = getComputedStyle(root).getPropertyValue("--dot").trim(); if (rv && rv !== tint) { tint = rv; markTint(); }
       lamps.querySelectorAll("span").forEach((l) => l.classList.toggle("on", busy ? (tick / 20 | 0) % 4 === [2, 1, 0, 3].indexOf(+l.dataset.s) : +l.dataset.s === lit)); }
-    const stage = !cmds.hidden ? cmds : (slab && !bubble.hidden && !bubble.classList.contains("out")) || (hold > tick && !bubble.hidden) ? bubble : null, replying = !!stage; lay += ((replying ? 1 : 0) - lay) * (still ? 1 : .04); root.classList.toggle("sw-replying", replying); if (replying && trip) trip = null; // a reply or the command list: both take the stage the same way
+    if (!scr.hidden && !slab) slab = { w: 1, h: 1 }; // a reply that ends while it browses does not take the screen down
+    const stage = !scr.hidden ? scr : !cmds.hidden ? cmds : (slab && !bubble.hidden && !bubble.classList.contains("out")) || (hold > tick && !bubble.hidden) ? bubble : null, replying = !!stage; lay += ((replying ? 1 : 0) - lay) * (still ? 1 : .04); root.classList.toggle("sw-replying", replying); if (replying && trip) trip = null; // a reply or the command list: both take the stage the same way
     { const e = lay * lay * (3 - 2 * lay); zoom += (zt - zoom) * .12; cx = bcx + (W * .24 - bcx) * e; K = bK * (1 - .5 * e) * zoom; } // the wheel or a pinch zooms into the mesh // while it replies: the mind slides to one side and shrinks, its dots build the reply's box, and Dot sits on the box
     if (replying) { const b = stage.getBoundingClientRect(), r = cv.getBoundingClientRect(); sit = [b.right - r.left - 46, b.top - r.top]; stageR = [b.left - r.left, b.top - r.top, b.width, b.height]; }
     { const ear = root.querySelector(".sp-ear"), e = lay * lay * (3 - 2 * lay); if (ear) { // the chat box goes with the stage: under its box, as wide as it, linked to it
@@ -1350,6 +1355,6 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
   // the page always opens on the mesh, so you see it grow; the report is one click away
   markTint(); refresh(); frame();
   function expand(on = !growTo) { growTo = on ? 1 : 0; if (on) Object.keys(seen).filter((k) => HOME[k]).forEach(agentOf); rings.push(0); status.textContent = on ? "Dot holds the whole net now. /expand-to-net again to gather it back." : "Dot gathers back to its centre."; }
-  return { expand, report, palette, data, say, heard, fire, stepped, refresh, reform: (c) => { if (c) form = c; }, follow, emote: (k) => { want = EMO[k] ? k : Object.keys(EMO)[Math.random() * Object.keys(EMO).length | 0]; }, chatOff: () => root.classList.contains("asleep") ? "I'm asleep. Commands still work: type /. Or knock on me three times." : learning ? "I'm learning the way you told me to grow, so chat is paused for now. Commands still work: type /." : root.dataset.mode === "sleeping" ? "I'm asleep, so chat is off. Type /wake to wake me, or / for the other commands." : "",
+  return { expand, report, palette, screen, data, say, heard, fire, stepped, refresh, reform: (c) => { if (c) form = c; }, follow, emote: (k) => { want = EMO[k] ? k : Object.keys(EMO)[Math.random() * Object.keys(EMO).length | 0]; }, chatOff: () => root.classList.contains("asleep") ? "I'm asleep. Commands still work: type /. Or knock on me three times." : learning ? "I'm learning the way you told me to grow, so chat is paused for now. Commands still work: type /." : root.dataset.mode === "sleeping" ? "I'm asleep, so chat is off. Type /wake to wake me, or / for the other commands." : "",
     dotAt: () => lastDot && lay > .3 ? [...lastDot] : null, busy: () => { busy = true; } };
 }
