@@ -1,6 +1,6 @@
 import pytest
 
-from workbench import db, llm
+from shared import db, llm
 
 
 @pytest.fixture(autouse=True)
