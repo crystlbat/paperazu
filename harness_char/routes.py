@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 
-from harness_char import browse, char, chibi, harness, space, train, verse
+from harness_char import browse, char, chibi, harness, rehearse, space, train, verse
 from shared import llm, settings
 
 router = APIRouter()
@@ -248,6 +248,21 @@ def char_cycle(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
         raise HTTPException(409, detail=str(e))
 
 
+@router.get("/char/rehearse")
+def char_rehearsal() -> dict[str, Any]:
+    """The live persona's latest rehearsal, or {} before its first."""
+    return rehearse.last() or {}
+
+
+@router.post("/char/rehearse")
+def char_rehearse(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Rehearse its personality: the prompted take, and the trained model named in `model` (optional) with no persona prompt."""
+    try:
+        return rehearse.run(str(body.get("model") or "").strip())
+    except RuntimeError as e:
+        raise HTTPException(409, detail=str(e))
+
+
 @router.get("/char/cycles")
 def char_cycles(limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
     return {"cycles": harness.cycles(limit)}
@@ -449,7 +464,7 @@ def char_chibi(name: str = "") -> dict[str, Any]:
 
 @router.get("/char/monitor")
 def char_monitor() -> dict[str, Any]:
-    return char.monitor()
+    return {**char.monitor(), "growth": rehearse.history()}
 
 
 @router.post("/char/tint")

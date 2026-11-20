@@ -697,6 +697,30 @@ def mesh() -> dict[str, Any]:
 GROWN = "How you have grown, and how you speak now"
 
 
+GROWN_CAP = 300  # the one grown line; a new direction is merged into it, so the persona does not get longer with every direction
+PROMPT_BUDGET = 2400  # shortcut: a fixed size for persona + tone + instructions, shown on the monitor; enforce it once it is crossed in practice
+
+
+def grow(persona: str, way: str) -> str:
+    """The persona with a new direction merged into its single grown line. Several grown lines from before are merged too.
+    If the merge fails the new direction alone is kept: the older ones are not lost, they stay standing instructions."""
+    lines = persona.rstrip().splitlines()
+    had = [ln.split(": ", 1)[1] for ln in lines if ln.startswith(f"{GROWN}: ")]
+    merged = way.strip()[:GROWN_CAP]
+    if had:
+        merged = _clean(_ask(f"Merge how a character speaks now with a new direction into one line of at most {GROWN_CAP} characters. "
+                             "Where they disagree, the new direction wins. Write only the line.",
+                             f"Now: {'; '.join(had)}\nNew direction: {way.strip()}", 100), GROWN_CAP) or merged
+    return "\n".join([ln for ln in lines if not ln.startswith(f"{GROWN}: ")] + [f"{GROWN}: {merged}"])
+
+
+def prompt_size() -> dict[str, int]:
+    """How long the parts it grows are, against the budget: no model call, so the monitor can poll it."""
+    told = instructions()
+    n = len(get_profile()["persona"]) + len(_tone()) + sum(len(i["text"]) for i in told[:VERBATIM]) + len(_folded(",".join(str(i["id"]) for i in told[VERBATIM:])))
+    return {"chars": n, "budget": PROMPT_BUDGET}
+
+
 def _tone() -> str:
     """The tone section of its reply prompt: the last one the tune step adopted, or, before any, the plain direction you gave."""
     con = db.connect()
@@ -709,11 +733,89 @@ def _meets(want: list[str], reply: str, asked: str = "") -> tuple[float | None, 
     """One small call, trait by trait: the share of the wanted traits this reply carries (0 to 1), and which it missed. None when the model said nothing."""
     v = _ask("You grade a reply against numbered traits. For each trait write its number and YES or NO on its own line. Nothing else.",
              f"Traits:\n" + "\n".join(f"{i + 1}. {w}" for i, w in enumerate(want)) + f"\nQuestion it answered: {asked[:300] or '(none)'}\nReply: {reply[:500]}", 12 + 6 * len(want))
-    got = {int(m[1]): m[2].upper() == "YES" for m in re.finditer(r"(?im)^\W*(\d+)\W+(yes|no)\b", v or "") if 0 < int(m[1]) <= len(want)}
+    got = {int(m[1]): vs[-1].upper() == "YES" for m in re.finditer(r"(?m)^\W*(\d+)\b(.*)$", v or "")  # small models repeat the trait first: "1. Be brief. NO"
+           if 0 < int(m[1]) <= len(want) and (vs := re.findall(r"\b(yes|no)\b", m[2], re.I))}
     if not got:
         return None, ""
     missed = [want[i - 1] for i in range(1, len(want) + 1) if not got.get(i, False)]
     return round(1 - len(missed) / len(want), 2), ("missed: " + "; ".join(missed)) if missed else "carries every trait"
+
+
+# Two signals the harness keeps by itself, per persona: frustration (your words, a repeated question, its own slips) and voice
+# (each reply graded on its traits). Rising voice is good, rising frustration is bad. Past their marks the model is told, the
+# Verifier gets a failure to fix, the planner sees it, and the replies you were frustrated by are never taught.
+FRUSTRATED = re.compile(r"\b(?:no+|nope|wrong|stupid|dumb|useless|ugh+|wtf|seriously|come on|not what i (?:asked|meant)|that'?s not it|"
+                        r"you(?:'re| are) not listening|you (?:never|don'?t) listen|i (?:already|just) (?:said|told you)|again)\b|\?\?|!!", re.I)
+SLIP = re.compile(r"\b(?:as an ai|(?:a|an) (?:large )?language model|i can(?:no|')t (?:help|assist) with|"  # answering as the base model, not the character
+                  r"(?:have|retain|keep) no memor(?:y|ies)|(?:do not|don'?t) (?:have|retain) (?:any )?memor(?:y|ies)|(?:do not|don'?t|cannot|can'?t) remember anything|"
+                  r"(?:built|made|developed|trained|created) by (?:liquid ?ai|openai|google|meta|anthropic|alibaba|qwen|mistral|microsoft))\b", re.I)
+FRUSTRATION_MARK, FRUSTRATION_EASE, VOICE_MARK = 3.0, 0.5, 0.6
+GRADE_REPLIES = True  # one small grading call per reply; tests that count model calls turn it off
+
+
+ASK_WORDS = {"what", "tell", "about", "that", "this", "with", "have", "from", "your", "there", "they", "them", "does", "something", "more", "please", "know"}
+
+
+def _same_ask(a: str, b: str) -> bool:
+    """The same question again: its content words are (nearly) all in the other. "no, wrong. <same ask>" still counts; "tell me about X" then Y does not."""
+    wa, wb = ({w for w in re.findall(r"\w+", x.lower()) if len(w) >= 4 and w not in ASK_WORDS} for x in (a, b))
+    return min(len(wa), len(wb)) >= 2 and len(wa & wb) / min(len(wa), len(wb)) >= 0.8
+
+
+def frustration_in(text: str, turns: list[Any]) -> list[str]:
+    """Why this message says you are frustrated: the words (at most two count), and asking the same thing twice in a row."""
+    why = [f'you said "{w}"' for w in dict.fromkeys(m.group(0).lower() for m in FRUSTRATED.finditer(text))][:2]
+    prev = next((t["text"] for t in turns[::-1] if t["role"] == "user"), "")
+    return why + (["you asked the same thing again"] if prev and _same_ask(text, prev) else [])
+
+
+def signals() -> dict[str, Any]:
+    """The two signals now, for the monitor, the planner and the reply prompt."""
+    con = db.connect()
+    r = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Voice: %' AND id > ? ORDER BY id DESC LIMIT 1", (_start(),)).fetchone()
+    con.close()
+    last = json.loads(r["content"]) if r else {}
+    return {"frustration": _var("frustration", 0.0), "frustration_mark": FRUSTRATION_MARK, "voice": _var("voice", 1.0), "voice_mark": VOICE_MARK,
+            "missed": last.get("why", "").removeprefix("missed: ") if last.get("score", 1) < 1 else ""}
+
+
+def _signal_lines() -> list[str]:
+    """What the model is told about the signals, only while one is past its mark."""
+    s, out = signals(), []
+    if s["frustration"] >= FRUSTRATION_MARK:
+        out.append(f"The person is frustrated with you (frustration {s['frustration']:g}, mark {FRUSTRATION_MARK:g}). Slow down: answer exactly "
+                   "what they asked, in your own voice, and do not repeat your last reply.")
+    if s["voice"] < VOICE_MARK and s["missed"]:
+        out.append(f"Your recent replies slipped out of character (voice {s['voice']:g}); they missed: {s['missed']}. Hold to it in this reply.")
+    return out
+
+
+def _feel_frustration(why: list[str], turns: list[Any]) -> float:
+    """Raise frustration for each reason, or ease it on a calm message. Crossing the mark is a failure the Verifier works on."""
+    before = _var("frustration", 0.0)
+    after = round(before + len(why), 2) if why else round(max(0.0, before - FRUSTRATION_EASE), 2)
+    if after != before:
+        _set_var("frustration", after)
+    if why and (last := next((t for t in turns[::-1] if t["role"] == "dot"), None)):
+        add_memory(f"Frustrated: {last['id']}", "; ".join(why), source="sheet")  # the reply you were frustrated by is never taught
+    if before < FRUSTRATION_MARK <= after:
+        _fail("frustration", "; ".join(why))
+    return after
+
+
+def _grade_reply(dot_id: int, asked: str, reply: str) -> None:
+    """One small call: does this reply carry its traits? It moves voice (a running average), and a base-model slip is frustration too."""
+    if SLIP.search(reply):
+        _feel_frustration(["it answered as a base model, not as itself"], [{"role": "dot", "id": dot_id}])
+    want = [v for k, v, _ in traits() if k != "Tone"][:8]
+    if not want:
+        return
+    score, why = _meets(want, reply, asked)
+    if score is None:
+        return
+    add_memory(f"Voice: {dot_id}", json.dumps({"score": score, "why": why}), source="sheet")
+    prev = _var("voice", 1.0)  # a new persona starts trusted, so one miss does not flag it
+    _set_var("voice", round(0.7 * prev + 0.3 * score, 2))
 
 
 def traits() -> list[tuple[str, str, bool]]:
@@ -790,10 +892,11 @@ def _since(on_char: bool, who: str) -> int:
 
 
 def _open_questions(since: int = 0) -> list[str]:
-    """Questions Dot asked itself while asleep that no reflection has answered yet, oldest first."""
+    """Questions no reflection has answered yet: the ones you told it to look up first, then the ones it asked itself, oldest first."""
     init_db()
     con = db.connect()
-    qs = [re.sub(r" \(from \d+\)$", "", r["content"]) for r in con.execute("SELECT content FROM char_memories WHERE source = 'question' AND id > ? ORDER BY id", (since,))]
+    rows = [r["content"] for r in con.execute("SELECT content FROM char_memories WHERE source = 'question' AND id > ? ORDER BY id", (since,))]
+    qs = [re.sub(r" \(from (?:\d+|taught)\)$", "", c) for c in sorted(rows, key=lambda c: not c.endswith("(from taught)"))]  # what you told it to look up goes first
     done = {r["title"] for r in con.execute("SELECT title FROM char_memories WHERE id > ?", (since,))}
     con.close()
     return [q for q in qs if f"Reflection: {q}"[:80] not in done]
@@ -1104,7 +1207,7 @@ def monitor() -> dict[str, Any]:
     rv, d = review(), disposition()
     return {"disposition": d, "steps": steps, "series": [{"name": k.removeprefix("var:"), "yours": k.startswith("var:"), "points": [t[k] for t in ticks if k in t]} for k in keys],
             "last": json.loads(last["content"]) if last else None,
-            "loop": {"reviewed": rv["reviewed"], "mistakes": rv["mistakes"], "cycles": cycles, "instructions": len(rv["instructions"]), "fixes": sum(c["state"] == "on" for c in corrections())}}
+            "loop": {"reviewed": rv["reviewed"], "mistakes": rv["mistakes"], "cycles": cycles, "instructions": len(rv["instructions"]), "fixes": sum(c["state"] == "on" for c in corrections())}, "prompt": prompt_size(), "signals": signals()}
 
 
 MODES = ("sleeping", "quiet", "curious", "proactive", "planner")  # sleeping: no model calls at all, not even replies (swap models, test); quiet: never learns by itself; curious: learns while idle; proactive: also tells you what it found; planner: idle time runs harness cycles
@@ -1408,12 +1511,63 @@ def instructions() -> list[dict[str, Any]]:
     return [{"id": r["id"], "text": r["content"]} for r in rows]
 
 
+VERBATIM = 5  # instructions a small model reads word for word; older ones are folded into one line, never dropped
+
+
+def _folded(key: str) -> str:
+    """The stored fold of exactly these older instructions (ids, oldest last), or "" when they changed since."""
+    con = db.connect()
+    r = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Folded instructions' AND id > ? ORDER BY id DESC LIMIT 1", (_start(),)).fetchone()
+    con.close()
+    got = json.loads(r["content"]) if r else {}
+    return got.get("text", "") if got.get("ids") == key else ""
+
+
+def standing() -> tuple[list[str], str]:
+    """Your instructions as the reply prompt reads them: the newest VERBATIM word for word, and the older ones folded into one line.
+    The fold is one model call, made once per set of older instructions; if it fails, they all go in word for word."""
+    told = instructions()
+    new, old = [i["text"] for i in told[:VERBATIM]], told[VERBATIM:]
+    if not old:
+        return new, ""
+    key = ",".join(str(i["id"]) for i in old)
+    if folded := _folded(key):
+        return new, folded
+    folded = _clean(_ask("Fold these standing instructions into one short line that keeps every one of them. Write only the line.",
+                         "\n".join(f"- {i['text']}" for i in old), 120), 400)
+    if not folded:
+        return new + [i["text"] for i in old], ""
+    add_memory("Folded instructions", json.dumps({"ids": key, "text": folded}), source="sheet")
+    return new, folded
+
+
+def _standing_line() -> str:
+    new, folded = standing()
+    lines = new + ([f"(and your older ones) {folded}"] if folded else [])
+    return ("Standing instructions from the person you talk to (always follow them):\n" + "\n".join(f"- {x}" for x in lines)) if lines else ""
+
+
 def remove_instruction(note_id: int) -> bool:
     con = db.connect()
     with con:
         n = con.execute("DELETE FROM char_memories WHERE id = ? AND source = 'sheet' AND title LIKE 'Instruction: %'", (note_id,)).rowcount
     con.close()
     return n > 0
+
+
+LOOKUP = re.compile(r"\blook(?:ed|ing|e)?\s*d?\s?up\b|\b(?:research|search|google|find out|look into|read up)\b", re.I)  # "looke dup" is how it gets typed
+
+
+def _missed_names(asked: str, who: str) -> list[str]:
+    """One tiny call: the people, places or things in the message it got wrong, the ones it should have known. Only names the message holds."""
+    raw = _ask(f"List up to three people, places or things in this message that {who} should know about, other than {who}. Only the names, separated by commas.", asked, 40)
+    mine = {who.lower(), *who.lower().split()[:1]}
+    out: list[str] = []
+    for x in re.split(r"[,;\n]|\band\b", raw):
+        x = re.sub(r"^[\s\-*\d.)]+|[\s.\"'`]+$", "", x).strip(" \"'")
+        if 2 <= len(x) <= 40 and len(x.split()) <= 4 and x.lower() in asked.lower() and x.lower() not in mine | {"you", "i", "me", "it", "none"} and x.lower() not in [o.lower() for o in out]:
+            out.append(x)
+    return out[:3]
 
 
 def answer_correction(text: str) -> dict[str, Any]:
@@ -1424,16 +1578,19 @@ def answer_correction(text: str) -> dict[str, Any]:
         raise ValueError("Say what it should do instead." if q else "No correction question is open.")
     saved = add_memory(f"Instruction: {text}"[:80], text[:300], source="sheet")
     _engine("correction", "ok", text[:80])
+    look = _missed_names(q.get("asked", ""), get_profile()["name"]) if LOOKUP.search(text) and q.get("asked") else []
+    for name in look:  # you said it should have looked these up: they go to the front of what it researches next
+        add_memory(f"Question: Who or what is {name}?"[:80], f"Who or what is {name}? (from taught)", source="question")
     if q.get("kind") == "direction":  # it has its direction: it sleeps to learn that way, and wakes when the push is spent
         _set_var("asleep", 1)
         add_memory("Var: direction", text[:300], source="sheet")
         p = get_profile()  # the direction becomes part of who it is: its persona, the first thing every reply prompt reads
-        update_profile(p["name"], f"{p['persona'].rstrip()}\nHow you have grown, and how you speak now: {text.strip()[:300]}", p["look"], p["tint"])
+        update_profile(p["name"], grow(p["persona"], text), p["look"], p["tint"])
     con = db.connect()
     with con:
         con.execute("UPDATE char_memories SET title = 'Answered: ' || substr(title, 9) WHERE source = 'sheet' AND title LIKE 'Asking: %' AND id > ?", (_start(),))
     con.close()
-    return {"id": saved["id"], "text": text[:300]}
+    return {"id": saved["id"], "text": text[:300], "lookup": look}
 
 
 def skip_correction() -> bool:
@@ -1453,7 +1610,7 @@ def review() -> dict[str, Any]:
     seen = [r["content"] for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Reviewed: %' AND id > ?", (_start(),))]
     con.close()
     q = _open_correction()
-    return {"open": {"kind": q.get("kind", "mistake"), **{k: q[k] for k in ("id", "asked", "said", "why")}} if q else None, "instructions": instructions(), "reviewed": len(seen), "mistakes": seen.count("mistake")}
+    return {"open": {"kind": q.get("kind", "mistake"), **{k: q[k] for k in ("id", "asked", "said", "why")}} if q else None, "instructions": (told := instructions()), "folded": {"count": max(0, len(told) - VERBATIM), "text": _folded(",".join(str(i["id"]) for i in told[VERBATIM:]))}, "reviewed": len(seen), "mistakes": seen.count("mistake")}
 
 
 JOURNAL_EVERY = 3  # new notes it needs before it writes another page
@@ -1743,8 +1900,7 @@ TOOL_FLOW = [("plan", "goal"), ("goal", "reflect"), ("ask", "reflect"), ("wonder
 def prompt_now() -> str:
     """Its reply prompt as it stands, without this turn's moods and notes: who it is, who you are, its tone and your standing instructions."""
     parts = [get_profile()["persona"], _you_line(), _tone()]
-    if told := instructions()[:5]:
-        parts.append("Standing instructions from the person you talk to (always follow them):\n" + "\n".join(f"- {i['text']}" for i in told))
+    parts.append(_standing_line())
     return "\n\n".join(x for x in parts if x)
 
 
@@ -1830,7 +1986,7 @@ class _Trace(deque):
 TRACE: deque[dict[str, Any]] = _Trace(maxlen=60)  # shortcut: the run log lives in memory like PROMPTS; a restart clears it
 NOW: dict[str, Any] = {}  # the engine at work this moment, {"sys", "kind"}: what a training run samples into its system lanes
 ENGINES: dict[str, dict[str, Any]] = {}  # kind -> what it did the last time it was tried, for /char/engines; in memory like TRACE
-ENGINE_ORDER = ("plan", "goal", "ask", "wonder", "fill", "want", "reflect", "extract", "ideas", "practise", "sort", "fold", "evaluate", "check", "review", "tune", "bake", "journal", "reply", "correction", "persona", "model", "cycle")
+ENGINE_ORDER = ("plan", "goal", "ask", "wonder", "fill", "want", "reflect", "extract", "ideas", "practise", "sort", "fold", "evaluate", "check", "review", "tune", "rehearse", "bake", "journal", "reply", "correction", "persona", "model", "cycle")
 NO_MODEL = ("bake", "correction")  # the engines that never call the model
 _sys: int | None = None  # the system whose step is running, so its prompts are filed under it
 _failed = ""  # set by _ask when the model call failed or said nothing, so a step that did nothing can tell "model failed" from "nothing to do"
@@ -2011,6 +2167,16 @@ def systems() -> dict[str, Any]:
                         for n, (name, does, ks) in SYSTEMS.items()]}
 
 
+def _rehearsal_gate(old: str, new: str) -> tuple[bool, float | None, float | None]:
+    from harness_char import rehearse  # here, not at the top: rehearse imports char
+    return rehearse.gate(old, new)
+
+
+def _rehearsal_miss(skip: set[str]) -> tuple[str, str, str] | None:
+    from harness_char import rehearse  # here, not at the top: rehearse imports char
+    return rehearse.worst(skip)
+
+
 def _ask(system: str, user: str, max_tokens: int) -> str:
     global _failed
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -2166,13 +2332,16 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
                 tries.setdefault(r["title"].removeprefix("Tuned: "), []).append(bool(json.loads(r["content"]).get("met") or json.loads(r["content"]).get("fixed")))
             seen = {k for k, v in tries.items() if any(v) or len(v) >= 3}
             i = next((i for i in range(len(turns) - 1, -1, -1) if turns[i]["role"] == "dot" and turns[i]["created_at"] >= grew and len(turns[i]["text"]) >= 20 and not turns[i]["text"].startswith(NOT_A_REPLY) and str(turns[i]["id"]) not in seen), None)
-            if i is None:
+            if i is not None:
+                key, said, asked = str(turns[i]["id"]), turns[i]["text"], next((t["text"] for t in turns[:i][::-1] if t["role"] == "user"), "")
+            elif miss := _rehearsal_miss(seen):  # no chat to work on: the rehearsal answer that missed most
+                key, asked, said = miss
+            else:
                 return no("no new reply to hold to its traits")
-            said, asked = turns[i]["text"], next((t["text"] for t in turns[:i][::-1] if t["role"] == "user"), "")
             score, why = _meets(want, said, asked)
             if score is None:
                 return None
-            add_memory(f"Tuned: {turns[i]['id']}", json.dumps({"met": score == 1, "score": score, "why": why}), source="sheet")
+            add_memory(f"Tuned: {key}", json.dumps({"met": score == 1, "score": score, "why": why}), source="sheet")
             if score == 1:
                 return asked[:80] or said[:80], f"met its traits: {why}"
             old = _tone()
@@ -2190,10 +2359,13 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             s1, tw = _meets(want, trial, asked) if trial else (None, "")
             if s1 is None:
                 return None
-            add_memory(f"Tone tried: {turns[i]['id']}", json.dumps({"tone": new, "met": s1 == 1, "score": s1, "why": tw, "trial": trial[:300], "asked": asked[:300]}), source="sheet")
+            add_memory(f"Tone tried: {key}", json.dumps({"tone": new, "met": s1 == 1, "score": s1, "why": tw, "trial": trial[:300], "asked": asked[:300]}), source="sheet")
             if s1 > score:  # better than the reply it would replace: keep it, the next miss climbs from here
+                ok, before, after = _rehearsal_gate(old, new)
+                if not ok:  # it won this one reply but lost on the questions it never practises: keep the old tone
+                    return asked[:80] or said[:80], f"scored {score} ({why}); new tone scored {s1} here but the held-out rehearsal fell from {before} to {after}, so the old one stays"
                 add_memory("Tone", new, source="sheet")
-                add_memory(f"Tuned: {turns[i]['id']}", json.dumps({"met": False, "fixed": True, "score": s1}), source="sheet")  # this reply is done: the new tone answers it
+                add_memory(f"Tuned: {key}", json.dumps({"met": False, "fixed": True, "score": s1}), source="sheet")  # this reply is done: the new tone answers it
                 return asked[:80] or said[:80], f"scored {score} ({why}); new tone scored {s1} and is now in its prompt: {new[:90]}"
             return asked[:80] or said[:80], f"scored {score} ({why}); new tone scored {s1}, no better, so the old one stays"
         if kind == "review":  # the Verifier rereads the oldest reply of its own it has not judged; a mistake becomes a question to you
@@ -2507,7 +2679,7 @@ def _name(who: str) -> str:
 def become_persona(who: str) -> tuple[dict[str, Any], str]:
     """Search or distill a persona (e.g. Gideon from The Flash) and switch Dot into them."""
     prof, said = _become_persona(who)
-    _engine("persona", "failed" if "model unreachable" in said else "skipped" if said.startswith("already") else "ok", said)  # after the switch: leaving clears the record
+    _engine("persona", "failed" if "generic voice" in said else "skipped" if said.startswith("already") else "ok", said)  # after the switch: leaving clears the record
     return prof, said
 
 
@@ -2541,11 +2713,12 @@ def _become_persona(who: str) -> tuple[dict[str, Any], str]:
         try:  # the same look-up as the Dot page: how they talk, what Dot wears, one colour
             got = space.become(clean_who)
             persona, look, tint = got["learned"], got["look"], got.get("tint") or "#ffe347"
-        except Exception:
-            if again:  # still unreachable: keep the sheet it has
-                return live, f"already {key} (model unreachable: generic voice, ask again when the model is up)"
+        except Exception as e:
+            why = "no usable voice from the model" if isinstance(e, space.NoVoice) else "model unreachable"
+            if again:  # still no voice: keep the sheet it has
+                return live, f"already {key} ({why}: generic voice, ask again when the model is up)"
             persona = space.sheet_text(clean_who, {"Voice": f"Speak as {clean_who}: adopting their tone, mannerisms, and habits. {FALLBACK}"})
-            look, tint, down = [], "#ffe347", True
+            look, tint, down = [], "#ffe347", why
         name = key  # the whole name: "Ghost" alone would be looked up as any ghost
 
     update_profile(name=name, persona=persona, look=look, tint=tint)
@@ -2559,7 +2732,7 @@ def _become_persona(who: str) -> tuple[dict[str, Any], str]:
         for v in DEFAULT_COUPLED_VARS:
             con.execute("UPDATE char_vars SET value = ?, delta = 0, streak = 0, passed = 0 WHERE name = ?", (v.get("value", 0.0), v["name"]))
     con.close()
-    event_learned = f"became {name}" + (" (model unreachable: generic voice, ask again when the model is up)" if down else "")
+    event_learned = f"became {name}" + (f" ({down}: generic voice, ask again when the model is up)" if down else "")
     return {"name": name, "persona": persona, "look": look, "tint": tint}, event_learned
 
 
@@ -2690,8 +2863,10 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
         last = con.execute("SELECT MAX(id) AS m FROM char_turns").fetchone()["m"]
         con.close()
         if (q["chat"] and last == q["chat"]) or answering:  # its question is the last chat bubble, or its prompt is on your screen: only then is this the answer, not chat ("talk like ..." would switch the character)
-            answer_correction(text)
+            look = answer_correction(text)["lookup"]
             reply = "Then I will sleep on it and learn that way. I will tell you when I wake." if q.get("kind") == "direction" else f"Noted. From now on: {text.strip()[:300]}"
+            if look:
+                reply += ("" if reply.endswith((".", "!", "?")) else ".") + f" I will look up {', '.join(look)} first."
             con = db.connect()
             with con:
                 con.execute("INSERT INTO char_turns (role, text, events) VALUES ('user', ?, '[]'), ('dot', ?, '[]')", (text, reply))
@@ -2792,15 +2967,16 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
     # 5. Gather knowledge memory context: the character's own notes that share names or words with the message
     mem_rows, lit = recall(text)
     turn_rows = _chat_since()[-6:]  # the live character's own chat: a new one must not answer as the last one
+    _feel_frustration(frustration_in(text, turn_rows), turn_rows)
     con = db.connect()
     lessons = [r["content"] for r in con.execute("SELECT content FROM char_memories WHERE source = 'lesson' AND id > ? ORDER BY id DESC LIMIT 2", (_start(),))]
     con.close()
 
     memory_context = ""
     if mem_rows:
-        memory_context = "\n\nKNOWLEDGE SOURCES & ACCUMULATED MEMORY:\n" + "\n".join(
-            f"- [{r['title']}]: {r['content']}" for r in mem_rows
-        )
+        memory_context = (f"\n\nWHAT YOU REMEMBER (you learned these yourself; they are your own memories of your world. Answer from them, "
+                          "and never say you have no memory or cannot remember):\n"  # a small model disowns "sources" and falls back to "I am an AI with no memory"
+                          + "\n".join(f"- {r['title'].removeprefix('Reflection: ')}: {r['content']}" for r in mem_rows))
 
     # 6. Build prompt with persona, active variables, and memory
     system_directives = [profile["persona"], _you_line(), *[x for x in [_feel_line()] if x]]
@@ -2815,8 +2991,9 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
         system_directives.append(f"Behavioral steering from rule '{f['name']}': Begin your response with: '{f['say']}'")
     if tone := _tone():  # the tone section: your direction, then whatever the tune step found works better
         system_directives.append(tone)
-    if told := instructions()[:5]:  # what you said after its mistakes; newest first, capped so a small model still reads the rest
-        system_directives.append("Standing instructions from the person you talk to (always follow them):\n" + "\n".join(f"- {i['text']}" for i in told))
+    system_directives += _signal_lines()  # frustration or a slipping voice, said plainly while past its mark
+    if told := _standing_line():  # what you said after its mistakes: the newest word for word, the older folded, none dropped
+        system_directives.append(told)
     if (k := dial()) != 1.0:  # your curiosity dial shows in how it talks, not only in how much it learns
         system_directives.append("You are not curious right now: answer what is asked and nothing more, no questions back." if k == 0 else
                                  "You are less curious than usual: keep to what is asked." if k < 1 else
@@ -2918,6 +3095,8 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
         ).lastrowid
     con.close()
     _hear(user_id, text, told_you, lit, mem_rows, up)
+    if GRADE_REPLIES and not direct and final_reply and not final_reply.startswith(NOT_A_REPLY):
+        _grade_reply(dot_id, text, final_reply)
     if up == "SLEEP":  # its question is the last thing it said, so your next message is the answer (the same path as a correction)
         add_memory(f"Asking: {dot_id}", json.dumps({"asked": text[:300], "said": "", "why": ASK_WAY, "chat": dot_id, "kind": "direction"}), source="sheet")
 

@@ -72,7 +72,7 @@ def test_semi_supervised_research_job_creation_and_memory_assimilation(mock_mode
     # 2. Subsequent turn: verify that the newly synthesized knowledge is assimilated into prompt context
     r2 = char.say("What did you find about physical qubits?")
     last_prompt = mock_model[-1][0]["content"]
-    assert "KNOWLEDGE SOURCES & ACCUMULATED MEMORY:" in last_prompt
+    assert "WHAT YOU REMEMBER (you learned these yourself" in last_prompt
     assert "Surface codes" in last_prompt
 
 
@@ -1545,3 +1545,124 @@ def test_sleep_keeps_the_newest_24_open_questions(monkeypatch):
     assert char.prune_questions() == 6
     assert char._open_questions(0)[0] == "Where is place 6?" and len(char._open_questions(0)) == 24
     assert char.letter()["let_go"] == 6
+
+
+def test_older_instructions_are_folded_into_one_line_not_dropped(monkeypatch):
+    for n in range(7):
+        char.add_memory(f"Instruction: rule {n}", f"Rule {n}.", source="sheet")
+    asked = []
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: asked.append(m) or "Follow rules zero and one.")
+    p = char.prompt_now()
+    assert all(f"- Rule {n}." in p for n in range(2, 7)) and "- (and your older ones) Follow rules zero and one." in p
+    assert "Rule 0." in asked[0][1]["content"] and "Rule 1." in asked[0][1]["content"] and "Rule 2." not in asked[0][1]["content"]
+    char.prompt_now()
+    assert len(asked) == 1  # folded once per set of older instructions
+    assert char.review()["folded"] == {"count": 2, "text": "Follow rules zero and one."}
+    char.add_memory("Instruction: rule 7", "Rule 7.", source="sheet")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: "")  # the fold fails: every instruction goes in word for word
+    p = char.prompt_now()
+    assert all(f"- Rule {n}." in p for n in range(8))
+
+
+def test_new_directions_merge_into_one_grown_line_so_the_persona_stops_growing(monkeypatch):
+    merges = []
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: merges.append(m[1]["content"]) or f"Speak in way {len(merges)}, keeping the rest.")
+    persona = "You are BT.\nHow you have grown, and how you speak now: be brief\nHow you have grown, and how you speak now: be warm"
+    for n in range(10):
+        persona = char.grow(persona, f"way {n}")
+    grown = [ln for ln in persona.splitlines() if ln.startswith(char.GROWN)]
+    assert persona.startswith("You are BT.\n") and len(grown) == 1 and len(grown[0]) <= len(char.GROWN) + 2 + char.GROWN_CAP
+    assert "be brief; be warm" in merges[0] and "New direction: way 0" in merges[0]  # the two old lines were merged with the first
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: "")  # merge fails: the new direction alone, still one line
+    assert char.grow(persona, "be loud").endswith(f"{char.GROWN}: be loud") and char.grow(persona, "x").count(char.GROWN) == 1
+    char.update_profile("BT", persona, [], "")
+    s = char.monitor()["prompt"]
+    assert s["budget"] == char.PROMPT_BUDGET and s["chars"] >= len(persona)
+
+
+def test_frustration_and_voice_rise_and_fall_and_the_model_is_told_past_their_marks(monkeypatch):
+    from harness_char import harness, train
+    monkeypatch.setattr(char, "GRADE_REPLIES", True)
+    monkeypatch.setattr(char.websearch, "search", lambda s, q, **k: {"results": []})  # "what is…" reads as research: no real web in a test
+    char.update_profile("BT", "You are BT.\nVoice: Speak with thou and thee.", [], "")
+    replies = []
+
+    def model(s, m, **k):
+        sys_ = m[0]["content"]
+        if "grade a reply against numbered traits" in sys_:  # trait 1 identity, trait 2 the voice: only "thou" carries it
+            return "1 YES\n2 " + ("YES" if "thou" in m[1]["content"].split("Reply:")[1].lower() else "NO")
+        replies.append(sys_)
+        return "Thou art heard." if "Hold to it" in sys_ else "The weather is fine."
+    monkeypatch.setattr(jobs, "complete", model)
+
+    char.say("what is the weather on harvest")
+    assert char.signals()["frustration"] == 0 and char.signals()["voice"] == 0.85  # 0.7 * 1.0 + 0.3 * 0.5: one miss, still above the mark
+    char.say("no, wrong. what is the weather on harvest")  # two words, and the same ask again: capped at two words, plus the repeat
+    s = char.signals()
+    assert s["frustration"] == 3 and "Speak with thou and thee." in s["missed"]
+    assert "The person is frustrated with you (frustration 3" in replies[-1]  # past its mark before the prompt was built: the model is told
+    char.say("tell me about cooper")
+    assert "The person is frustrated with you (frustration 2.5" not in replies[-1]  # a calm message eases it to 2.5, under the mark, before the prompt
+    assert char.signals()["frustration"] == 2.5
+    for topic in ("the titans", "the militia", "the war"):  # different asks: no repeat, frustration keeps easing
+        char.say(f"tell me about {topic}")
+    assert "Hold to it in this reply" in replies[-1] and "Hold to it" not in replies[-2]  # voice slipped under its mark: the model is told what it missed
+    assert char.signals()["voice"] > char.VOICE_MARK  # and the reply that held its voice brought it back up
+    assert "frustration" in "\n".join(x["content"] for x in harness.prompt())  # the planner sees both signals
+    frustrated = [t["id"] for t in char._chat_since() if t["role"] == "dot"][0]  # the first reply, the one you were frustrated by
+    char.add_memory(f"Reviewed: {frustrated}", "ok", source="sheet")
+    assert not any(e["kind"] == "reply" for e in train.snapshot(0, 1, "test")["examples"])  # passed review, but never taught
+    con = db.connect()
+    assert con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE title = ?", (f"Frustrated: {frustrated}",)).fetchone()["c"] == 1
+    assert con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE title = 'Fail: frustration'").fetchone()["c"] == 1
+    con.close()
+
+
+def test_frustration_reads_words_and_repeats_but_not_ordinary_ones():
+    turns = [{"role": "user", "text": "what is the weather on harvest"}, {"role": "dot", "text": "fine", "id": 1}]
+    assert char.frustration_in("I know a good place nobody visits", turns) == []
+    assert char.frustration_in("ugh, that's not it", turns) == ['you said "ugh"', "you said \"that's not it\""]
+    assert char.frustration_in("What is the weather on Harvest?", turns) == ["you asked the same thing again"]
+    assert char.frustration_in("what is the harvest festival", turns) == []  # shares one word, a new ask
+
+
+def test_the_trait_grader_reads_lines_that_repeat_the_trait_before_the_verdict(monkeypatch):
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: "1. You are Yoda. YES\n2. Never say no to a student. NO\n3. What should I")
+    assert char._meets(["You are Yoda.", "Never say no to a student."], "Hmm.", "hi") == (0.5, "missed: Never say no to a student.")
+
+
+
+def test_a_persona_with_no_usable_voice_gets_the_generic_one_and_says_why(monkeypatch):
+    from harness_char import space
+    monkeypatch.setattr(space, "become", lambda who: (_ for _ in ()).throw(space.NoVoice("no usable voice")))
+    prof, said = char.become_persona("Yoda from Star Wars")
+    assert said.endswith("(no usable voice from the model: generic voice, ask again when the model is up)")
+    assert char.FALLBACK in prof["persona"] and char.ENGINES["persona"]["outcome"] == "failed"
+
+
+def test_a_look_it_up_correction_puts_the_names_it_missed_first_in_line(monkeypatch):
+    char.update_profile("J.A.R.V.I.S.", "You are J.A.R.V.I.S.", [], "")
+    char.add_memory("Question: What is the arc reactor?", "What is the arc reactor? (from 3)", source="question")  # its own question, asked earlier
+    asked = "glad you work again after you self destructed trying to save vision, ultron did not win"
+    char.add_memory("Asking: 9", json.dumps({"asked": asked, "said": "I do not self-destruct.", "why": "missed who Vision is", "chat": 0, "kind": "mistake"}), source="sheet")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: "Vision, Ultron, Thanos, J.A.R.V.I.S.")  # Thanos is not in the message: dropped
+    r = char.say("you should have looke dup who these are to get more context", answering=True)
+    assert r["reply"].endswith("I will look up Vision, Ultron first.")
+    assert char._open_questions()[:3] == ["Who or what is Vision?", "Who or what is Ultron?", "What is the arc reactor?"]  # yours go before its own
+    assert char.instructions()[0]["text"].startswith("you should have looke dup")
+
+
+def test_a_correction_that_does_not_ask_for_a_look_up_researches_nothing(monkeypatch):
+    char.add_memory("Asking: 9", json.dumps({"asked": "hi vision", "said": "x", "why": "y", "chat": 0, "kind": "mistake"}), source="sheet")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: "Vision")
+    assert char.answer_correction("be warmer with me")["lookup"] == [] and char._open_questions() == []
+
+
+@pytest.mark.parametrize("reply, slip", [
+    ("I do not remember anything. I am an AI, and I have no memory of past interactions.", True),
+    ("I am LFM3-Omni-2.2B, a model built by Liquid AI.", True),
+    ("As a language model I cannot feel.", True),
+    ("I am an AI, sir, and Ultron used my code to make Vision.", False),  # an AI persona saying it is an AI is in character
+    ("I remember the Mind Stone well.", False)])
+def test_base_model_disclaimers_are_slips_but_an_ai_persona_is_not(reply, slip):
+    assert bool(char.SLIP.search(reply)) == slip

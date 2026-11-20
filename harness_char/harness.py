@@ -5,7 +5,7 @@ import re
 import threading
 from typing import Any
 
-from harness_char import char
+from harness_char import char, rehearse
 from shared import db, llm, settings
 from pdf_research import jobs
 
@@ -71,6 +71,11 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
             state.append("worked last cycle: " + ", ".join(worked))
     useful = [f'reflect "{qs[0]}"' for qs in [char._open_questions(char._start())] if qs] + \
              [f"check {u[0]['id']}" for u in [_unchecked()] if u]
+    if (sg := char.signals())["frustration"] or sg["voice"] < 1:  # rising frustration or a slipping voice says review and tune come first
+        state.append(f"frustration {sg['frustration']:g} (bad past {sg['frustration_mark']:g}), voice {sg['voice']:g} (good above {sg['voice_mark']:g})"
+                     + (f"; missed: {sg['missed']}" if sg["missed"] else ""))
+    if r := rehearse.summary():  # how well its voice holds on fixed questions: a weak trait says tune is worth a pick
+        state.append("last personality rehearsal (share of traits held, 0 to 1): " + r)
     state.append("most useful now: " + ("; ".join(useful) or "plan, then goal, to make new questions"))
     return [{"role": "system", "content": f"You plan the next steps of {who}'s learning. Pick at most {budget} commands from the catalogue. "
                                           "Reply with commands only, one per line, like: reflect \"a topic\" or check 12. No other text." + char._fix("planner")},

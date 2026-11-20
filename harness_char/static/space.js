@@ -56,6 +56,7 @@ async function renderSpace(base = "/space") {
     { name: "/step", does: "Run one learning step now. The Verifier picks which engine runs; watch its row light up.", run: () => learnOne(true) },
     { name: "/recipes", also: ["/how-to"], does: "Its browsing recipes: how it does things on each site. Read them, change them, or teach it one.", run: () => openRecipes() },
     { name: "/browse", also: ["/web"], args: true, does: "Give it a web task, like /browse open wikipedia and check about jarvis. It plans, you steer, then it browses on a screen and tells you what it thinks.", run: (arg) => openBrowse(arg) },
+    { name: "/rehearse", also: ["/rehearsal"], args: true, does: "Test whether its personality is learned: fixed questions, graded trait by trait. Add a model name, like /rehearse my-tuned-model, to compare that model with no persona prompt.", run: (arg) => rehearse(arg) },
     { name: "/mind", does: "Open its memory: every note, question and the prompts it last sent the model.", run: () => openMind() },
     { name: "/wiring", does: "Open the wiring: systems S0, S1, S2, the Verifier, your rules and its corrections.", run: () => openSystems() },
     { name: "/sleep", does: "Put it to sleep: no replies and no learning, so you can swap models and test without chatting by accident.", run: () => setMode("sleeping") },
@@ -1115,7 +1116,8 @@ async function renderSpace(base = "/space") {
             ...d.self.unsure.map((q) => h("p", {}, h("b", {}, "Has not found out "), q)),
             ...(d.self.dropped ? [h("p", {}, h("b", {}, "Verifier rejected "), `${d.self.dropped} of its notes`)] : []),
             ...(d.review?.instructions || []).map((x) => h("p", {}, h("b", {}, "You told it "), x.text, " ", h("button", { type: "button", class: "sp-wire-rm", "aria-label": `Remove instruction: ${x.text}`,
-              onclick: async () => { try { await api(`/char/instructions/${x.id}`, { method: "DELETE" }); } catch { return; } web?.refresh(); openSystems(true); } }, "Remove")))), form, err),
+              onclick: async () => { try { await api(`/char/instructions/${x.id}`, { method: "DELETE" }); } catch { return; } web?.refresh(); openSystems(true); } }, "Remove"))),
+            ...(d.review?.folded?.count ? [h("p", {}, h("b", {}, `Your ${d.review.folded.count} oldest, folded into one line `), d.review.folded.text || "(folded at its next reply)")] : [])), form, err),
         h("p", { class: "sp-wire-trace" }, tr ? `${tr.at}  ${tag(tr.system)} ${tr.kind} · ${tr.topic}${tr.note ? ` · ${tr.note.slice(0, 60)}` : ""}` : "Nothing has run since the server started.")));
     modal.querySelector(".sp-wire-stage").append(svg);
     modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
@@ -1132,6 +1134,17 @@ async function renderSpace(base = "/space") {
     let r; try { r = await api("/char/browse", { method: "POST", body: JSON.stringify({ action: "start", task }) }); }
     catch (e) { return web?.say({ text: e.body?.detail || "I couldn't start browsing.", events: [] }); }
     browsing?.close(); browsing = browseView(r);
+  }
+  // /rehearse: the same questions every time, graded against its traits; with a model name the trained model answers without its persona
+  async function rehearse(model) {
+    web?.say({ text: "Rehearsing: six questions, then each answer is graded. This takes a few minutes.", events: [] });
+    let r; try { r = await api("/char/rehearse", { method: "POST", body: JSON.stringify({ model: (model || "").trim() }) }); }
+    catch (e) { return web?.say({ text: e.body?.detail || "I couldn't rehearse.", events: [] }); }
+    const pct = (v) => (v == null ? "not graded" : `${Math.round(v * 100)}%`);
+    const take = (n, t) => `${n}: ${pct(t.score)} on held-out questions (practice ${pct(t.practice)}). ` + Object.entries(t.traits).map(([k, v]) => `${k} ${pct(v)}`).join("; ");
+    const p = r.takes.prompted, tr = r.takes.trained;
+    web?.say({ text: [take("With its prompt", p), tr && take(`${r.trained_model}, no prompt`, tr),
+      tr && p.score != null && tr.score != null && `Learned into the model: ${pct(tr.score / (p.score || 1))} of what the prompt gets.`].filter(Boolean).join("\n"), events: [] });
   }
   // its recipes: how it does things on each site, written down. It writes one when a browse works; you can read, change, forget or teach one
   async function openRecipes() {

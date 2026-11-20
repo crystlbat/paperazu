@@ -117,21 +117,31 @@ def sheet_text(who: str, sheet: dict[str, str]) -> str:
     return "\n".join([f"You are {who}.", *(f"{s}: {' '.join(sheet[s].split())[:500 if s == 'Voice' else 110]}" for s in SLOTS if sheet.get(s, "").strip())])[:900]
 
 
+class NoVoice(RuntimeError):
+    """The model answered, but not with how they talk: a sheet with "Voice: Yoda" gives nothing to steer by or grade against."""
+
+
+def hollow(voice: str, who: str) -> bool:
+    """A voice that names them and says nothing about how they talk: too short once their name and "Speak as" are taken out."""
+    rest = re.sub(r"(?i)\bspeak as\b|" + "|".join(re.escape(w) for w in who.split() if len(w) > 2), " ", voice)
+    return len([w for w in re.findall(r"[A-Za-z']{3,}", rest) if w.lower() not in {"and", "the", "with", "you", "your", "their", "like"}]) < 2  # "dry and kind" is enough
+
+
 def become(who: str, fired: dict[str, Any] | None = None) -> dict[str, Any]:
     """Look `who` up on the web, boil it down to how they talk, and pick what Dot wears. Raises RuntimeError."""
     if who.strip().lower() in ("gidian", "gideon"):
         who = "Gideon from The Flash"
     s = settings.get_all()
-    found = websearch.search(s, f"{who} personality how they talk")["results"][:6]
+    found = websearch.search(s, f"{who} speech pattern, how they talk, famous quotes")["results"][:6]  # "personality" brought back wiki noise about the franchise
     notes = "\n".join(f"- {r['title']}: {r['snippet']}" for r in found)
     if not notes:
         raise RuntimeError(f"The web had nothing on {who}.")
     raw = jobs.complete(s, [{"role": "system", "content": (
-        f"From these search results, describe how {who} talks, as instructions to someone playing {who}: tone, habits, "
-        "typical phrases, in three short sentences starting with 'Speak as'. Then pick one to three things for a small "
-        f"yellow character to wear as {who}, from: {', '.join(LOOKS)} (holo means it turns into a glowing AI hologram). "
-        "A human wears glasses, monocle or bowtie, never holo or visor; only an AI or a robot is holo or visor. "
-        'Reply with JSON only: {"persona": "...", "look": [...]}.')},
+            f"From these search results, describe how {who} talks, as instructions to someone playing {who}: tone, habits, "
+            "typical phrases, in three short sentences starting with 'Speak as'. Then pick one to three things for a small "
+            f"yellow character to wear as {who}, from: {', '.join(LOOKS)} (holo means it turns into a glowing AI hologram). "
+            "A human wears glasses, monocle or bowtie, never holo or visor; only an AI or a robot is holo or visor. "
+            'Reply with JSON only: {"persona": "...", "look": [...]}.')},
         {"role": "user", "content": notes}], max_tokens=300,
         response_format={"type": "json_schema", "json_schema": {"name": "persona", "schema": PERSONA_SCHEMA}})
     try:
@@ -139,8 +149,12 @@ def become(who: str, fired: dict[str, Any] | None = None) -> dict[str, Any]:
         persona, look = str(data["persona"]).strip(), [x for x in data.get("look") or [] if x in LOOKS][:3]
     except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
         persona, look = raw.strip(), []  # a reply that is not JSON is still a description
-    if not persona:
-        raise RuntimeError(f"I could not make out how {who} talks.")
+    if hollow(persona, who):  # a small model squeezed into JSON often gives the name alone; asked plainly, it describes the voice
+        persona = (jobs.complete(s, [{"role": "system", "content": f"In three short sentences starting with 'Speak as', tell an actor how {who} talks: "
+                                                                    "tone, word order, habits, and two things they really say. Plain text only."},
+                                     {"role": "user", "content": who}], max_tokens=160) or "").strip()
+        if hollow(persona, who):
+            raise NoVoice(f"no usable voice for {who}: the model gave {persona[:60]!r}")
     learned = sheet_text(who, {"Voice": persona})
     out = {"learned": learned, "sheet": {k: sheet_of(learned).get(k, "") for k in SLOTS}, "look": list(dict.fromkeys(look)),
            "sources": [r["url"] for r in found if r.get("url")][:3]}

@@ -609,10 +609,10 @@ def test_sheet_round_trips_and_old_persona_is_voice() -> None:
 @pytest.mark.parametrize("colour,tinted", [("Blue.", "blue"), ("dunno", None)])
 def test_become_fills_voice_and_picks_a_colour(monkeypatch: pytest.MonkeyPatch, colour: str, tinted: str | None) -> None:
     monkeypatch.setattr(space.websearch, "search", lambda s, q: {"results": [{"title": "S", "url": "https://x.test", "snippet": "sleuth"}]})
-    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: colour if m[0]["content"].startswith("Pick") else "Speak as a sleuth.")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: colour if m[0]["content"].startswith("Pick") else "Speak as a sleuth: clipped, cold deductions, sharp asides.")
     r = space.become("Sherlock")
-    assert r["learned"] == "You are Sherlock.\nVoice: Speak as a sleuth."
-    assert r["sheet"] == {"Voice": "Speak as a sleuth.", "Calls you": "", "Catchphrase": "", "World": ""}
+    assert r["learned"] == "You are Sherlock.\nVoice: Speak as a sleuth: clipped, cold deductions, sharp asides."
+    assert r["sheet"] == {"Voice": "Speak as a sleuth: clipped, cold deductions, sharp asides.", "Calls you": "", "Catchphrase": "", "World": ""}
     assert r.get("tint") == tinted
 
 
@@ -635,3 +635,25 @@ def test_the_steer_sentences_read_as_rules_without_saving():
     assert "hatch the creature watson" in space.preview("when i say clue 2 times, spawn a creature called watson that lists the clues")[0]
     assert space.preview("when i say ace 3 times, say hi there") == ["Counts “ace” in your messages. Every 3: say “hi there”."]
     assert len(space.variables()) == before
+
+
+def test_a_voice_that_only_names_them_is_retried_once_then_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(space.websearch, "search", lambda s, q: {"results": [{"title": "Y", "url": "https://x.test", "snippet": "small green"}]})
+    asked = []
+    def model(s, m, **kw):
+        if m[0]["content"].startswith("Pick"):
+            return "green"
+        asked.append(m[0]["content"])
+        return '{"persona": "Yoda", "look": ["glasses"]}' if len(asked) == 1 else "Speak as Yoda: object first, then subject, verb last; calm and riddling."
+    monkeypatch.setattr(jobs, "complete", model)
+    r = space.become("Yoda from Star Wars")
+    assert "object first" in r["learned"] and r["look"] == ["glasses"]  # the plain retry gives the voice; the outfit stays from the first answer
+    assert "Plain text only" in asked[1] and "JSON" not in asked[1]
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: '{"persona": "Speak as Yoda.", "look": []}' if "JSON" in m[0]["content"] else "Yoda.")
+    with pytest.raises(space.NoVoice):
+        space.become("Yoda from Star Wars")
+
+
+def test_hollow_reads_how_they_talk_not_their_name():
+    assert space.hollow("Yoda", "Yoda from Star Wars") and space.hollow("Speak as Yoda from Star Wars.", "Yoda from Star Wars")
+    assert not space.hollow("Speak as Yoda: calm, riddling, verbs come last.", "Yoda from Star Wars")

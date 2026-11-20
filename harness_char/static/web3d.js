@@ -163,7 +163,12 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     const row = (k, v, tip) => h("p", { title: tip || "" }, h("small", {}, k), v);
     facts.replaceChildren(row("last reply", m.last ? `${m.last.names.length} names · ${m.last.notes.length} notes` : "none yet", m.last ? [...m.last.names, ...m.last.notes].join(" · ") : "Ask it something."),
       row("corrections", `${m.loop.cycles} cycle${m.loop.cycles === 1 ? "" : "s"} · ${m.loop.instructions + m.loop.fixes} prompt change${m.loop.instructions + m.loop.fixes === 1 ? "" : "s"}`, `It reread ${m.loop.reviewed} of its replies and found ${m.loop.mistakes} mistakes. You answered ${m.loop.cycles} correction questions; ${m.loop.instructions} standing instructions and ${m.loop.fixes} approved prompt fixes are in use.`),
-      row("steps", String(m.steps), "Every learning step and every reply since this character began."));
+      row("steps", String(m.steps), "Every learning step and every reply since this character began."),
+      ...(m.growth?.length ? [(() => { const g = m.growth, ps = g.map((x) => x.prompted).filter((v) => v != null), ts = g.map((x) => x.trained).filter((v) => v != null), last = g.at(-1);
+        return row("growth", h("span", {}, `${ps.length > 1 ? `${ps[0]} → ` : ""}${last.prompted ?? "–"}${last.trained != null ? ` · trained ${last.trained}` : ""} · ${g.length} run${g.length === 1 ? "" : "s"} `, spark(ps, "#7dffa8"), ...(ts.length > 1 ? [spark(ts, "#ffb347")] : [])),
+          "The held-out rehearsal score, run by run: the share of its traits it holds on questions it never practises. Rising means it is growing. Green is with its prompt; orange is the trained model with no prompt. Run /rehearse to add a point."); })()] : []),
+      ...(m.signals ? [row("signals", `voice ${m.signals.voice} · frustration ${m.signals.frustration}${m.signals.frustration >= m.signals.frustration_mark ? " · frustrated" : ""}`, `Voice is each reply graded on its traits (good above ${m.signals.voice_mark}). Frustration rises with your words, a repeated question or a base-model slip, and eases on calm messages; past ${m.signals.frustration_mark} it is told so and the Verifier works on it.${m.signals.missed ? " Last missed: " + m.signals.missed : ""}`)] : []),
+      ...(m.prompt ? [row("prompt", `${m.prompt.chars} / ${m.prompt.budget} chars${m.prompt.chars > m.prompt.budget ? " · over budget" : ""}`, "Its persona, tone and your instructions, the parts that grow as it learns. New directions merge into one line; older instructions fold into one.")] : []));
   }
   const seen = {}; let engOk = true; // kind -> last.at, to flash a row when its engine runs again
   async function engines() {
@@ -343,14 +348,14 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     g.strokeStyle = "#fff"; g.globalAlpha = (.12 + .06 * Math.sin(t)) * (1 - m) * (1 - grow); g.lineWidth = 1; g.beginPath(); g.arc(cx, y, R + 12 * K, 0, 6.283); g.stroke(); g.globalAlpha = 1; // a breathing hairline where the glow was
     const body = (asleep ? .6 : detached ? (form ? .9 : .38) : 1) * (1 - grow), fade = body * (1 - c);
     g.globalCompositeOperation = "lighter"; glow(cx, y, R * (2.3 + .15 * Math.sin(t * .8)), tint, .32 * body * (1 - m)); glow(cx, y, R * 1.1, "#ffffff", .08 * body * (1 - m)); g.globalCompositeOperation = "source-over"; // its aura, breathing in its colour
-    g.strokeStyle = tint; g.lineWidth = 1;
-    // the story's Dot: contour rings, the far half dim and the near half bright, inside the same wobbling, breathing outline the blob had
-    const tilt = Math.max(.1, Math.abs(Math.sin(pitch))), near = pitch < 0 ? Math.PI : 0, wob = (a) => 1 + (still ? 0 : .022 * Math.sin(3 * a + t * 1.3) + .016 * Math.sin(5 * a - t * 1.7));
-    for (let i = 1; i < 18; i++) { const v = -1 + i / 9, rr = sr * Math.sqrt(1 - v * v) * sq * wob(i), yy = sy + v * sr * Math.cos(pitch) / sq;
-      for (const [a0, al] of [[near + Math.PI, .14], [near, .62]]) { g.globalAlpha = al * fade; g.beginPath(); g.ellipse(cx, yy, rr, rr * tilt, 0, a0, a0 + Math.PI); g.stroke(); } }
-    g.globalAlpha = .4 * fade; g.beginPath();
-    for (let a = 0; a <= 6.3; a += .12) { const r = sr * wob(a), qx = cx + Math.cos(a) * r * sq, qy = sy + Math.sin(a) * r / sq; a ? g.lineTo(qx, qy) : g.moveTo(qx, qy); }
-    g.closePath(); g.stroke(); g.globalAlpha = 1;
+    // its default form: a core of dots that breathes, inside three tilted rings that each turn at their own pace, all on the one tempo; far dots dim, near ones bright
+    if (fade > .01) { const bt = still ? 0 : tick * BEAT, cr = sr * .5 * (1 + .03 * Math.sin(bt)), ya = Math.cos(yaw), yb = Math.sin(yaw), pa = Math.cos(pitch), pb = Math.sin(pitch), ds = Math.max(1.4, 1.6 * K);
+      const put = (x, y, z, r, s, a) => { const x1 = x * ya + z * yb, z1 = -x * yb + z * ya, y1 = y * pa - z1 * pb, z2 = y * pb + z1 * pa; g.globalAlpha = a * fade * (.3 + .35 * (1 - z2)); g.fillRect(cx + x1 * r - s / 2, sy + y1 * r - s / 2, s, s); };
+      g.fillStyle = tint; for (const [x, y, z] of CORE) put(x, y, z, cr, ds, 1);
+      RINGS.forEach(([rr, tl, sp, tw], k) => { const a0 = bt * .5 * sp, ct = Math.cos(tl), st = Math.sin(tl), cw = Math.cos(tw), sw = Math.sin(tw);
+        for (let i = 0; i < 160; i++) { if ((i + k * 7) % 23 < 3) continue; const a = i / 160 * 6.283 + a0, x = Math.cos(a), z = Math.sin(a) * ct; // gaps make the turning readable
+          put(x * cw + z * sw, Math.sin(a) * st, z * cw - x * sw, sr * rr, ds * .85, .75); } });
+      g.globalAlpha = 1; }
     const F = form && c > .01 ? dotChibi(cx, y, R, c, t, body) : { x: cx, y, s: 1, ink: "#fff" }; // the character, as a cloud of dots in its own colours // where its eyes go: on the chibi's face once it has one
     if (grow > .55) return; // dissolved into the net: its jobs walk it now
     if (asleep && !still) { g.save(); g.globalCompositeOperation = "lighter"; for (let z = 0; z < 3; z++) { const p = (tick * .004 + z / 3) % 1, s2 = (5 + z * 2.5) * K, zx = F.x + 26 * K + z * 12 * K + Math.sin(p * 6) * 4, zy = F.y - 20 * K - p * 70 * K; g.globalAlpha = Math.sin(p * Math.PI) * .9; g.fillStyle = "#9fb4ff"; // asleep: Zs of dots drift up off it
@@ -539,6 +544,8 @@ function spWeb(root, { api, h, still, mind, wiring, step, reload }) {
     if (!on) { fp[0] += (home[0] - fp[0]) * .06; fp[1] += (home[1] - fp[1]) * .06; } }
   // its own moves: they work on the cloud of dots itself, so they fit any form it wears
   const BEAT = .034; // the one tempo it lives at: a breath every ~3 s; sway, bob and dance are multiples of it
+  const CORE = Array.from({ length: 400 }, (_, i) => { const y = 1 - 2 * (i + .5) / 400, r = Math.sqrt(1 - y * y), a = i * 2.39996; return [Math.cos(a) * r, y, Math.sin(a) * r]; }); // the default form's core: dots on a Fibonacci spiral
+  const RINGS = [[.72, .5, 1, 0], [.84, -.8, -1.6, 1.2], [.96, 1.4, .6, 2.4]]; // its rings: radius (of R), tilt, speed (x the tempo), turn
   const EMO = { hop: [70, "HOP"], spin: [90, "WHEE"], shiver: [60, "BRRR"], poof: [110, "POOF"], bow: [90, "HELLO"], sit: [360, "SIT"], cute: [360, "✦ ♪ ✦"] };
   const emote = (k) => { const ks = Object.keys(EMO); emo = { k: k || ks[Math.random() * ks.length | 0], t0: tick }; };
   function dotChibi(x, y, R, k, t, alpha) {

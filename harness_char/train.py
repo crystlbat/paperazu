@@ -15,7 +15,7 @@ import threading
 import time
 from typing import Any
 
-from harness_char import char
+from harness_char import char, rehearse
 from shared import db
 
 SCHEMA = """
@@ -85,8 +85,9 @@ def snapshot(run_id: int, step: int, why: str) -> dict[str, Any]:
              "tones that missed": [f"{t.get('why', '')}: {t['tone'][:200]}" for t in tones if not t.get("met")],
              "guesses far off": [f"{topic(i)}: {g[:160]} ({round(float(s) * 100)}% off)" for i, s, g in guesses if float(s) >= 0.5]}
     examples = []
+    frustrated = {int(r["title"].removeprefix("Frustrated: ")) for r in _rows("Frustrated: %", start) if r["title"].removeprefix("Frustrated: ").isdigit()}
     for i, t in enumerate(turns):  # what it said well: a reply the Verifier passed, with what you asked
-        if t["role"] == "dot" and reviewed.get(t["id"]) == "ok" and i and turns[i - 1]["role"] == "user":
+        if t["role"] == "dot" and reviewed.get(t["id"]) == "ok" and i and turns[i - 1]["role"] == "user" and t["id"] not in frustrated:
             examples.append({"kind": "reply", "user": turns[i - 1]["text"], "assistant": t["text"]})
     for t in tones:  # a better reply the tune step wrote and scored as meeting every trait
         if t.get("met") and t.get("trial") and t.get("asked"):
@@ -95,6 +96,10 @@ def snapshot(run_id: int, step: int, why: str) -> dict[str, Any]:
         if v == "keep" and i in notes and notes[i]["source"] == "reflection":
             q = topic(i)
             examples.append({"kind": "knowledge", "user": q if q.endswith("?") else f"Tell me about {q}.", "assistant": notes[i]["content"][:1500]})
+    if r := rehearse.last():  # the prompted rehearsal answers that held every trait are what a trained model should say without the prompt
+        took = [a for a in r["takes"]["prompted"]["answers"] if not a["held"]]  # held-out answers are never taught
+        examples += [{"kind": "rehearsal", "user": a["q"], "assistant": a["a"]} for a in took if a["score"] == 1]
+        fails["rehearsal misses"] = [f"{a['q']} -> {a['a'][:160]!r}: {a['why']}" for a in took if a["score"] is not None and a["score"] < 1]
     d = char.disposition()
     data = {"why": why, "step": step, "prompt": system, "works": works, "fails": fails, "examples": [e | {"system": system} for e in examples],
             "numbers": {"curiosity": d["curiosity"], "maturity": d["maturity"], "needs": char.needs(), "trust": char.trust()["value"]}}
