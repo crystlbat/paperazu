@@ -1,6 +1,6 @@
 # Creatures: the backend the screen expects
 
-The Creatures page (`#creatures`, `static/creatures.js`) calls these routes. `GET /jobs` answering 200 is how the page
+The Creatures page (`#creatures`, `pdf_research/static/creatures.js`) calls these routes. `GET /jobs` answering 200 is how the page
 knows this backend is the one it should use.
 
 A **creature** is a job: a trigger, a short chain of steps, and an output. A **template** is the skeleton of a document a
@@ -56,7 +56,7 @@ job fills in, one heading at a time (deep-research style). Jobs run on one paper
 | POST | `/dot/talk` | `{messages: [{role: "user"\|"assistant", content}]}` | `{reply, job: Job-without-id \| null}` (a draft, not saved) |
 
 Validation errors: 422 with `{detail: {errors: [{field, message}]}}`, like the other routes. A run that cannot start (no
-paper, job gone) is 422 with one error. Add `/jobs/\d+/run` and `/dot/talk` to `AI_CALL` in `static/app.js` so they are
+paper, job gone) is 422 with one error. Add `/jobs/\d+/run` and `/dot/talk` to `AI_CALL` in `shared/static/app.js` so they are
 off while Dot sleeps.
 
 ## Keeping the Mac alive
@@ -71,7 +71,7 @@ off while Dot sleeps.
 
 ## Starters (`POST /jobs/starters`)
 
-`STARTER_JOBS` and `STARTER_TEMPLATES` in `workbench/jobs.py` are those creatures. A name already saved is left as it is.
+`STARTER_JOBS` and `STARTER_TEMPLATES` in `pdf_research/jobs.py` are those creatures. A name already saved is left as it is.
 Detailed outline, Simplified version, Research brief (template), Compare papers (each_paper then template), Quiz me on
 the page (dwell, ask), Explain what I highlight (highlight, card).
 

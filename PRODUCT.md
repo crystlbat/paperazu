@@ -38,7 +38,7 @@ The product name in the interface is Paper Workbench. The buddy is Dot. The jobs
 
 ## Evidence on Hand
 
-Working UI: `static/creatures.js`, `static/creatures.css`, reached at `#creatures`. The configuration view is the bench inside that page (Reads, the creature, Leaves you). Contract for the unfinished backend: `docs/creatures-api.md`. Starter copy lives in `static/creatures.js`.
+Working UI: `pdf_research/static/creatures.js`, `pdf_research/static/creatures.css`, reached at `#creatures`. The configuration view is the bench inside that page (Reads, the creature, Leaves you). Contract for the unfinished backend: `docs/creatures-api.md`. Starter copy lives in `pdf_research/static/creatures.js`.
 
 No testimonials, customers, pricing, or benchmarks. Do not invent any.
 
