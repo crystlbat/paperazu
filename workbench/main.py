@@ -1,5 +1,6 @@
 """FastAPI app: API routes plus the one-page frontend."""
 import json
+import re
 import os
 import time
 import sqlite3
@@ -9,14 +10,14 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import Body, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from . import canvas, checker, db, export, guide, marks, framework, graph, library, llm, notes, primer, settings, shelf, themes
+from . import canvas, char, checker, chibi, db, export, guide, harness, jobs, marks, framework, graph, library, llm, notes, primer, sections, settings, shelf, space, themes, train, verse, websearch
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -26,8 +27,10 @@ PORT = int(os.environ.get("PORT", "8765"))
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     db.init()
+    char.init_db()
     library.pick_missing_templates()
     primer.reset_stale()
+    jobs.start()
     yield
 
 
@@ -37,8 +40,10 @@ app = FastAPI(title="Paper Reading Workbench", lifespan=lifespan)
 @app.middleware("http")
 async def no_stale_assets(request: Request, call_next: Any) -> Response:
     response = await call_next(request)
-    if request.url.path == "/" or request.url.path.startswith("/static/"):
-        response.headers["Cache-Control"] = "no-cache"  # revalidate, so UI edits show at once
+    if request.url.path in ("/", "/char", "/space") or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 
@@ -81,6 +86,12 @@ def _errors(e: ValidationError) -> dict[str, str]:
 @app.post("/settings/test-connection")
 def test_connection() -> dict[str, Any]:
     return llm.test_connection(settings.get_all())
+
+
+@app.post("/settings/check-context")
+def check_context() -> dict[str, Any]:
+    """Reads the context window the local server reports. Does not send the paper."""
+    return llm.context_window(settings.get_all())
 
 
 @app.post("/papers", status_code=201)
@@ -220,7 +231,8 @@ def explain(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if pages is None:
         raise HTTPException(404, detail="This paper is not in the library.")
     box = marks.boxed(paper_id, req.page, req.rect) if req.rect else None
-    return llm.explain(settings.get_all(), req.words.strip(), paper["title"], pages, req.page - 1, box[1] if box else None)
+    near = marks.around(paper_id, req.page, req.rect) if req.rect else ("", "")
+    return llm.explain(settings.get_all(), req.words.strip(), paper["title"], pages, req.page - 1, box[1] if box else None, near)
 
 
 @app.get("/papers/{paper_id}/primer")
@@ -308,6 +320,23 @@ def get_blocks(paper_id: str, page: int) -> dict[str, Any]:
     return out
 
 
+@app.get("/papers/{paper_id}/text/{page}")
+def get_page_text(paper_id: str, page: int) -> dict[str, Any]:
+    """The page as headings, paragraphs and cut-out pictures, in reading order, for the text view."""
+    out = marks.reflow(paper_id, page)
+    if out is None:
+        raise HTTPException(404, detail="This page is not in the library.")
+    return out
+
+
+@app.get("/papers/{paper_id}/section")
+def get_section(paper_id: str, heading: str = Query(..., max_length=300), page: int = Query(1, ge=1)) -> dict[str, Any]:
+    out = sections.find(paper_id, heading, page)
+    if out is None:
+        raise HTTPException(404, detail="I could not find that section in the paper.")
+    return out
+
+
 @app.get("/papers/{paper_id}/marks")
 def get_marks(paper_id: str) -> dict[str, Any]:
     out = marks.all_for(paper_id)
@@ -386,12 +415,15 @@ def add_highlight(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, 
 def suggest_highlights(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Dot picks the important lines inside a box and highlights them in blue. Runs on the local model only."""
     try:
-        req = marks.MarkIn(**{**body, "text": ""})
+        focus = body.get("focus") or ""
+        if not isinstance(focus, str) or len(focus) > 300:
+            raise HTTPException(422, detail={"errors": [{"field": "focus", "message": "Say what to highlight in at most 300 characters."}]})
+        req = marks.MarkIn(**{**{k: v for k, v in body.items() if k != "focus"}, "text": ""})
     except ValidationError as e:
         raise HTTPException(422, detail={"errors": _errors(e)})
     paper = _paper_or_404(paper_id)
     try:
-        out = marks.suggest(settings.get_all(), paper_id, req.page, req.rect, paper["title"])
+        out = marks.suggest(settings.get_all(), paper_id, req.page, req.rect, paper["title"], focus.strip())
     except primer.PrimerError as e:
         return {"ok": False, "error": str(e)}
     if out is None:
@@ -459,6 +491,7 @@ class CanvasAskIn(BaseModel):
     page: int = Field(ge=1)
     from_card: int | None = None
     at: tuple[float, float]
+    quote: str = Field("", max_length=3000)  # the part of the page the student selected, if any
 
 
 @app.post("/papers/{paper_id}/canvas/ask")
@@ -467,7 +500,7 @@ def canvas_ask(paper_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any
         req = CanvasAskIn(**body)
     except ValidationError as e:
         raise HTTPException(422, detail={"errors": _errors(e)})
-    out = canvas.ask(settings.get_all(), paper_id, req.question.strip(), req.page, req.from_card, req.at)
+    out = canvas.ask(settings.get_all(), paper_id, req.question.strip(), req.page, req.from_card, req.at, req.quote.strip())
     if out is None:
         raise HTTPException(404, detail="This paper is not in the library.")
     return out
@@ -493,6 +526,15 @@ def canvas_say(paper_id: str, cid: int, body: dict[str, Any] = Body(...)) -> dic
     except ValidationError as e:
         raise HTTPException(422, detail={"errors": _errors(e)})
     out = canvas.say(settings.get_all(), paper_id, cid, req.text)
+    if out is None:
+        raise HTTPException(404, detail="This card is not there.")
+    return out
+
+
+@app.post("/papers/{paper_id}/canvas/cards/{cid}/pickup")
+def canvas_pickup(paper_id: str, cid: int) -> dict[str, Any]:
+    """Dot picks up an @ai task left on this card."""
+    out = canvas.pickup(settings.get_all(), paper_id, cid)
     if out is None:
         raise HTTPException(404, detail="This card is not there.")
     return out
@@ -709,9 +751,600 @@ def library_ask(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return shelf.ask(settings.get_all(), req.question.strip(), [t.model_dump() for t in req.history])
 
 
+class WebSearchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    q: str = Field(min_length=1, max_length=200)
+
+    @field_validator("q")
+    @classmethod
+    def _words(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if not v:
+            raise ValueError("Tell me what to look up.")
+        return v
+
+
+@app.post("/library/web")
+def library_web(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Search the web through Unsloth. The body is only the query."""
+    try:
+        req = WebSearchIn(**body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": _errors(e)})
+    try:
+        return websearch.search(settings.get_all(), req.q)
+    except RuntimeError as e:
+        raise HTTPException(502, detail=str(e))
+
+
 @app.get("/model/status")
 def model_status() -> dict[str, Any]:
     return llm.model_status(settings.get_all())
+
+
+def _checked(model: Any, body: dict[str, Any]) -> Any:
+    try:
+        return model.model_validate(body)
+    except ValidationError as e:
+        raise HTTPException(422, detail={"errors": jobs.errors(e)})
+
+
+def _reject(e: jobs.Reject) -> HTTPException:
+    return HTTPException(422, detail={"errors": [{"field": e.field, "message": e.message}]})
+
+
+@app.get("/jobs")
+def get_jobs() -> dict[str, Any]:
+    return jobs.list_jobs()
+
+
+@app.post("/jobs", status_code=201)
+def post_job(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        return jobs.create_job(_checked(jobs.JobIn, body))
+    except jobs.Reject as e:
+        raise _reject(e)
+
+
+@app.post("/jobs/starters")
+def post_starters() -> dict[str, Any]:
+    return jobs.starters()
+
+
+@app.put("/jobs/{job_id}")
+def put_job(job_id: int, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        return jobs.update_job(job_id, _checked(jobs.JobIn, body))
+    except jobs.Reject as e:
+        raise _reject(e)
+    except KeyError:
+        raise HTTPException(404, detail="That creature is gone.")
+
+
+@app.delete("/jobs/{job_id}")
+def remove_job(job_id: int) -> dict[str, bool]:
+    if not jobs.delete_job(job_id):
+        raise HTTPException(404, detail="That creature is gone.")
+    return {"ok": True}
+
+
+@app.post("/jobs/{job_id}/run")
+def run_job(job_id: int, response: Response, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        run, created = jobs.enqueue(job_id, _checked(jobs.RunIn, body))
+    except jobs.Reject as e:
+        raise _reject(e)
+    except jobs.QueueFull:
+        raise HTTPException(429, detail="Too many jobs waiting.")
+    response.status_code = 201 if created else 200
+    return run
+
+
+@app.get("/templates")
+def get_templates() -> dict[str, Any]:
+    return jobs.list_templates()
+
+
+@app.post("/templates", status_code=201)
+def post_template(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    return jobs.create_template(_checked(jobs.TemplateIn, body))
+
+
+@app.put("/templates/{template_id}")
+def put_template(template_id: int, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        return jobs.update_template(template_id, _checked(jobs.TemplateIn, body))
+    except KeyError:
+        raise HTTPException(404, detail="That shape is gone.")
+
+
+@app.delete("/templates/{template_id}")
+def remove_template(template_id: int) -> dict[str, bool]:
+    if not jobs.delete_template(template_id):
+        raise HTTPException(404, detail="That shape is gone.")
+    return {"ok": True}
+
+
+@app.get("/runs")
+def get_runs(limit: int = Query(30, ge=1, le=100)) -> dict[str, Any]:
+    return jobs.list_runs(limit)
+
+
+@app.get("/runs/{run_id}")
+def get_run(run_id: int) -> dict[str, Any]:
+    run = jobs.get_run(run_id)
+    if not run:
+        raise HTTPException(404, detail="That run is gone.")
+    return run
+
+
+@app.post("/runs/{run_id}/stop")
+def stop_run(run_id: int) -> dict[str, Any]:
+    run = jobs.stop(run_id)
+    if not run:
+        raise HTTPException(404, detail="That run is gone.")
+    return run
+
+
+@app.post("/dot/talk")
+def dot_talk(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        return jobs.talk(body.get("messages") or [])
+    except RuntimeError as e:
+        raise HTTPException(502, detail=str(e))
+
+
+@app.get("/space")
+def get_space() -> dict[str, Any]:
+    return space.state()
+
+
+@app.get("/space/notes")
+def get_space_notes() -> dict[str, Any]:
+    return {"notes": space.all_notes()}
+
+
+@app.post("/space/say")
+def space_say(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(422, detail="Say something to Dot.")
+    return space.say(text)
+
+
+@app.delete("/space/vars/{var_id}")
+def space_remove_var(var_id: int) -> dict[str, Any]:
+    if not space.remove_var(var_id):
+        raise HTTPException(404, detail="That variable is gone.")
+    return space.state()
+
+
+@app.delete("/space")
+def space_clear() -> dict[str, Any]:
+    space.clear()
+    return space.state()
+
+
+@app.get("/char")
+def char_entry(request: Request) -> Any:
+    if "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse(url="/#char")
+    return char.state()
+
+
+@app.get("/char/notes")
+def get_char_notes() -> dict[str, Any]:
+    return {"notes": char.all_notes()}
+
+
+@app.get("/char/questions")
+def get_char_questions() -> dict[str, Any]:
+    return {"questions": char.get_questions()}
+
+
+@app.post("/char/say")
+def char_say(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(422, detail="Say something to Jarvis.")
+    learn_mode = bool(body.get("learn_mode") or False)
+    return char.say(text, learn_mode=learn_mode, answering=bool(body.get("answering")))
+
+
+@app.post("/space/preview")
+def space_preview(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """How a rule sentence would be read, without saving it."""
+    return {"rules": space.preview(str(body.get("text") or "")[:600])}
+
+
+@app.post("/char/speak")
+def char_speak(body: dict[str, Any] = Body(...)) -> Response:
+    try:
+        return Response(char.speak(str(body.get("text") or "")), media_type="audio/mpeg")
+    except Exception as e:  # e.g. "The loaded model cannot answer in speech."
+        raise HTTPException(503, detail=f"No speaking model: {getattr(e, 'read', lambda: str(e).encode())()[:200].decode(errors='ignore')}")
+
+
+@app.get("/char/mind")
+def char_mind() -> dict[str, Any]:
+    return char.mind()
+
+
+@app.get("/char/mesh")
+def char_mesh() -> dict[str, Any]:
+    return char.mesh()
+
+
+@app.post("/char/creatures/asker")
+def char_asker() -> dict[str, Any]:
+    return {"asked": char.asker(), "open": char._open_questions(char._start())}
+
+
+@app.post("/char/creatures/pruner")
+def char_pruner() -> dict[str, Any]:
+    return char.pruner()
+
+
+@app.post("/char/creatures/sorter")
+def char_sorter(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    return char.sorter(int(body.get("limit") or 1))
+
+
+@app.post("/char/reflect")
+def char_reflect(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    return char.reflect(on_char=bool(body.get("char")))
+
+
+@app.get("/char/systems")
+def char_systems() -> dict[str, Any]:
+    return char.systems()
+
+
+@app.post("/char/systems")
+def char_set_system(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        char.set_system(int(body.get("id", -1)), bool(body.get("on")))
+    except ValueError as e:
+        raise HTTPException(404, detail=str(e))
+    return char.systems()
+
+
+_model_seen: dict[str, Any] = {}  # the last model status and when, so polling the engines does not list the models each time
+
+
+def _model() -> tuple[bool, str]:
+    if time.time() - _model_seen.get("t", 0) > 10:
+        _model_seen.update(llm.model_status(settings.get_all()), t=time.time())
+    return _model_seen["status"] == "ready", _model_seen["label"]
+
+
+@app.get("/char/engines")
+def char_engines() -> dict[str, Any]:
+    return char.engines(*_model())
+
+
+@app.post("/char/dial")
+def char_dial(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        return {"dial": char.set_dial(float(body.get("curiosity"))), "disposition": char.disposition()}
+    except (TypeError, ValueError):
+        raise HTTPException(422, detail="curiosity must be a number from 0 to 3")
+
+
+@app.get("/char/note/{note_id}")
+def char_note(note_id: int) -> dict[str, Any]:
+    try:
+        return char.note(note_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@app.get("/char/journal")
+def char_journal() -> dict[str, Any]:
+    """Its study journal, newest page first."""
+    return {"pages": char.journal()}
+
+
+@app.get("/char/train")
+def char_train() -> dict[str, Any]:
+    """The live persona's training runs, newest first, with their logs."""
+    return train.status()
+
+
+@app.post("/char/train")
+def char_train_do(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """start (with minutes, lo, hi, max_steps), pause, resume or stop a training run."""
+    action = str(body.get("action") or "start")
+    try:
+        return train.start(body) if action == "start" else train.control(action)
+    except (RuntimeError, KeyError, ValueError) as e:
+        raise HTTPException(409, detail=str(e) if not isinstance(e, KeyError) else f"no action {action}")
+
+
+@app.get("/char/train/{run_id}/snapshots")
+def char_train_snaps(run_id: int) -> dict[str, Any]:
+    return {"snapshots": train.snapshots(run_id)}
+
+
+@app.get("/char/train/{run_id}/dataset.jsonl")
+def char_train_dataset(run_id: int) -> Response:
+    """The run's fine-tuning set: JSONL, one {"system", "messages"} example per line."""
+    return Response(train.dataset(run_id), media_type="application/jsonl", headers={"Content-Disposition": f'attachment; filename="{char.get_profile()["name"].replace(" ", "-").lower()}-run-{run_id}.jsonl"'})
+
+
+@app.post("/char/you")
+def char_you(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Tell it who you are in your own words (`about`), or make it forget one thing it learned about you (`forget`: name, theirs, mine, role, work)."""
+    return {"you": char.set_you(body.get("about") if "about" in body else None, body.get("forget"))}
+
+
+@app.get("/char/letter")
+def char_letter() -> dict[str, Any]:
+    return char.letter()
+
+
+@app.post("/char/letter")
+def char_letter_answer(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """[{id, text, skip}]: your answers to its letter; blank ones wait for the next letter."""
+    return char.answer_letter(list(body.get("answers") or []))
+
+
+@app.get("/char/tools")
+def char_tools() -> dict[str, Any]:
+    """Its tools as a graph, wired into its mesh: what each step made, which feeds which, and the model they run on."""
+    return char.toolnet(char.mesh()["nodes"])
+
+
+@app.get("/char/life")
+def char_life() -> dict[str, Any]:
+    """Its needs, mood shifts, wants and trust."""
+    return char.life()
+
+
+@app.post("/char/want/{want_id}")
+def char_want(want_id: int, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Give it what it asked for (the gift becomes a note it reads), or let the want go (no gift)."""
+    w = char.give_want(want_id, str(body.get("gift") or ""))
+    if w is None:
+        raise HTTPException(404, detail="no such want")
+    return w
+
+
+@app.get("/char/report")
+def char_report() -> dict[str, Any]:
+    return {**char.report(*_model()), "harness_loop": harness.totals(), "cycles": harness.cycles(30), "mode": char.mode(), "tracker": char.tracker(),
+            "race": verse.live_race(), "train": train.status(), "letter": char.letter(), "now": dict(char.NOW),
+            "model_name": (lambda c: c.chat_model or c.model_name or "")(settings.get_all()), "models": _model_seen.get("models", [])}
+
+
+@app.post("/char/cycle")
+def char_cycle(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        budget = max(1, min(12, int(body.get("budget") or harness.BUDGET)))
+    except (TypeError, ValueError):
+        raise HTTPException(422, detail="budget must be a whole number")
+    try:
+        return harness.cycle(budget)
+    except RuntimeError as e:
+        raise HTTPException(409, detail=str(e))
+
+
+@app.get("/char/cycles")
+def char_cycles(limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
+    return {"cycles": harness.cycles(limit)}
+
+
+@app.get("/model/swap")
+def model_swap() -> dict[str, Any]:
+    return dict(llm.SWAP)
+
+
+@app.post("/char/rest")
+def char_rest(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    if body.get("char") and train.active() and not body.get("only"):  # a training run is driving it: idle learning stands aside, one step at a time
+        return {"done": True, "kind": "", "topic": "", "note": "", "why": "a training run is driving it", "training": True, "questions": char._open_questions(char._start())[::-1][:3], "graph": char.graph()}
+    if body.get("char") and char.mode() == "planner" and not body.get("only"):  # planner mode: idle time runs one harness cycle instead of the rule loop; a step you ask for by name still runs
+        try:
+            c = harness.cycle()
+        except RuntimeError as e:
+            c = {"busy": str(e), "executed": []}
+        did = [x for x in c["executed"] if x["outcome"] == "ok"]
+        return {"done": not did, "kind": "cycle", "topic": f"cycle {c.get('cycle', '')}".strip(), "note": " · ".join(x["cmd"] for x in did),
+                "cycle": c, "questions": char._open_questions(char._start())[::-1][:3], "graph": char.graph()}
+    only = body.get("only")
+    if only is not None and only not in char.SYS_OF:
+        raise HTTPException(422, detail=f"no step called {only}")
+    return char.rest(on_char=bool(body.get("char")), n=None if body.get("n") is None else int(body["n"]), force=bool(body.get("force")), only=only)
+
+
+@app.get("/verse")
+def verse_page() -> RedirectResponse:
+    return RedirectResponse("/#verse")
+
+
+@app.get("/verse/personas")
+def verse_list() -> dict[str, Any]:
+    return verse.personas()
+
+
+@app.post("/verse/enter")
+def verse_enter(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        p = verse.enter(str(body.get("name") or ""))
+    except KeyError:
+        raise HTTPException(404, detail="There is no persona by that name.")
+    char._engine("persona", "ok", f"entered {p['name']}")
+    return verse.personas()
+
+
+@app.post("/verse/new")
+def verse_new(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    who = str(body.get("who") or "").strip()
+    if not who:
+        raise HTTPException(422, detail="Name who it should become.")
+    if who.startswith("/") or not any(c.isalpha() for c in who):  # a slash command typed in the wrong box once made a persona called "/Step"
+        raise HTTPException(422, detail="That looks like a command, not someone to become.")
+    _, said = char.become_persona(who)  # puts the live one away first, then looks the new one up
+    return {**verse.personas(), "said": said}  # says so when the model was down and it got a generic voice
+
+
+@app.post("/verse/reset")
+def verse_reset(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Delete every persona and all they learned, then (when `then` names someone) become them fresh."""
+    verse.reset_all()
+    said = char.become_persona(str(body["then"]))[1] if body.get("then") else "reset"
+    for p in verse.personas()["personas"]:  # becoming someone puts the blank placeholder away: it is not a persona of yours
+        if not p["live"] and p["name"] == "Dot":
+            verse.delete("Dot")
+    return {**verse.personas(), "said": said}
+
+
+@app.delete("/verse/personas/{name:path}")  # :path so a name with a "/" in it can still be deleted
+def verse_delete(name: str) -> dict[str, Any]:
+    try:
+        verse.delete(name)
+    except KeyError:
+        raise HTTPException(404, detail="There is no persona by that name.")
+    except ValueError as e:
+        raise HTTPException(409, detail=str(e))
+    return verse.personas()
+
+
+@app.get("/char/chibi/refs")
+def char_chibi_refs() -> dict[str, Any]:
+    """Chibi pictures of the live persona from an image search, to pour Dot into."""
+    p = char.get_profile()
+    return {"refs": chibi.find_refs(p["name"], p["persona"])}
+
+
+@app.post("/char/chibi/pick")
+def char_chibi_pick(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Pour Dot into the picture at `url` (its `thumb` if the site refuses); an empty url goes back to the drawn look."""
+    p = char.get_profile()
+    try:
+        return chibi.pick(p["name"], str(body.get("url") or ""), str(body.get("thumb") or ""), p["look"])
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+
+
+@app.post("/char/chibi/cut")
+def char_chibi_cut(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Trace round its picture's figure, so the background is left out; no outline goes back to cutting it out by itself."""
+    try:
+        return chibi.set_cut(char.get_profile()["name"], body.get("outline") or [])
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+
+
+@app.post("/char/chibi/eyes")
+def char_chibi_eyes(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Mark where its picture's eyes are, so it can blink and make faces with them; no eyes goes back to finding them by itself."""
+    try:
+        return chibi.set_eyes(char.get_profile()["name"], body.get("eyes") or [])
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+
+
+@app.get("/char/chibi/saved")
+def char_chibi_saved() -> dict[str, Any]:
+    """The forms it has learned before, to switch between."""
+    return {"refs": chibi.saved()}
+
+
+@app.get("/char/chibi/image/{name}")
+def char_chibi_image(name: str) -> FileResponse:
+    if not re.fullmatch(r"[0-9a-f]{16}\.(png|jpg|webp|gif)", name) or not (chibi.image_dir() / name).is_file():
+        raise HTTPException(404)
+    return FileResponse(chibi.image_dir() / name)
+
+
+@app.get("/char/chibi")
+def char_chibi(name: str = "") -> dict[str, Any]:
+    """The look Dot's chibi form takes for a persona (the live one by default), from a reference looked up on the web once and stored."""
+    p = char.get_profile()
+    if name and name != p["name"]:
+        try:
+            p = verse.profile(name)
+        except KeyError:
+            raise HTTPException(404, detail="There is no persona by that name.")
+    return chibi.reference(p["name"], p["look"], p["persona"])
+
+
+@app.get("/char/monitor")
+def char_monitor() -> dict[str, Any]:
+    return char.monitor()
+
+
+@app.post("/char/tint")
+def char_tint(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    tint = str(body.get("tint") or "")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", tint):
+        raise HTTPException(422, detail="Pick a colour.")
+    p = char.get_profile()
+    char.update_profile(p["name"], p["persona"], p["look"], tint)
+    return char.state()
+
+
+@app.get("/char/wiring")
+def char_wiring() -> dict[str, Any]:
+    return char.wiring()
+
+
+@app.post("/char/wiring")
+def char_wire(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        if body.get("correction"):
+            char.set_correction(str(body["correction"]), bool(body.get("accept")))
+            return char.wiring()
+        if body.get("mode"):
+            char.set_mode(str(body["mode"]))
+            return char.wiring()
+        return char.wire(str(body.get("text") or ""))
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+
+
+@app.post("/char/correction")
+def char_correction(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        char.answer_correction(str(body.get("text") or ""))
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+    return char.wiring()
+
+
+@app.post("/char/tracker")
+def char_tracker(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        return char.set_tracker(body.get("sleep_at"), body.get("max"))
+    except (TypeError, ValueError):
+        raise HTTPException(422, detail="sleep_at and max must be numbers")
+
+
+@app.delete("/char/correction")
+def char_skip_correction() -> dict[str, Any]:
+    char.skip_correction()
+    return char.wiring()
+
+
+@app.delete("/char/instructions/{note_id}")
+def char_remove_instruction(note_id: int) -> dict[str, Any]:
+    if not char.remove_instruction(note_id):
+        raise HTTPException(404, detail="No such instruction.")
+    return char.wiring()
+
+
+@app.delete("/char/vars/{var_id}")
+def char_remove_var(var_id: int) -> dict[str, Any]:
+    if not char.remove_var(var_id):
+        raise HTTPException(404, detail="That variable is gone.")
+    return char.state()
+
+
+@app.delete("/char")
+def char_clear() -> dict[str, Any]:
+    char.clear()
+    return char.state()
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

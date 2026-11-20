@@ -63,8 +63,13 @@ const buddy = (() => {
     </div>
     <button type="button" class="buddy-face" aria-label="Reading buddy. Show the last tip.">
       <span class="buddy-led"></span><span class="buddy-grid"></span>
-      <span class="buddy-eyes" aria-hidden="true"><i></i><i></i></span>
+      <span class="buddy-eyes" aria-hidden="true"><i></i><i></i></span><span class="buddy-zz" aria-hidden="true">z</span>
       <svg class="buddy-lensg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-5-5"/></svg>
+      <svg class="buddy-marker" viewBox="0 0 40 112" aria-hidden="true"><ellipse class="ink" cx="17" cy="108" rx="11" ry="3"/>
+        <path class="nib" d="M13 93h14l-2 12-11-4z"/><path class="collar" d="M7 83h26l-4 11H11z"/>
+        <rect class="barrel" x="6" y="24" width="28" height="62" rx="10"/><rect class="cap" x="6" y="3" width="28" height="26" rx="10"/>
+        <rect class="clip" x="27" y="7" width="4" height="28" rx="2"/><rect class="shine" x="11" y="30" width="4" height="48" rx="2"/>
+        <rect class="eye" x="13" y="46" width="5" height="10" rx="2.5"/><rect class="eye" x="22" y="46" width="5" height="10" rx="2.5"/></svg>
     </button>`;
   const grid = root.querySelector(".buddy-grid");
   const dots = Array.from({ length: W * H }, () => grid.appendChild(document.createElement("i")));
@@ -84,7 +89,7 @@ const buddy = (() => {
       : eyesOnly ? EYES[eyes](dx, dy) : [...EYES[eyes](dx, dy), ...MOUTHS[mouth]];
     root.classList.toggle("talking", st.talking && eyesOnly);
     // the wandering circle: its two eyes follow the same mood, blink and glance
-    root.classList.toggle("blinking", st.blink); root.dataset.eyes = eyes;
+    root.classList.toggle("blinking", st.blink); root.dataset.eyes = eyes; root.dataset.mood = st.busy && !st.talking ? "think" : st.mood;
     face.style.setProperty("--ex", `${dx * 7}px`); face.style.setProperty("--ey", `${dy * 6}px`);
     const on = new Set(shown.map(([x, y]) => y * W + x));
     const tail = new Map(st.busy ? [0, 1, 2, 3, 4].map((k) => [RIM[(st.spin - k + RIM.length) % RIM.length], k]) : []);
@@ -149,10 +154,10 @@ const buddy = (() => {
   });
 
   // ---------- talking ----------
-  let typing = 0, mouthTimer = 0, hideTimer = 0;
+  let typing = 0, mouthTimer = 0, hideTimer = 0, goneTimer = 0;
   function show(msg) {
-    if (st.away) home(); // talk from the corner, where the bubble has room
-    clearInterval(typing); clearInterval(mouthTimer); clearTimeout(hideTimer);
+    if (st.away && !st.ui) home(); // talk from the corner, unless something (the guide, a menu) holds Dot where it is
+    clearInterval(typing); clearInterval(mouthTimer); clearTimeout(hideTimer); clearTimeout(goneTimer); bubble.classList.remove("going");
     st.mood = msg.mood; st.talking = false; draw();
     actionsEl.replaceChildren(...(msg.actions || []).map((a) => {
       const b = document.createElement(a.href ? "a" : "button");
@@ -163,27 +168,44 @@ const buddy = (() => {
     }));
     bubble.hidden = false;
     root.classList.add("talking");
+    // away from the corner there may be no room on Dot's left: then the message opens on its right
+    root.classList.remove("say-right");
+    if (st.away && bubble.getBoundingClientRect().left < 8) root.classList.add("say-right");
     if (reduced()) { textEl.textContent = msg.text; return autoHide(msg); }
     textEl.textContent = "";
+    let shown = 0, word = null;
     const start = performance.now();
     st.talking = true;
     mouthTimer = setInterval(() => { st.talkFrame ^= 1; draw(); }, 110);
     typing = setInterval(() => {
       // by elapsed time, so a throttled tab catches up instead of crawling
       const i = Math.ceil((performance.now() - start) / 11);
-      textEl.textContent = msg.text.slice(0, i);
+      while (shown < Math.min(i, msg.text.length)) { // each new letter pops out of Dot as a dot, then settles
+        const ch = msg.text[shown++];
+        if (ch === " ") { textEl.append(" "); word = null; continue; }
+        if (!word) { word = document.createElement("span"); word.className = "w"; textEl.append(word); }
+        const s = document.createElement("span"); s.textContent = ch; word.append(s);
+      }
       if (i >= msg.text.length) {
         clearInterval(typing); clearInterval(mouthTimer);
         st.talking = false; draw(); autoHide(msg);
       }
     }, 22);
   }
+  // a word bubble, not a window: it goes away by itself (longer when it offers a button), unless you are pointing at it
   function autoHide(msg) {
-    if (msg.actions?.length || msg.sticky) return;
-    hideTimer = setTimeout(() => { if (!root.matches(":hover")) hide(); }, Math.max(6000, msg.text.length * 70));
+    if (msg.sticky) return;
+    const ms = Math.max(3500, msg.text.length * 55) + (msg.actions?.length ? 6000 : 0);
+    const later = () => { hideTimer = setTimeout(() => (root.matches(":hover") ? later() : hide()), ms); };
+    later();
   }
   function hide() {
-    bubble.hidden = true; root.classList.remove("talking");
+    // the words crumble back into dots and drift into Dot
+    if (!bubble.hidden && !reduced()) {
+      bubble.classList.add("going"); clearTimeout(goneTimer);
+      goneTimer = setTimeout(() => { bubble.hidden = true; bubble.classList.remove("going"); }, 420);
+    } else bubble.hidden = true;
+    root.classList.remove("talking");
     clearInterval(typing); clearInterval(mouthTimer); st.talking = false;
     if (st.mood !== "sleep") st.mood = st.muted ? "sleep" : "idle";
     draw();
@@ -197,8 +219,11 @@ const buddy = (() => {
   muteBtn.addEventListener("click", () => { setMuted(!st.muted); if (st.muted) { st.mood = "sleep"; hide(); } });
   root.querySelector(".buddy-x").addEventListener("click", hide);
   root.addEventListener("mouseleave", () => {
-    if (!bubble.hidden && !actionsEl.children.length) hideTimer = setTimeout(hide, 2500);
+    if (!bubble.hidden && !actionsEl.children.length && !st.talking) { clearTimeout(hideTimer); hideTimer = setTimeout(hide, 2500); }
   });
+  // a click on the words, or anywhere else, puts the bubble away (its buttons still work)
+  bubble.addEventListener("click", (e) => { if (!e.target.closest("button, a")) hide(); });
+  document.addEventListener("pointerdown", (e) => { if (!bubble.hidden && !root.contains(e.target) && !actionsEl.children.length) hide(); }, true);
   root.addEventListener("mouseenter", () => clearTimeout(hideTimer));
 
   const TIPS = [
@@ -212,11 +237,11 @@ const buddy = (() => {
     if (dragged) { dragged = false; return; } // the end of a drag is not a click
     if (pressed) { pressed = false; return; } // the end of a long press is not a click
     // with "context" a mouse click shows the tip; a keyboard Enter (detail 0) still opens the menu
-    if (tools && toolsHow === "click" && atHome()) { // a click at home opens the circle, not the icon pile
-      if (nestHeld) { nestHeld = false; return; }
-      if (nest.classList.contains("show")) hideNest(); else showNest();
-      return;
+    if (tools && toolsHow === "click" && atHome()) { // a click at home fans the tools out (and back in); the circle is for dragging
+      nestHeld = false; hideNest();
+      return toggleTools();
     }
+    if (tools && toolsHow === "click" && st.away && !st.follow) { goHome().then(() => { hide(); toggleTools(); }); return; } // parked somewhere: come home, then fan out
     if (tools && (toolsHow === "click" || e.detail === 0)) return toggleTools();
     if (!bubble.hidden) return hide();
     if (st.muted) setMuted(false);
@@ -277,6 +302,7 @@ const buddy = (() => {
     st.off = { x: 0, y: 0 }; st.away = false;
     root.style.setProperty("--trip", "700ms");
     root.style.transform = "";
+    showHome();
   }
   async function goHome() {
     if (!st.away) return;
@@ -316,10 +342,25 @@ const buddy = (() => {
   let target = null, drag = null, dragged = false, pressed = false, pressTimer = 0, nestHeld = false;
   const nest = document.createElement("div");
   nest.className = "buddy-nest"; nest.setAttribute("aria-hidden", "true");
+  // a gooey home: a drip reaches for the pointer and the blur-and-threshold filter melts it into the core
+  nest.innerHTML = `<svg width="0" height="0" style="position:absolute"><filter id="nest-goo" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="9"/>
+    <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -9"/></filter></svg>
+    <span class="nest-ring"></span><span class="nest-goo"><i class="nest-core"></i><i class="nest-neck"></i><i class="nest-drip"></i></span>
+    <span class="nest-face" aria-hidden="true"><i></i><i></i><b>z</b></span>
+    <span class="nest-tip">Highlighter on. Select words to mark them.<b>Click here or press Esc to stop</b></span>`;
   document.body.append(nest);
+  const REACH = 300; // how far away the home starts to pull
+  const pull = (x, y) => { const [hx, hy] = homeCentre(), dx = x - hx, dy = y - hy, d = Math.hypot(dx, dy) || 1; return { hx, hy, dx, dy, d, t: Math.max(0, 1 - d / REACH) }; };
+  document.addEventListener("pointermove", (e) => {
+    if (!nest.classList.contains("show")) return;
+    const { dx, dy, d, t } = pull(e.clientX, e.clientY), r = t * Math.min(d, 80);
+    nest.style.setProperty("--gx", `${(dx / d) * r}px`); nest.style.setProperty("--gy", `${(dy / d) * r}px`);
+    nest.style.setProperty("--gt", t.toFixed(3));
+    nest.classList.toggle("near", t > 0.5);
+  }, { passive: true });
   const placeNest = () => { const [hx, hy] = homeCentre(); nest.style.left = `${hx}px`; nest.style.top = `${hy}px`; };
   const showNest = () => { placeNest(); nest.classList.add("show"); };
-  const hideNest = () => nest.classList.remove("show", "awake", "ready");
+  const hideNest = () => nest.classList.remove("show", "awake", "ready", "near");
   const overNest = (x, y) => { const r = nest.getBoundingClientRect(); return !!r.width && Math.hypot(x - r.left - r.width / 2, y - r.top - r.height / 2) < r.width / 2; };
   const chill = () => { root.classList.remove("awake"); nest.classList.remove("awake", "ready"); st.mood = "idle"; draw(); };
   function wake() {
@@ -329,7 +370,7 @@ const buddy = (() => {
     st.mood = "surprised"; draw();
     along?.pull?.(); // tag-along starts as Dot leaves the circle
   }
-  document.addEventListener("pointerdown", (e) => { if (nest.classList.contains("show") && !st.follow && !root.contains(e.target)) hideNest(); });
+  document.addEventListener("pointerdown", (e) => { if (nest.classList.contains("show") && !st.follow && !napOn && !root.contains(e.target)) hideNest(); }); // asleep as a highlighter, its home stays lit: the way back
   root.addEventListener("wheel", (e) => { // the page keeps scrolling when the pointer is over Dot
     const stage = document.querySelector(".pdf-stage");
     if (!stage || e.target.closest(".buddy-bubble")) return;
@@ -358,8 +399,17 @@ const buddy = (() => {
       if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
       clearTimeout(pressTimer);
       drag.on = true; st.trip += 1; hide(); root.classList.add("dragging"); st.mood = "surprised"; draw();
+      if (!drag.pull && along && st.away) showNest(); // the corner lights up so you can put Dot back
     }
-    place(e.clientX, e.clientY);
+    const caught = nest.classList.contains("show") && overNest(e.clientX, e.clientY);
+    if (caught) place(...homeCentre()); else place(e.clientX, e.clientY); // near home, the home catches Dot
+    if (caught !== root.classList.contains("caught")) root.classList.toggle("caught", caught);
+    if (drag.pull && st.asleep) { // asleep, Dot is a highlighter: out of its circle it turns into one
+      const inside = nest.classList.contains("show") && overNest(e.clientX, e.clientY);
+      nest.classList.toggle("ready", inside);
+      root.classList.toggle("pen", !inside);
+      return;
+    }
     if (drag.pull) { // leaving the home circle wakes tag-along. It is not the highlighter.
       root.classList.remove("pen", "penning", "reading");
       if (nest.classList.contains("show")) {
@@ -369,6 +419,7 @@ const buddy = (() => {
       }
       return;
     }
+    if (nest.classList.contains("show")) nest.classList.toggle("ready", overNest(e.clientX, e.clientY));
     const live = !along || st.follow;
     root.classList.toggle("pen", live && !!target?.over(e.clientX, e.clientY));
     if (live) target?.hover?.(e.clientX, e.clientY);
@@ -380,29 +431,52 @@ const buddy = (() => {
     const was = drag.on, wasPull = drag.pull; drag = null;
     if (!was) return;
     dragged = true; nestHeld = false; setTimeout(() => { dragged = false; }, 0);
-    root.classList.remove("dragging");
+    root.classList.remove("dragging", "caught");
     target?.hover?.(null);
     const back = nest.classList.contains("show") && overNest(e.clientX, e.clientY);
+    if (wasPull && st.asleep) { // asleep: dropped on the page it stays a highlighter; dropped home it rests
+      if (back) { napPen(false); return; }
+      napPen(true); return;
+    }
     if (along && (wasPull || back)) { // this drag woke Dot, or it landed back in the corner
       root.classList.remove("pen", "penning", "reading");
       if (back) {
         const wasAwake = root.classList.contains("awake");
         chill(); goHome();
-        if (wasAwake) { along.home(); hideNest(); }
+        if (wasAwake || st.follow) along.home();
+        hideNest();
       } else if (!root.classList.contains("awake")) wake();
       return;
     }
+    hideNest();
     if (target?.over(e.clientX, e.clientY)) { st.mood = "idle"; draw(); target.drop(e.clientX, e.clientY); }
     else { root.classList.remove("pen"); st.mood = "idle"; draw(); goHome(); }
   });
   // As a highlighter Dot rides just above the pointer, eyes on the line below.
-  const follow = (e) => { place(e.clientX + 26, e.clientY - 30); st.dx = -1; st.dy = 1; st.lookUntil = Date.now() + 500; draw(); };
+  const follow = (e) => {
+    let x = e.clientX + 26, y = e.clientY - 30;
+    if (napOn) { const { hx, hy, d } = pull(e.clientX, e.clientY), k = Math.max(0, 1 - d / 150) ** 2 * 0.75; x += (hx - x) * k; y += (hy - y) * k; } // near home, the marker is drawn in
+    place(x, y); st.dx = -1; st.dy = 1; st.lookUntil = Date.now() + 500; draw();
+  };
   /** reading(on): Dot shrinks into a small yellow marker, to run along lines of the paper */
   function reading(on) { root.classList.toggle("pen", on); root.classList.toggle("reading", on); }
   function pen(on) {
     root.classList.toggle("pen", on); root.classList.toggle("penning", on);
     document[on ? "addEventListener" : "removeEventListener"]("pointermove", follow);
   }
+  // Asleep and pulled out: a highlighter that rides your pointer (select words and they are marked). Its home stays
+  // lit; click the home, press Escape, or wake Dot to put it back.
+  let napOn = false;
+  function napPen(on) {
+    if (on === napOn && on) return;
+    napOn = on; pen(on); nest.classList.toggle("pen", on);
+    if (on) { showNest(); nest.classList.remove("ready"); st.mood = "idle"; draw(); }
+    else { root.classList.remove("pen"); hideNest(); goHome(); }
+  }
+  document.addEventListener("pointerdown", (e) => { // capture: before the click that would hide the home
+    if (napOn && overNest(e.clientX, e.clientY)) { e.preventDefault(); e.stopPropagation(); napPen(false); }
+  }, true);
+  document.addEventListener("keydown", (e) => { if (napOn && e.key === "Escape") napPen(false); });
 
   // ---------- the Dot window: Dot bursts into dots that become a window ----------
   /** open({ x, y, quote, first, ask(question), area?: DOMRect to open inside, save?(text) }) → close() */
@@ -479,31 +553,61 @@ const buddy = (() => {
     answer(first);
     return close;
   }
+  // ---------- sleep: Dot naps, the AI features are off; the page still takes highlights, notes and the canvas ----------
+  let napHook = null;
+  const napKey = "dot-asleep";
+  function sleep(on) {
+    if (!on && napOn) napPen(false);
+    st.asleep = !!on; root.classList.toggle("asleep", st.asleep);
+    face.setAttribute("aria-label", st.asleep ? "Dot is asleep, AI is off. Click for the tools." : "Reading buddy. Show the last tip.");
+    try { localStorage.setItem(napKey, st.asleep ? "1" : "0"); } catch { /* private window: this visit only */ }
+    napHook?.(st.asleep);
+  }
+  const asleep = () => !!st.asleep;
+  try { if (localStorage.getItem(napKey) === "1") { st.asleep = true; root.classList.add("asleep"); } } catch { /* awake */ }
+
   // ---------- tools: clicking Dot fans out a few dotted choices the page offers ----------
   let tools = null;
   const toolsEl = document.createElement("div");
   toolsEl.className = "buddy-tools"; toolsEl.hidden = true; toolsEl.setAttribute("role", "menu");
   root.insertBefore(toolsEl, face);
   /** setTools([{ group, name, hint, pick() }]) or null to go back to tips */
-  function setTools(list) { tools = list; closeTools(); }
-  function closeTools() { toolsEl.hidden = true; root.classList.remove("tools-open"); }
+  function setTools(list) { tools = list; closeTools(); if (atHome()) showHome(); }
+  let homeStay = false;
+  let orbitHold = false; // tagging along, the ring holds Dot still so you can reach its tools
+  function closeTools() {
+    homeStay = false; toolsEl.hidden = true; root.classList.remove("tools-open");
+    if (orbitHold) { orbitHold = false; st.hold -= 1; }
+  }
   const atHome = () => !st.follow && !st.away && !root.classList.contains("moving");
   function toggleTools() {
-    if (!atHome()) return closeTools(); // wandering: the paragraph buddies do the work, not this row
     if (!toolsEl.hidden) return closeTools();
+    if (st.follow && !root.classList.contains("moving")) { // tagging along: the tools ring Dot in an outer orbit, where you are
+      orbitHold = true; st.hold += 1;
+      return openFan(true);
+    }
+    if (!atHome()) return closeTools(); // wandering: the paragraph buddies do the work, not this row
+    openFan(false);
+  }
+  // at home the tools fan from left to straight up; out on the page (the wake-up show) they ring Dot all round
+  function openFan(round) {
     hide();
     const list = tools.slice();
-    const span = Math.PI * 0.5, gap = list.some((t, i) => i && t.group !== list[i - 1].group) ? 0.22 : 0;
-    const step = (span - gap) / Math.max(1, list.length - 1);
-    let a = Math.PI * 1.02;
+    // each tool keeps 64px of room along the arc
+    const span = round ? Math.PI * 2 : Math.PI * 0.5;
+    // the orbit sits snug round Dot: just past its face, with 52px of arc per tool
+    const radius = round ? Math.max(84, (list.length * 52) / span) : Math.max(132, ((list.length - 1) * 64) / span);
+    toolsEl.classList.toggle("orbit", round); toolsEl.style.setProperty("--orbit-r", `${radius}px`);
+    toolsEl.classList.toggle("cap-up", round && centre()[1] + radius + 90 > innerHeight); // no room for the name under the ring
+    const step = round ? span / list.length : span / Math.max(1, list.length - 1);
+    let a = round ? -Math.PI / 2 : Math.PI;
     const buttons = list.map((t, i) => {
-      if (i && t.group !== list[i - 1].group) a += gap;
       const b = document.createElement("button");
       b.type = "button"; b.className = `buddy-tool tool-${t.key || "item"}${t.on ? " on" : ""}`;
       b.setAttribute("role", "menuitem"); b.setAttribute("aria-label", t.hint ? `${t.name}. ${t.hint}` : t.name);
       b.style.setProperty("--k", i); b.style.setProperty("--bc", t.color || "#ffe347");
-      b.style.left = `calc(50% + ${Math.cos(a) * 62}px)`;
-      b.style.top = `calc(50% + ${Math.sin(a) * 62}px)`;
+      b.style.setProperty("--ox", `${Math.cos(a) * radius}px`);
+      b.style.setProperty("--oy", `${Math.sin(a) * radius}px`);
       a += step;
       b.innerHTML = t.icon || "";
       const tip = document.createElement("span"); tip.className = "tip";
@@ -515,10 +619,54 @@ const buddy = (() => {
     });
     toolsEl.replaceChildren(...buttons);
     toolsEl.hidden = false; root.classList.add("tools-open");
+    if (round) { // each name opens away from Dot, and to the other side if that side runs off the screen
+      const [cx] = centre();
+      buttons.forEach((b) => { // worked out from where the tool lands, not where its pop-out starts
+        const ox = parseFloat(b.style.getPropertyValue("--ox")), x = cx + ox, w = b.querySelector(".tip").offsetWidth + 30;
+        b.classList.toggle("tip-r", ox > 1 ? x + w < innerWidth - 8 : x - w < 8);
+      });
+    }
     draw();
-    toolsEl.querySelector("button")?.focus();
+    if (!homeStay) toolsEl.querySelector("button")?.focus();
   }
-  document.addEventListener("pointerdown", (e) => { if (!toolsEl.hidden && !root.contains(e.target)) closeTools(); });
+  // Waking up: Dot yawns and stretches, then its tools fan out and each one lights up with its name, then they fold away
+  async function stretch() {
+    hide();
+    root.classList.add("waking");
+    await wait(reduced() ? 0 : 950);
+    root.classList.remove("waking");
+  }
+  async function showcase({ wake = true, out = false } = {}) {
+    if (!tools?.length || !atHome()) return;
+    if (wake) await stretch();
+    if (reduced()) return;
+    if (out) { // run out to where you are, leaving room all round for the ring of tools
+      const m = 190, x = mouse.in && mouse.x > 0 ? mouse.x + 70 : innerWidth / 2, y = mouse.in && mouse.y > 0 ? mouse.y : innerHeight / 2;
+      await goTo(Math.min(innerWidth - m, Math.max(m, x)), Math.min(innerHeight - m, Math.max(m + 40, y)), 650);
+    }
+    homeStay = true; openFan(out); homeStay = true; // the fan stays while it plays, even if you click elsewhere
+    toolsEl.classList.add("parade");
+    await wait(380); // the fan opens
+    for (const b of toolsEl.querySelectorAll(".buddy-tool")) {
+      if (toolsEl.hidden) { toolsEl.classList.remove("parade"); if (out && st.away) goHome(); return; } // you picked one or closed it: stop
+      b.classList.add("lit"); await wait(620); b.classList.remove("lit");
+    }
+    toolsEl.classList.remove("parade");
+    if (!toolsEl.hidden) closeTools();
+    if (out) await goHome();
+  }
+  const paperSelection = () => {
+    const s = getSelection();
+    if (!s || s.isCollapsed || !s.anchorNode) return false;
+    const layer = document.querySelector(".page-read .textLayer");
+    return !!(layer && layer.contains(s.anchorNode));
+  };
+  // at home the tools stay folded until you click Dot, so they never sit over the page or Dot's messages
+  function showHome() {
+    if (!tools || !atHome() || paperSelection()) closeTools();
+  }
+  document.addEventListener("selectionchange", () => { if (tools && atHome()) showHome(); });
+  document.addEventListener("pointerdown", (e) => { if (!homeStay && !toolsEl.hidden && !root.contains(e.target)) closeTools(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !toolsEl.hidden) { closeTools(); face.focus(); } });
 
   // ---------- reading mode: follow the pointer, offer options, change shape, become the input ----------
@@ -562,7 +710,7 @@ const buddy = (() => {
   document.documentElement.addEventListener("mouseenter", () => { mouse.in = true; });
 
   /** toolsOn("click" | "context"): the gesture that opens the tools menu */
-  function toolsOn(how) { toolsHow = how === "context" ? "context" : "click"; closeTools(); }
+  function toolsOn(how) { toolsHow = how === "context" ? "context" : "click"; if (tools && atHome()) showHome(); else closeTools(); }
 
   const shapeClass = { lens: "sh-lens", squash: "sh-squash", pill: "sh-pill", blob: "sh-blob" };
   /** shape("face" | "marker" | "lens" | "squash" | "pill"): resolves when the change has settled (about 380 ms) */
@@ -577,38 +725,138 @@ const buddy = (() => {
     return reduced() ? Promise.resolve() : waitSkippable(380);
   }
 
-  /** options({ x, y, items:[{ key, label, icon, color, disabled }], angle, caption }) -> the key picked, or null.
-      Dot is a smiling blob at (x, y) and each tool is a small buddy of its own (body, eyes, icon, label), like the Library's
-      buddies: they ease out of Dot and settle on an arc around it. `angle` (radians) is where the middle of the arc points;
-      the caller picks it so the buddies sit in clear space. Pick one and Dot gulps it; Escape, Back or a click outside folds them in.
-      `caption` is a short line under Dot (what just happened). */
+  // names sit on opaque pills right beside their moon; they only step out to clear another moon
+  function nudgeMoonNames(orbs, angles) {
+    orbs.forEach((b, i) => {
+      const ux = Math.cos(angles[i]), uy = Math.sin(angles[i]);
+      const tag = b.querySelector(".tag");
+      for (let dist = 52; dist <= 52 + 3 * 14; dist += 14) {
+        b.style.setProperty("--lx", `${Math.round(ux * dist)}px`);
+        b.style.setProperty("--ly", `${Math.round(uy * dist)}px`);
+        const r = tag.getBoundingClientRect();
+        const moon = orbs.some((o) => {
+          if (o === b) return false;
+          const m = (o.querySelector(".bod") || o).getBoundingClientRect();
+          return r.left < m.right && r.right > m.left && r.top < m.bottom && r.bottom > m.top;
+        });
+        if (!moon) break;
+      }
+    });
+  }
+
+  // Moons: one even ring around Dot. The old column of places is not used.
+  // Face is 92px while the ring is open, so the centre stays 46px clear of the paper edge.
+  function moonSpot(hintX, hintY, n) {
+    const FACE = 38, MOON = 32; // Dot is 76px while the tools are out; each tool is a 64px blob split off it
+    const stage = document.querySelector(".pdf-stage")?.getBoundingClientRect();
+    const bar = Math.max(
+      document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0,
+      document.querySelector(".pdf-tools")?.getBoundingClientRect().bottom || 0,
+    );
+    const tab = document.querySelector(".cv-tab")?.getBoundingClientRect();
+    const L = (stage?.left ?? 8) + 8;
+    const Rgt = Math.min(stage?.right ?? innerWidth, tab && tab.width > 8 ? tab.left - 6 : innerWidth) - 8;
+    const T = Math.max(stage?.top ?? 0, bar) + 8;
+    const B = (stage?.bottom ?? innerHeight) - 8;
+    const passages = [];
+    const sel = getSelection();
+    if (sel && !sel.isCollapsed && sel.rangeCount) { for (const r of sel.getRangeAt(0).getClientRects()) passages.push(r); }
+    document.querySelectorAll(".sel-box:not([hidden])").forEach((el) => passages.push(el.getBoundingClientRect()));
+    const words = [...document.querySelectorAll(".page-read .textLayer span")]
+      .filter((sp) => sp.textContent.trim())
+      .map((sp) => sp.getBoundingClientRect())
+      .filter((r) => r.width > 1 && r.height > 1);
+    const hit = (box, rects) => rects.some((r) => box.l < r.right - 1 && box.r > r.left + 1 && box.t < r.bottom - 1 && box.b > r.top + 1);
+    const disk = (cx, cy, rad) => ({ l: cx - rad, t: cy - rad, r: cx + rad, b: cy + rad });
+    const blocked = (cx, cy, R, wordsToo) => {
+      const name = 46; // room for the short name just outside the moon
+      if (cx - R - MOON - name < L || cx + R + MOON + name > Rgt || cy - R - MOON - 18 < T || cy + R + MOON + 18 > B) return true;
+      if (hit(disk(cx, cy, FACE - 2), passages)) return true;
+      if (wordsToo && hit(disk(cx, cy, FACE - 6), words)) return true;
+      for (let i = 0; i < n; i++) {
+        const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+        const mx = cx + Math.cos(a) * R, my = cy + Math.sin(a) * R;
+        if (hit(disk(mx, my, MOON), passages)) return true;
+        if (wordsToo && hit(disk(mx, my, MOON - 2), words)) return true;
+      }
+      return false;
+    };
+    const clear = (cx, cy, R) => !blocked(cx, cy, R, true);
+    const pack = (cx, cy, R) => ({
+      x: cx, y: cy, r: R,
+      moons: Array.from({ length: n }, (_, i) => {
+        const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+        return [cx + Math.cos(a) * R, cy + Math.sin(a) * R];
+      }),
+      angles: Array.from({ length: n }, (_, i) => -Math.PI / 2 + (i * 2 * Math.PI) / n),
+    });
+    const radii = [100, 96, 92];
+    const seeds = [[hintX, hintY]];
+    if (passages.length) {
+      const top = Math.min(...passages.map((r) => r.top));
+      const bot = Math.max(...passages.map((r) => r.bottom));
+      const mid = passages.reduce((s, r) => s + (r.left + r.right) / 2, 0) / passages.length;
+      const side = passages.reduce((s, r) => s + r.left, 0) / passages.length;
+      for (const R of radii) {
+        seeds.push([mid, top - R - MOON - 16], [mid, bot + R + MOON + 16]);
+        seeds.push([side - R - MOON - 16, (top + bot) / 2], [passages.reduce((s, r) => Math.max(s, r.right), 0) + R + MOON + 16, (top + bot) / 2]);
+      }
+    }
+    const scan = (wordsToo) => {
+      const near = [...seeds].sort((a, b) => Math.hypot(a[0] - hintX, a[1] - hintY) - Math.hypot(b[0] - hintX, b[1] - hintY));
+      for (const [sx, sy] of near) {
+        for (const R of radii) if (!blocked(sx, sy, R, wordsToo)) return pack(sx, sy, R);
+      }
+      for (let ring = 1; ring <= 12; ring++) {
+        for (let k = 0; k < 16; k++) {
+          const a = (k / 16) * Math.PI * 2;
+          const cx = hintX + Math.cos(a) * ring * 32, cy = hintY + Math.sin(a) * ring * 32;
+          for (const R of radii) if (!blocked(cx, cy, R, wordsToo)) return pack(cx, cy, R);
+        }
+      }
+      return null;
+    };
+    const found = scan(true) || scan(false);
+    if (found) return found;
+    const top = passages.length ? Math.min(...passages.map((r) => r.top)) : hintY;
+    const cx = Math.max(L + FACE + 40, Math.min(Rgt - FACE - 40, hintX));
+    const cy = Math.max(T + FACE + 40, Math.min(top - 120, B - FACE - 40));
+    const room = Math.min(cx - L, Rgt - cx, cy - T, B - cy) - MOON - 46;
+    return pack(cx, cy, Math.max(72, Math.min(84, room)));
+  }
+
+  /** options({ x, y, items:[{ key, label, icon, color, disabled }], caption }) -> the key picked, or null.
+      Dot grows to the large face and the tools sit as equal moons around it. They ease out of the face.
+      Escape, Back or a click outside folds them in. `caption` is a short line under Dot. */
   function options({ x, y, items, angle = -Math.PI / 2, places = null, labelsRight = true, caption = "" }) {
     closeTools();
     if (x == null) [x, y] = centre();
+    void angle; void places; void labelsRight;
+    const spot = moonSpot(x, y, items.length);
+    const faceEl = root.querySelector(".buddy-face");
+    root.classList.add("attached");
+    root.style.transition = "none";
+    faceEl.style.transition = "none"; // grow to 92px before centring, or the ring slips off the eyes
+    void faceEl.offsetWidth;
+    place(spot.x, spot.y);
+    void faceEl.offsetWidth;
+    root.style.transition = "";
+    faceEl.style.transition = "";
+    x = spot.x; y = spot.y;
     st.ui += 1;
     const wrap = document.createElement("div");
-    wrap.className = "buddy-opts";
+    wrap.className = "buddy-opts ring";
+    wrap.dataset.radius = String(Math.round(spot.r));
     wrap.setAttribute("role", "menu"); wrap.setAttribute("aria-label", "Dot's tools");
     const cap = document.createElement("p");
     cap.className = "ob-cap"; cap.textContent = caption; cap.hidden = !caption; cap.setAttribute("aria-live", "polite");
-    cap.style.cssText = `left:${x}px;top:${y + 34}px`;
+    cap.style.cssText = `left:${x}px;top:${y + 70}px`;
     wrap.style.cssText = "left:0;top:0";
-    const n = items.length, TH = (34 * Math.PI) / 180, R = n < 4 ? 104 : 118;
-    const at = (i) => places ? places[i] : [x + Math.cos(angle + (i - (n - 1) / 2) * TH) * R, y + Math.sin(angle + (i - (n - 1) / 2) * TH) * R];
+    const n = items.length;
+    const pos = spot.moons.map((q) => [...q]); // where each blob is now (they drift)
+    const at = (i) => pos[i];
     let over = false, resolve;
     const result = new Promise((r) => { resolve = r; });
-    const NS = "http://www.w3.org/2000/svg";
-    const ties = document.createElementNS(NS, "svg");
-    ties.setAttribute("class", "ob-ties"); ties.setAttribute("aria-hidden", "true");
-    items.forEach((it, i) => {
-      const [px, py] = at(i);
-      const path = document.createElementNS(NS, "path");
-      const mx = (x + px) / 2, my = (y + py) / 2 - 18;
-      path.setAttribute("d", `M ${x} ${y} Q ${mx} ${my} ${px} ${py}`);
-      path.setAttribute("stroke", it.color || "#ffe347");
-      ties.append(path);
-    });
-    wrap.append(ties);
     wrap.addEventListener("wheel", (e) => {
       const stage = document.querySelector(".pdf-stage");
       if (!stage) return;
@@ -618,28 +866,105 @@ const buddy = (() => {
       const b = document.createElement("button");
       b.type = "button"; b.setAttribute("role", "menuitem"); b.setAttribute("aria-label", it.label); b.disabled = !!it.disabled;
       b.className = `obuddy ob-${it.key}`; b.style.setProperty("--bc", it.color || "#ffe347"); b.style.setProperty("--i", i);
-      b.innerHTML = `<span class="bod"><span class="pr">${it.icon || ""}</span></span><span class="tag"><b></b><small></small></span>`;
+      b.innerHTML = `<span class="bod"><span class="who" aria-hidden="true"><i></i><i></i></span><span class="act" aria-hidden="true">${it.icon || ""}</span></span><span class="ico" aria-hidden="true">${it.icon || ""}</span><span class="tag"><b></b><small></small></span>`;
       b.querySelector(".tag b").textContent = it.label;
       b.querySelector(".tag small").textContent = it.hint || "";
-      b.style.transform = `translate3d(${x}px, ${y}px, 0) scale(.2)`; // starts inside Dot
+      const [sx, sy] = at(i);
+      b.style.transform = reduced() ? `translate3d(${sx}px, ${sy}px, 0)` : `translate3d(${x}px, ${y}px, 0) scale(.2)`;
       b.addEventListener("mousedown", (e) => e.preventDefault()); // keep the chosen words selected
       b.addEventListener("click", (e) => { e.stopPropagation(); finish(it.key); });
       wrap.append(b); return b;
     });
     wrap.append(cap);
-    document.body.append(wrap);
-    root.classList.add("attached");
+    // the goo: under Dot, a copy of its face plus a neck and a blob per tool, melted together by the filter,
+    // so the tools read as Dot growing new limbs rather than separate moons
+    if (!document.getElementById("ogoo")) document.body.insertAdjacentHTML("beforeend",
+      '<svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="ogoo"><feGaussianBlur in="SourceGraphic" stdDeviation="6"/><feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9"/></filter></svg>');
+    const goo = document.createElement("div");
+    goo.className = "ob-goo"; goo.setAttribute("aria-hidden", "true");
+    const core = document.createElement("i");
+    core.className = "core"; core.style.cssText = `left:${x}px;top:${y}px`;
+    goo.append(core);
+    const limbs = items.map((it, i) => {
+      const [px, py] = at(i);
+      const neck = document.createElement("i"), sprout = document.createElement("i");
+      neck.className = "neck"; sprout.className = "sprout";
+      neck.style.cssText = `left:${x}px;top:${y}px;width:${Math.hypot(px - x, py - y)}px;rotate:${Math.atan2(py - y, px - x)}rad;--bc:${it.color || "#ffe347"}`;
+      sprout.style.setProperty("--bc", it.color || "#ffe347");
+      sprout.style.transition = "none"; sprout.style.transform = `translate3d(${x}px, ${y}px, 0) scale(.2)`; // born inside Dot, not at the corner
+      goo.append(neck, sprout);
+      return { neck, sprout };
+    });
+    document.body.append(goo, wrap);
+    // each orb's blob in the goo moves with it
+    const sync = () => orbs.forEach((b, i) => {
+      const sp = limbs[i].sprout;
+      sp.style.transition = b.style.transition; sp.style.transitionDelay = b.style.transitionDelay; sp.style.transform = b.style.transform;
+      limbs[i].neck.style.transitionDelay = b.style.transitionDelay;
+    });
     void wrap.offsetWidth;
+    const pose = (i, px, py) => `translate3d(${px}px, ${py}px, 0)`;
     orbs.forEach((b, i) => {
       const [px, py] = at(i);
-      if (reduced()) b.style.transition = "none";
+      const ux = Math.cos(spot.angles[i]), uy = Math.sin(spot.angles[i]);
+      b.style.setProperty("--lx", `${Math.round(ux * 52)}px`);
+      b.style.setProperty("--ly", `${Math.round(uy * 52)}px`);
+      b.style.transition = "none";
+      b.style.transform = pose(i, px, py);
+    });
+    void wrap.offsetWidth;
+    nudgeMoonNames(orbs, spot.angles);
+    if (!reduced()) {
+      orbs.forEach((b, i) => { b.style.transform = `translate3d(${x}px, ${y}px, 0) scale(.2)`; });
+      void wrap.offsetWidth;
+    }
+    orbs.forEach((b, i) => {
+      const [px, py] = at(i);
+      b.style.transition = reduced() ? "none" : "transform .55s cubic-bezier(.22,1,.36,1), opacity .25s";
       b.style.transitionDelay = reduced() ? "0s" : `${i * 45}ms`;
-      b.style.transform = `translate3d(${px}px, ${py}px, 0)`;
+      b.style.transform = pose(i, px, py);
       b.classList.add("on");
+      limbs[i].neck.classList.add("on");
+    });
+    sync();
+    if (!reduced()) burp(); // Dot gives a squash as the blobs split off it
+    const pinch = setTimeout(() => { limbs.forEach((l) => l.neck.classList.remove("on")); goo.classList.add("gone"); }, reduced() ? 0 : 420 + n * 45);
+    // Alive: once out, the blobs drift slowly around Dot, each bobbing on its own beat, and stop to listen
+    // while you point at one. Their eyes follow the pointer. Nothing moves with reduced motion.
+    let spin = 0, last = 0, loop = 0, near = false;
+    const drift = (t) => {
+      if (over) return;
+      const dt = last ? Math.min(50, t - last) : 0; last = t;
+      if (!near) spin += dt * 0.00012;
+      orbs.forEach((b, i) => {
+        const a = spot.angles[i] + spin, bob = Math.sin(t * 0.0021 + i * 1.7) * 3;
+        const px = x + Math.cos(a) * (spot.r + bob), py = y + Math.sin(a) * (spot.r + bob) + Math.cos(t * 0.0017 + i) * 2;
+        pos[i] = [px, py];
+        b.style.transition = "opacity .25s"; b.style.transitionDelay = "0s";
+        b.style.transform = `translate3d(${px}px, ${py}px, 0)`;
+        b.style.setProperty("--lx", `${Math.round(Math.cos(a) * 52)}px`); b.style.setProperty("--ly", `${Math.round(Math.sin(a) * 52)}px`);
+        const sp = limbs[i].sprout; sp.style.transition = "none"; sp.style.transform = b.style.transform;
+      });
+      loop = requestAnimationFrame(drift);
+    };
+    const startDrift = reduced() ? 0 : setTimeout(() => { loop = requestAnimationFrame(drift); }, 560 + n * 45);
+    const eyes = (e) => orbs.forEach((b, i) => {
+      const dx = e.clientX - pos[i][0], dy = e.clientY - pos[i][1], d = Math.hypot(dx, dy) || 1, k = Math.min(1, d / 60) * 2.5;
+      b.style.setProperty("--ex", `${(dx / d) * k}px`); b.style.setProperty("--ey", `${(dy / d) * k}px`);
+    });
+    if (!reduced()) document.addEventListener("pointermove", eyes);
+    orbs.forEach((b) => { b.addEventListener("pointerenter", () => { near = true; }); b.addEventListener("pointerleave", () => { near = false; }); });
+    // Dot watches the blob you point at
+    const show = (i) => { if (!over) { const [px, py] = at(i); lookAt(px, py, 1500); } };
+    orbs.forEach((b, i) => {
+      b.addEventListener("pointerenter", () => show(i)); b.addEventListener("focus", () => show(i));
     });
     (orbs.find((b) => !b.disabled) ?? orbs[0])?.focus({ preventScroll: true });
     const finish = (key) => {
       if (over) return; over = true;
+      clearTimeout(pinch); clearTimeout(startDrift); goo.classList.remove("gone"); // the goo comes back as they melt home cancelAnimationFrame(loop);
+      document.removeEventListener("pointermove", eyes);
+      orbs.forEach((b) => { b.style.transition = reduced() ? "none" : "transform .45s cubic-bezier(.22,1,.36,1), opacity .25s"; });
       document.removeEventListener("keydown", onKey, true); document.removeEventListener("pointerdown", onOut, true);
       st.ui = Math.max(0, st.ui - 1);
       const [cx, cy] = centre();
@@ -649,9 +974,10 @@ const buddy = (() => {
         if (reduced()) b.style.transition = "none";
         b.style.transform = `translate3d(${cx}px, ${cy}px, 0) scale(.2)`; // each one is taken back into Dot
       });
+      sync();
       cap.hidden = true;
       if (key && !reduced()) gulp().then(() => burp()); // Dot opens wide for the one it takes, then settles
-      setTimeout(() => { wrap.remove(); if (!document.querySelector(".buddy-opts")) root.classList.remove("attached"); }, reduced() ? 0 : 520);
+      setTimeout(() => { wrap.remove(); goo.remove(); if (!document.querySelector(".buddy-opts")) root.classList.remove("attached"); }, reduced() ? 0 : 520);
       resolve(key ?? null);
     };
     const onKey = (e) => {
@@ -668,7 +994,8 @@ const buddy = (() => {
 
   const BACK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
   /** prompt({ x, y, placeholder, hint(text) }) → the trimmed text, or null (Back, Escape, a click outside). */
-  function prompt({ x, y, placeholder = "", hint } = {}) {
+  /** optional: Enter on an empty box answers "" (go ahead without), Escape or a click away answers null (cancel) */
+  function prompt({ x, y, placeholder = "", hint, optional = false } = {}) {
     closeTools();
     st.ui += 1;
     const [fx0, fy0] = centre(), PW = Math.min(300, innerWidth - 16), PH = 36;
@@ -704,7 +1031,7 @@ const buddy = (() => {
         resolve(text);
       }
       const onOut = (e) => { if (!el.contains(e.target)) finish(null); };
-      el.addEventListener("submit", (e) => { e.preventDefault(); const t = input.value.trim(); if (t) finish(t); });
+      el.addEventListener("submit", (e) => { e.preventDefault(); const t = input.value.trim(); if (t || optional) finish(t); });
       el.querySelector(".bp-back").addEventListener("click", () => finish(null));
       el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(null); } });
       input.addEventListener("input", () => {
@@ -760,12 +1087,45 @@ const buddy = (() => {
     for (const raw of text.split(/\n+/)) {
       const line = raw.replace(/\*\*(.+?)\*\*/g, "$1").replace(/(^|\s)\*(\S.*?)\*/g, "$1$2").replace(/^#+\s*/, "").trim();
       if (!line) continue;
-      const item = line.match(/^(?:[-*•]|\d+[.)])\s+(.*)/);
-      if (item) { if (!list) out.push(list = document.createElement("ul")); const li = document.createElement("li"); li.textContent = item[1]; list.append(li); continue; }
+      const item = line.match(/^(?:(?:[-*•]|\d+[.)])\s+)+(.*)/); // "2. - term" is one item, not a dash
+      if (item) {
+        if (!list) out.push(list = document.createElement("ul"));
+        const li = document.createElement("li"), term = item[1].match(/^(.{1,48}?)\s+[\u2014\u2013:-]\s+(.+)/); // "term — meaning": the term in bold
+        if (term) { const b = document.createElement("b"); b.textContent = term[1]; li.append(b, ` \u2014 ${term[2]}`); } else li.textContent = item[1];
+        list.append(li); continue;
+      }
       list = null;
       const p = document.createElement("p"); p.textContent = line; out.push(p);
     }
     return out;
+  }
+
+  // ---------- size: Dot springs to a new size; growing it puffs a ring of dots out, shrinking it sucks one in ----------
+  const SIZES = [0.7, 0.85, 1, 1.2, 1.4, 1.6];
+  let sz = 1;
+  try { sz = SIZES.includes(Number(localStorage.getItem("dot-size"))) ? Number(localStorage.getItem("dot-size")) : 1; } catch { /* default */ }
+  root.style.setProperty("--sz", sz);
+  let sizeTimer = 0;
+  function size(step) {
+    if (!step) return sz;
+    const next = SIZES[Math.max(0, Math.min(SIZES.length - 1, SIZES.indexOf(sz) + step))];
+    root.classList.remove("growing", "shrinking", "at-limit"); void root.offsetWidth; // restart the animation
+    clearTimeout(sizeTimer);
+    if (next === sz) { root.classList.add("at-limit"); sizeTimer = setTimeout(() => root.classList.remove("at-limit"), 500); return sz; }
+    const up = next > sz; sz = next;
+    try { localStorage.setItem("dot-size", String(sz)); } catch { /* this visit only */ }
+    root.classList.add(up ? "growing" : "shrinking");
+    root.style.setProperty("--sz", sz);
+    st.mood = up ? "surprised" : "happy"; draw();
+    sizeTimer = setTimeout(() => { root.classList.remove("growing", "shrinking"); st.mood = "idle"; draw(); }, 800);
+    return sz;
+  }
+  /** resize(): Dot asks how big it should be, and keeps asking while you press Smaller or Bigger */
+  function resize() {
+    const pct = () => `${Math.round(sz * 100)}%`;
+    const again = (step) => () => { size(step); setTimeout(resize, 0); };
+    show({ text: `I am at ${pct()}. How big should I be?`, mood: "idle", sticky: true, actions: [
+      { label: "Smaller", onClick: again(-1) }, { label: "Bigger", onClick: again(1) }, { label: "Done", onClick: () => {} }] });
   }
 
   document.body.append(root);
@@ -773,5 +1133,5 @@ const buddy = (() => {
   if (st.muted) st.mood = "sleep";
   draw(); scheduleBlink(); scheduleGlance(); scheduleHop();
   return { say, hide, status, mood, busy, lookAt, goTo, goHome, react, trip, roam, droppable, pen, reading, open, format, draggable, tools: setTools,
-    follow: followMode, look, tagAlong, options, shape, prompt, gulp, burp, toolsOn, skip, centre, put, hold, nudge, wait: waitSkippable };
+    follow: followMode, look, tagAlong, sleep, asleep, showcase, stretch, onSleep: (f) => { napHook = f; }, options, shape, prompt, gulp, burp, toolsOn, skip, centre, put, hold, nudge, wait: waitSkippable, size, resize };
 })();

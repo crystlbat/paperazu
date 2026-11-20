@@ -53,6 +53,29 @@ def test_trims_to_budget_around_marked_page(monkeypatch: pytest.MonkeyPatch) -> 
     assert context.tokens(fake.sent[1]["content"]) < 8192 - 1024
 
 
+def test_a_smaller_window_is_asked_again_without_the_whole_paper(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openai import APIStatusError
+
+    pages = [f"PAGE{i} " + ("word " * 500) for i in range(12)]
+    sent: list[str] = []
+
+    class TooLong(APIStatusError):
+        def __init__(self) -> None:
+            self.status_code, self.message = 400, "Message too long: 16100 tokens exceeds the 768-token context window."
+
+    def create(**kw: Any) -> Any:
+        sent.append(kw["messages"][1]["content"])
+        if len(sent) == 1:
+            raise TooLong()
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="It means the gap."))])
+
+    monkeypatch.setattr(llm, "client", lambda *a, **k: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    out = llm.explain(Settings(model_name="m"), "group fairness", "T", pages, 0)
+    assert out["ok"] and out["text"] == "It means the gap."
+    assert "PAGE11" in sent[0] and "PAGE11" not in sent[1]
+    assert context.tokens(sent[1]) < 768
+
+
 def test_unfinished_thinking_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
     out, _ = _run(monkeypatch, "<think>still going", ["p"])
     assert out["ok"] is False and "Max output tokens" in out["error"]

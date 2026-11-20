@@ -28,6 +28,18 @@ def test_blocks_are_the_paragraphs() -> None:
     assert marks.blocks(pid, 2) is None and marks.blocks("nope", 1) is None
 
 
+def test_text_view_reads_in_order_and_cuts_out_equations() -> None:
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "1 Introduction", fontsize=14)
+    page.insert_text((72, 130), "A first paragraph with enough words to count as text.", fontsize=10)
+    page.insert_text((150, 170), "x = y + z   (1)", fontsize=10)
+    pid = library.create(doc.tobytes(), "p.pdf")
+    items = TestClient(main.app).get(f"/papers/{pid}/text/1").json()["items"]
+    assert [i["kind"] for i in items] == ["h", "p", "img"] and items[2]["src"].startswith("data:image/png")
+    assert TestClient(main.app).get(f"/papers/{pid}/text/2").status_code == 404
+
+
 def test_margin_notes_round_trip_and_export() -> None:
     pid = _paper()
     c = TestClient(main.app)
@@ -169,3 +181,39 @@ def test_suggest_with_a_broken_model_reply_adds_nothing(monkeypatch: pytest.Monk
     pid = _paper()
     r = TestClient(main.app).post(f"/papers/{pid}/highlights/suggest", json={"page": 1, "rect": [60, 80, 560, 120]}).json()
     assert r == {"ok": True, "highlights": []}
+
+
+def test_a_quote_over_a_line_break_and_a_hyphen_is_highlighted_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+    sent = []
+    _fake_model(monkeypatch, [json.dumps({"quotes": ["the data order is the main source of variance in fairness"]})])
+    from workbench import llm
+    real = llm.pick_quotes
+    monkeypatch.setattr(llm, "pick_quotes", lambda s, text, title, focus="": sent.append(focus) or real(s, text, title, focus))
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "We find that the data order is the main source of vari-", fontsize=10)
+    page.insert_text((72, 113), "ance in fairness across many runs of training.", fontsize=10)
+    pid = library.create(doc.tobytes(), "q.pdf")
+    r = TestClient(main.app).post(f"/papers/{pid}/highlights/suggest",
+                                  json={"page": 1, "rect": [60, 80, 560, 130], "focus": "the main finding"}).json()
+    assert sent == ["the main finding"]
+    rects = r["highlights"][0]["rects"]
+    assert len(rects) == 2 and rects[1][2] - rects[1][0] > 50  # both lines, the second up to "fairness", not just 8 words
+
+
+def test_find_falls_back_to_first_and_last_words() -> None:
+    words = [(w, [pymupdf.Rect(i * 10, 0, i * 10 + 8, 10)]) for i, w in enumerate("we show that seeds change fairness a great deal".split())]
+    assert len(marks._find(words, "we show that seeds really change fairness a great deal")) == 9  # one word made up mid-way
+    assert marks._find(words, "nothing like this at all") == []
+
+
+def test_a_scrap_of_a_quote_grows_to_its_sentence() -> None:
+    text = ("Is there a dominant source of randomness? We show that the fairness variance observed in the litera-\n"
+            "ture is dominated by data reshuffling. Other forms matter less.")
+    assert marks._whole(text, "fairness variance observed") == \
+        "We show that the fairness variance observed in the literature is dominated by data reshuffling."
+    assert marks._whole(text, "dominant source of randomness") == "Is there a dominant source of randomness?"
+    long = "We show that the fairness variance observed in the literature"
+    assert marks._whole(text, long) == long  # a real quote is kept as the model gave it
+    assert marks._whole(text, "words not in the text") == "words not in the text"

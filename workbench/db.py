@@ -153,6 +153,80 @@ CREATE TABLE IF NOT EXISTS checks (
     result TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- creatures: a job is a trigger, a short chain of steps, and an output. A run is one time it worked.
+CREATE TABLE IF NOT EXISTS job_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    sections TEXT NOT NULL DEFAULT '[]'   -- JSON [{title, ask}]
+);
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    color INTEGER NOT NULL DEFAULT 0,
+    trigger TEXT NOT NULL DEFAULT 'manual',
+    every INTEGER NOT NULL DEFAULT 120,
+    output TEXT NOT NULL DEFAULT 'doc',
+    papers TEXT NOT NULL DEFAULT '[]',    -- JSON paper ids; [] = whichever paper is open
+    template_id INTEGER REFERENCES job_templates(id) ON DELETE SET NULL,
+    steps TEXT NOT NULL DEFAULT '[]',     -- JSON [{scope, prompt, model}]
+    awake INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS job_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER,
+    job_name TEXT NOT NULL,
+    paper_id TEXT NOT NULL,
+    paper TEXT NOT NULL DEFAULT '',
+    paper_ids TEXT NOT NULL DEFAULT '[]', -- the papers this run actually reads
+    page INTEGER,
+    selection TEXT NOT NULL DEFAULT '',
+    output TEXT NOT NULL DEFAULT 'doc',
+    steps TEXT NOT NULL DEFAULT '[]',     -- copied at queue time, so an edit does not change a run already waiting
+    template_json TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'queued',
+    done INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 1,
+    label TEXT NOT NULL DEFAULT '',
+    result TEXT NOT NULL DEFAULT '{}',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+-- the Dot space: the chat, and the variables that count things in it and steer Dot's next reply
+CREATE TABLE IF NOT EXISTS space_turns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role TEXT NOT NULL,                   -- 'user' or 'dot'
+    text TEXT NOT NULL,
+    events TEXT NOT NULL DEFAULT '[]',    -- JSON: what fired before this reply
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS space_vars (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,                   -- a key of space.KINDS
+    pattern TEXT NOT NULL DEFAULT '',
+    every INTEGER, every_say TEXT NOT NULL DEFAULT '',
+    past INTEGER, past_say TEXT NOT NULL DEFAULT '',
+    drops INTEGER, drops_say TEXT NOT NULL DEFAULT '',
+    value REAL NOT NULL DEFAULT 0,
+    delta REAL NOT NULL DEFAULT 0,
+    streak INTEGER NOT NULL DEFAULT 0,    -- turns in a row the value fell
+    passed INTEGER NOT NULL DEFAULT 0,    -- the past trigger has fired
+    turns INTEGER NOT NULL DEFAULT 0,
+    target TEXT NOT NULL DEFAULT '',      -- watch: the variable it acts on, by name
+    rises INTEGER, rises_say TEXT NOT NULL DEFAULT '',
+    add_n REAL NOT NULL DEFAULT 0,        -- watch: added to the target when it fires
+    act TEXT NOT NULL DEFAULT '',         -- a key of space.ACTIONS, done when trigger act_on fires
+    act_arg TEXT NOT NULL DEFAULT '',
+    act_on TEXT NOT NULL DEFAULT '',
+    learned TEXT NOT NULL DEFAULT '',     -- what the action left: a persona Dot now speaks in
+    look TEXT NOT NULL DEFAULT '',        -- JSON list from space.LOOKS: what Dot puts on, in order
+    tint TEXT NOT NULL DEFAULT '',        -- a colour from a recolor rule; the last one fired wins
+    catches TEXT,                         -- the name of a variable this one chases; fires when it meets it
+    catches_say TEXT NOT NULL DEFAULT '',
+    resets INTEGER NOT NULL DEFAULT 0,    -- 1: back to 0 once a trigger fires ("when it hits 10 turn blue and reset it")
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -176,6 +250,19 @@ def init() -> None:
             con.execute("ALTER TABLE papers ADD COLUMN template TEXT NOT NULL DEFAULT ''")
         if "note" not in cols:  # the plain note, written next to the paper instead of the steps
             con.execute("ALTER TABLE papers ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(space_vars)")}
+        for col, kind in (("target", "TEXT NOT NULL DEFAULT ''"), ("rises", "INTEGER"), ("rises_say", "TEXT NOT NULL DEFAULT ''"),
+                          ("add_n", "REAL NOT NULL DEFAULT 0"),  # added with watch variables
+                          ("act", "TEXT NOT NULL DEFAULT ''"), ("act_arg", "TEXT NOT NULL DEFAULT ''"),
+                          ("act_on", "TEXT NOT NULL DEFAULT ''"), ("learned", "TEXT NOT NULL DEFAULT ''"),  # and with actions
+                          ("look", "TEXT NOT NULL DEFAULT ''"),  # and with looks: what Dot wears for a persona
+                          ("tint", "TEXT NOT NULL DEFAULT ''"),  # and with recolor: the colour Dot is now
+                          ("catches", "TEXT"), ("catches_say", "TEXT NOT NULL DEFAULT ''"),
+                          ("resets", "INTEGER NOT NULL DEFAULT 0"),  # and with catches: the variable it chases
+                          ("step", "REAL NOT NULL DEFAULT 0"), ("at", "REAL"), ("at_say", "TEXT NOT NULL DEFAULT ''"),  # and with values that go down and marks from either side
+                          ("low_say", "TEXT NOT NULL DEFAULT ''"), ("high_say", "TEXT NOT NULL DEFAULT ''")):  # and with lasting moods
+            if col not in cols:
+                con.execute(f"ALTER TABLE space_vars ADD COLUMN {col} {kind}")
     con.close()
 
 

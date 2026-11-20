@@ -16,6 +16,10 @@ class Settings(BaseModel):
     api_key: str = ""
     model_name: str = ""  # empty = first model the server lists
     embed_model: str = ""  # for the graph; empty = first model the server lists with "embed" in its name that works
+    # one model per harness role, loaded on demand (llm.ensure); empty = use whatever is loaded, no swap
+    planner_model: str = ""
+    chat_model: str = ""
+    judge_model: str = ""
     temperature: float = Field(0.2, ge=0, le=1)
     max_context_tokens: int = Field(32768, ge=2048, le=262144)
     max_output_tokens: int = Field(1024, ge=64, le=16384)

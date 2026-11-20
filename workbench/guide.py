@@ -36,7 +36,21 @@ def stops(paper_id: str) -> list[dict[str, Any]] | None:
 # ---------- stages: abstract, conclusion, figures, then the sections that matter ----------
 _SKIP = re.compile(r"^(references?|bibliography|acknowledg\w*|appendix|appendices|supplement\w*|ethic\w*|author\w*|contents)\b", re.I)
 _CONCLUSION = re.compile(r"\b(conclusions?|concluding|summary|discussion)\b", re.I)
-_FIGURE = re.compile(r"^\s*(Figure|Fig\.)\s+(\d+)\s*[:.]\s*(.*)", re.I | re.M)
+_FIGURE = re.compile(r"^\s*(Figure|Fig\.|Table)\s+(\d+)\s*([:.])\s*(.*)", re.I | re.M)
+
+
+def figures(pages: list[str]) -> list[dict[str, Any]]:
+    """Each figure and table once, in page order: {label, page, caption}. A caption ("Figure 4: ...") wins over a
+    sentence that starts by naming one ("Fig. 4. We plot ..."), which is taken only when no caption is found."""
+    found: dict[tuple[str, int], tuple[bool, int, int, str]] = {}
+    for i, text in enumerate(pages):
+        for m in _FIGURE.finditer(text):
+            key = ("Table" if m.group(1).lower() == "table" else "Figure", int(m.group(2)))
+            caption = m.group(3) == ":"
+            if key not in found or (caption and not found[key][0]):
+                found[key] = (caption, i + 1, m.start(), m.group(4).strip())
+    in_order = sorted(found.items(), key=lambda kv: kv[1][1:3])  # page, then place on the page
+    return [{"label": f"{k[0]} {k[1]}", "page": pg, "caption": cap[:140]} for k, (_, pg, _, cap) in in_order]
 _MAX_OTHER = 4
 _PICK = {
     "type": "object",
@@ -74,11 +88,16 @@ def stages(paper_id: str, s: Any = None) -> dict[str, Any] | None:
         out.append({"id": "conclusion", "kind": "conclusion", "title": c[1] if c[1].lower().startswith(("conclusion", "concluding")) else "Conclusion",
                     "heading": c[1], "page": c[2], "why": "Now the end. It shows what the authors say they found."})
 
-    figs = [(i + 1, m.group(2), m.group(3).strip().replace("\n", " ")) for i, t in enumerate(pages) for m in _FIGURE.finditer(t)]
+    figs = figures(pages)
     if figs:
-        pg, num, cap = figs[0]
-        out.append({"id": "figures", "kind": "figures", "title": "Figures", "heading": f"Figure {num}", "page": pg,
-                    "why": f"Look at the figures. {len(figs)} in all, the first on page {pg}." + (f" Figure {num}: {cap[:90]}" if cap else "")})
+        first, tables = figs[0], sum(f["label"].startswith("Table") for f in figs)
+        n_fig = len(figs) - tables
+        what = " and ".join(x for x in (f"{n_fig} figure{'s' * (n_fig != 1)}" if n_fig else "",
+                                         f"{tables} table{'s' * (tables != 1)}" if tables else "") if x)
+        out.append({"id": "figures", "kind": "figures", "title": "Figures and tables" if tables else "Figures",
+                    "heading": first["label"], "page": first["page"], "items": figs,
+                    "why": f"Look at the {'figures and tables' if tables else 'figures'}. {what} in all, the first on page {first['page']}."
+                           + (f" {first['label']}: {first['caption'][:90]}" if first["caption"] else "")})
 
     counts: dict[int, int] = {}
     for h in heads:

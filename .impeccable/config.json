@@ -1,4 +1,5 @@
 {
+  "buildPath": "code",
   "detector": {
     "ignoreRules": [],
     "ignoreFiles": [],
@@ -32,6 +33,60 @@
         ],
         "createdAt": "2026-11-06T09:36:03.731Z",
         "reason": "every blink is tied to a live state: model check in progress, papers being embedded, or the model server down / wrong key. None loop while idle."
+      },
+      {
+        "rule": "low-contrast",
+        "value": "*",
+        "files": [
+          ".superpowers/brainstorm/24622-1794092239/content/layout.html"
+        ],
+        "createdAt": "2026-11-07T22:57:52.837Z",
+        "reason": "Claude: throwaway brainstorm wireframe; miniature page text is intentional scale-down"
+      },
+      {
+        "rule": "tiny-text",
+        "value": "*",
+        "files": [
+          ".superpowers/brainstorm/24622-1794092239/content/layout.html"
+        ],
+        "createdAt": "2026-11-07T22:57:52.853Z",
+        "reason": "Claude: throwaway brainstorm wireframe; miniature page text is intentional scale-down"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          ".superpowers/brainstorm/24622-1794092239/content/layout.html"
+        ],
+        "createdAt": "2026-11-07T22:58:03.734Z",
+        "reason": "Claude: throwaway brainstorm wireframe at miniature scale, not product UI"
+      },
+      {
+        "rule": "undersized-ui-text",
+        "value": "*",
+        "files": [
+          ".superpowers/brainstorm/24622-1794092239/content/layout.html"
+        ],
+        "createdAt": "2026-11-07T22:58:03.750Z",
+        "reason": "Claude: throwaway brainstorm wireframe at miniature scale, not product UI"
+      },
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          "static/library.css"
+        ],
+        "createdAt": "2026-11-08T01:15:20.042Z",
+        "reason": "The thick edge is the wooden shelf plank from the library design, not an accent border on a rounded card."
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "static/style.css"
+        ],
+        "createdAt": "2026-11-08T02:07:28.452Z",
+        "reason": "Existing quote and status rules: a thin marker bar on answers, quotes, and the next-paper card. Not a card side-tab."
       }
     ]
   }

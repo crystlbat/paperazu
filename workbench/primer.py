@@ -8,7 +8,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from openai import APIConnectionError, APIError, APIStatusError, AuthenticationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import context, db, framework, library, llm
@@ -106,7 +105,7 @@ def labelled(pages: list[str], keep: list[int]) -> str:
 def step_context(step: Step, pages: list[str], heads: list[tuple[int, str, int]], s: Settings, overhead: str) -> str:
     """The whole paper when it fits in 60% of the budget (so every step can cite any page);
     otherwise the step's own pages, trimmed to the budget around where they start."""
-    budget = s.max_context_tokens - s.max_output_tokens - context.tokens(overhead) - 200
+    budget = llm.window(s) - llm.reply_tokens(s) - context.tokens(overhead) - 200
     every = list(range(len(pages)))
     if context.tokens(labelled(pages, every)) <= 0.6 * budget:
         return labelled(pages, every)
@@ -197,24 +196,16 @@ def _complete(s: Settings, messages: list[dict[str, str]], schema: dict[str, Any
     fmt: dict[str, Any] = ({"type": "json_schema", "json_schema": {"name": name, "schema": schema}}
                            if _json_schema_ok else {"type": "json_object"})
     try:
-        r = llm.client(s).chat.completions.create(model=llm.pick_model(s) or "default", messages=messages,
-                                                  max_tokens=s.max_output_tokens, temperature=s.temperature,
-                                                  response_format=fmt)  # type: ignore[arg-type]
-    except AuthenticationError:
-        raise PrimerError("Wrong API key. Check it in Settings.")
-    except APIConnectionError:
-        raise PrimerError("Could not reach the model. Is Unsloth running?")
-    except APIStatusError as e:
-        if _json_schema_ok and e.status_code in (400, 422, 500, 501):
+        return llm.chat(s, messages, response_format=fmt)
+    except llm.ModelError as e:
+        if _json_schema_ok and e.status in (400, 422, 500, 501):
             _json_schema_ok = False
-            return _complete(s, messages, schema, name)
-        raise PrimerError(e.message)
-    except APIError as e:
-        raise PrimerError(e.message)
-    text = llm._strip_thinking(r.choices[0].message.content or "")
-    if text is None:
-        raise PrimerError("The model ran out of room before it answered. Raise Max output tokens in Settings.")
-    return text
+            try:
+                return _complete(s, messages, schema, name)
+            except PrimerError:
+                _json_schema_ok = True  # json_object failed too, so the schema was not the problem
+                raise
+        raise PrimerError(str(e)) from e
 
 
 def parse(text: str, step: Step) -> StepPrimer:

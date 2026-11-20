@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600&family=Instrument+Serif&family=Doto:wght@800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1440px;height:900px;overflow:hidden;background:#17181b;color:#1f2023;font:16px/1.35 Geist,sans-serif}
+header{height:64px;display:flex;align-items:center;gap:22px;padding:0 24px;color:#e8e8e8}
+.brand{font:400 22px/1 "Instrument Serif",serif}
+nav{display:flex;gap:16px;color:#a8a9ae}
+nav b{background:#ffe347;color:#1f2023;padding:3px 8px;font-weight:600}
+.roster{margin-left:auto;display:flex;gap:8px}
+.roster i{width:22px;height:22px;border-radius:50%;background:var(--c);display:block}
+.field{margin:0 20px 20px;height:816px;background:#f0c25e;border-radius:28px;padding:36px 48px;display:grid;grid-template-rows:auto 1fr auto;gap:20px}
+.meet{display:flex;align-items:center;gap:18px}
+.face{width:72px;height:72px;border-radius:50%;background:#1f2023;display:flex;justify-content:center;align-items:center;gap:10px}
+.face i{width:8px;height:14px;border-radius:99px;background:#f0c25e;display:block}
+.name{font:800 64px/1 Doto,sans-serif}
+.awake{margin-left:auto;background:#1f2023;color:#ffe347;border-radius:99px;padding:8px 14px;font-weight:600}
+.step{font:400 48px/1.15 "Instrument Serif",serif;max-width:980px}
+.pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.pills span,.tile{border:1px solid rgb(31 32 35/.35);border-radius:99px;padding:8px 14px}
+.pills .on{background:#1f2023;color:#ffe347;border-color:#1f2023}
+.foot{display:flex;gap:28px;align-items:end}
+.sheet{background:#f4f4ef;border-radius:8px;padding:16px 18px;width:280px}
+.sheet b{display:block;font:400 22px/1.1 "Instrument Serif",serif;margin-bottom:6px}
+.tiles{display:flex;flex-wrap:wrap;gap:8px;flex:1}
+.tile.on{background:#1f2023;color:#ffe347;border-color:#1f2023;font-weight:600}
+.btn{border:1px solid #1f2023;border-radius:99px;padding:8px 14px}
+.btn.go{background:#1f2023;color:#ffe347}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Paper Workbench</div>
+  <nav><span>Library</span><span>Graph</span><b>Creatures</b><span>Settings</span></nav>
+  <div class="roster">
+    <i style="--c:#7cb4ff"></i><i style="--c:#8ad6ac"></i><i style="--c:#c9a7ff"></i><i style="--c:#ff9c87"></i><i style="--c:#6fd3d3"></i>
+  </div>
+</header>
+<main class="field">
+  <div class="meet">
+    <div class="face"><i></i><i></i></div>
+    <div class="name">Quiz me</div>
+    <span class="awake">Awake</span>
+  </div>
+  <div>
+    <p class="step">Ask one short question that checks I understood the main idea of this page.</p>
+    <div class="pills">
+      <span class="on">The paper I'm reading</span>
+      <span class="on">When I stay on a page</span>
+      <span>after 180 seconds</span>
+      <span>The page I'm on</span>
+    </div>
+  </div>
+  <div class="foot">
+    <div class="sheet"><b>Reads</b>Whichever paper is open</div>
+    <div class="tiles">
+      <span class="tile">Dot tells me</span>
+      <span class="tile on">Dot asks me a question</span>
+      <span class="tile">A card</span>
+      <span class="tile">Highlights</span>
+      <span class="tile">A document</span>
+      <span class="btn">Let it go</span>
+      <span class="btn">Run now</span>
+      <span class="btn go">Save</span>
+    </div>
+  </div>
+</main>
+</body>
+</html>
