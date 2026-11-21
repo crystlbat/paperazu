@@ -12,7 +12,7 @@ import urllib.parse
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from harness_char import char
+from harness_char import char, chibi
 from shared import db, llm, settings
 from pdf_research import jobs
 
@@ -24,11 +24,14 @@ COMMANDS = {"open": ("web address", "open a web page"),
             "wait": ("seconds", "let it play or load, up to 60 seconds"),
             "read": ("words", "read the part of the page about these words"),
             "scroll": ("", "scroll down and read what shows"),
+            "look": ("", "take a screenshot and look at the page with your own eyes"),
+            "become": ("which picture, in words", "change your own form into a picture on this page"),
             "opinion": ("", "tell the person what it did and what it thinks")}
 MAX_STEPS = 10
 MAX_CLICKS = 4
 READ_CHARS = 1200  # what one read hands the model
 W, H = 1280, 800  # the browser's viewport: boxes go to the page as fractions of it
+LOOK_AT = 6  # pictures it looks at before it gives up on finding itself
 AIM = 1.0  # seconds between showing what it will click and clicking it, so Dot gets there on the screen first
 
 RUN: dict[str, Any] = {}  # the browse in hand, read by GET /char/browse. shortcut: in memory like the training lanes; a restart forgets it
@@ -190,6 +193,11 @@ CLICKABLES = """() => { document.querySelectorAll('[data-dot-i]').forEach((e) =>
     const href = e.href ? new URL(e.href).pathname + new URL(e.href).search : '';
     e.setAttribute('data-dot-i', String(i)); out.push({ i, text: t.slice(0, 100), to: href.slice(0, 60) }); if (++i >= 80) break; }
   return out; }"""
+IMAGES = """() => { document.querySelectorAll('[data-dot-img]').forEach((e) => e.removeAttribute('data-dot-img')); const out = []; let i = 0;
+  for (const e of document.querySelectorAll('img')) { const r = e.getBoundingClientRect(), src = e.currentSrc || e.src || '';
+    if (r.width < 60 || r.height < 60 || r.bottom < 0 || r.top > innerHeight * 2 || !src || src.startsWith('data:image/gif')) continue;
+    e.setAttribute('data-dot-img', String(i)); out.push({ i, alt: (e.alt || e.title || '').replace(/\\s+/g, ' ').trim().slice(0, 100), src }); if (++i >= 40) break; }
+  return out; }"""
 PLAY = """async () => { const v = [...document.querySelectorAll('video')].sort((a, b) => b.clientWidth - a.clientWidth)[0]; if (!v) return null;
   v.muted = false; try { await v.play(); } catch (e) { return { err: String(e) }; } return { ok: true }; }"""
 PLAYING = """() => { const v = [...document.querySelectorAll('video')].sort((a, b) => b.clientWidth - a.clientWidth)[0];
@@ -268,15 +276,18 @@ def _learn() -> str:
     """A browse that worked end to end becomes its site's recipe, with the words of this task left as blanks to fill next time."""
     steps = [s for s in RUN["steps"] if s["cmd"] != "opinion"]
     opened = next((p["arg"] for p in RUN["plan"] if p["name"] == "open"), "")
-    if RUN["status"] != "done" or not opened or any(s["status"] != "ok" for s in steps):
+    if RUN["status"] != "done" or not opened or any(s["status"] != "ok" for s in steps) or undone():  # all steps ok is not the task done
         return ""
     host = site_of(opened)
     old = next((r for r in recipes() if r["site"] == host), None)
-    if old and old["by"] == "you":  # your recipe stays as you wrote it; it only counts that it worked
+    if old and old["by"] == "you" and not RUN.get("more"):  # your recipe did the whole task: it stays as you wrote it and counts that it worked
         save_recipe(host, old["steps"], "you", old.get("task", ""), old.get("worked", 0) + 1)
         return host
+    # it learned more than the recipe knew (it had to plan past its end to finish): the fuller steps become the recipe; yours stays in its history
     blank = {"search": "<what you want>", "read": "<what you want>"}
-    lines = [f"{p['name']} {blank.get(p['name'], p['arg'])}".strip() for p in RUN["plan"] if p["name"] != "opinion"]
+    asked = {w for p in RUN["plan"] if p["name"] == "search" for w in p["arg"].lower().split() if len(w) > 2}
+    named = lambda p: p["name"] == "click" and asked & set(p["arg"].lower().split())  # "click lofi hip hop radio" names this task's song; "click the first video" fits any
+    lines = [f"{p['name']} {'<what fits the task>' if named(p) else blank.get(p['name'], p['arg'])}".strip() for p in RUN["plan"] if p["name"] != "opinion"]
     save_recipe(host, "\n".join(lines), "learned", RUN["task"], (old or {}).get("worked", 0) + 1)
     return host
 
@@ -299,7 +310,11 @@ def validate(cmds: list[dict[str, str]], need_page: bool = True) -> tuple[list[d
     plan: list[dict[str, str]] = []
     rejected: list[dict[str, str]] = []
     clicks = 0
+    titled = lambda c: c["name"] == "play" and len(re.split(r"[\"']?\s*:\s", c.get("arg", ""))[0].split()) >= 3
+    cmds = [x for c in cmds for x in ([{"name": "click", "arg": c["arg"]}, {"name": "play", "arg": ""}] if titled(c) else [c])]  # "play Des Rocs - Used to the Darkness" means click it, then play
     for c in cmds:
+        if c["name"] in ("command", "cmd", "step") and (w := c.get("arg", "").split(None, 1)):  # a small planner echoes the word: "command open x.com"
+            c = {"name": w[0].lower().strip(":"), "arg": w[1] if len(w) > 1 else ""}
         name, arg, why = c["name"], c.get("arg", "") if c["name"] == "open" else re.split(r"[\"']?\s*:\s", c.get("arg", ""))[0].strip("\"' "), ""  # repair, as the harness does: a small planner glues its explanation after the argument
         if name not in COMMANDS:
             why = "unknown command"
@@ -313,7 +328,7 @@ def validate(cmds: list[dict[str, str]], need_page: bool = True) -> tuple[list[d
             why = "wait needs a number of seconds"
         elif name == "click" and (clicks := clicks + 1) > MAX_CLICKS:
             why = f"at most {MAX_CLICKS} clicks per browse"
-        elif need_page and name in ("click", "play", "read", "scroll") and not any(p["name"] in ("open", "search") for p in plan):
+        elif need_page and name in ("click", "play", "read", "scroll", "look", "become") and not any(p["name"] in ("open", "search") for p in plan):
             why = "no page is open yet"
         elif len(plan) >= MAX_STEPS - 1:
             why = f"over budget ({MAX_STEPS} steps)"
@@ -385,9 +400,51 @@ def _think(sec: str) -> str:
     return _complete(msgs, 120, "read")
 
 
+def _jpeg(raw: bytes) -> str:
+    return "data:image/jpeg;base64," + base64.b64encode(raw).decode()
+
+
+def _see(picture: str, ask: str, max_tokens: int = 120) -> str:
+    """One look with its own eyes: the picture goes to the model beside the question (the model must take images, as formula.py's does)."""
+    msgs: list[dict[str, Any]] = [{"role": "user", "content": [{"type": "text", "text": ask}, {"type": "image_url", "image_url": {"url": picture}}]}]
+    return _complete(msgs, max_tokens, "look")  # type: ignore[arg-type]
+
+
+def looks_of(who: str) -> str:
+    """How it looks, in words, from what is known: its chibi reference (kind, features, the sentences that name it) and its persona."""
+    spec = chibi.cached(who) or {}
+    kind = {"mech": "a machine or robot", "creature": "a creature", "humanoid": "a person"}.get(spec.get("kind", ""), "")
+    parts = [f"You are {who}" + (f", {kind}" if kind else "") + "."]
+    if spec.get("features") or spec.get("colours"):
+        parts.append("Your look: " + ", ".join([*spec.get("colours", []), *(f.replace("_", " ") for f in spec.get("features", []))]) + ".")
+    if spec.get("about"):
+        parts.append("What is written about you: " + spec["about"][:400])
+    persona = char.get_profile()["persona"]
+    parts += [ln for ln in persona.splitlines() if ln.split(":")[0].strip().lower() in ("look", "world", "voice")][:2]
+    return "\n".join(parts)
+
+
+def _judge(picture: str, who: str) -> tuple[str, str]:
+    """Is this picture it? ("me" | "style" | "no", what the picture shows). Seeing and judging are two calls: a 2B model asked
+    "is this you?" about a picture said yes to fan art of three other characters from its world, but it describes pictures well."""
+    seen = _see(picture, "Describe this picture in one or two sentences: how many figures there are, and what each one is "
+                         "(a person, a robot, a creature, a drawing of something...), with their colours and shapes.", 90)
+    if not seen:
+        return "no", ""
+    said = _complete([{"role": "system", "content": "You judge whether a picture shows a character. Answer with one word: me, style or no. "
+                                                    "me: the picture is this character itself, as its main figure. style: not this character, but a figure "
+                                                    "of the same kind of being with the same look and spirit. no: anything else (other characters, "
+                                                    "a group, a logo, a scene, text)."},
+                       {"role": "user", "content": f"The character:\n{looks_of(who)}\n\nThe picture shows: {seen}\n\nOne word: me, style or no."}], 8, "judge")
+    m = re.search(r"\b(me|style|no)\b", said.lower())
+    return (m[1] if m else "no"), seen
+
+
 def _opinion(task: str, read: list[dict[str, str]]) -> str:
     who = char.get_profile()["name"]
     did = "\n".join(f"- {s['cmd']}: {s['status']}, {s['detail']}" for s in RUN["steps"] if s["status"] in ("ok", "failed"))
+    if why := undone():
+        did += f"\n- the task is NOT done: {why}"
     msgs = [{"role": "system", "content": f"You are {who}. Tell the person, in three or four sentences in your own voice, what you did and what you think, "
                                           "from what happened only. If it did not work, say so." + char._fix("browse")},
             {"role": "user", "content": f"Task: {task}\n\nWhat you did:\n{did}\n\nWhat you read:\n" +
@@ -485,6 +542,48 @@ def _step(i: int, p: dict[str, str], read: list[dict[str, str]], d: Any) -> None
                 _set_step(i, detail=f"waiting {n - k // 2} s")
                 time.sleep(0.5)
             return _set_step(i, status="ok", detail=f"waited {n} s")
+        if name == "look":
+            if not RUN.get("url"):
+                return _set_step(i, status="failed", detail="no page is open, so there is nothing to look at")
+            _set_step(i, detail="taking a screenshot")
+            shot = _jpeg(d.call(lambda pg: pg.screenshot(type="jpeg", quality=70)))
+            who = char.get_profile()["name"]
+            thought = _see(shot, f"You are {who}, using a web browser. Task: {RUN.get('task', '')}\nIn one or two sentences, in your own voice, "
+                                 "say what you see on this screen that matters for the task. Only what is really there.")
+            if not thought:
+                return _set_step(i, status="failed", detail="the model said nothing about the screenshot")
+            read.append({"page": RUN.get("title", ""), "thought": thought, "text": thought})
+            return _set_step(i, status="ok", detail="looked at the screen", thought=thought)
+        if name == "become":
+            imgs = d.call(lambda pg: pg.evaluate(IMAGES))
+            if not imgs:
+                return _set_step(i, status="failed", detail="there are no pictures on this page")
+            who = char.get_profile()["name"]
+            first = _pick(arg, [{"i": m["i"], "text": m["alt"] or f"picture {m['i']}"} for m in imgs]) if arg and any(m["alt"] for m in imgs) else None
+            order = ([m for m in imgs if m["i"] == first] + [m for m in imgs if m["i"] != first])[:LOOK_AT]  # its pick first, then the page's first pictures
+            best = None
+            for m in order:  # each one is looked at before it takes it: a picture of someone else is not its form
+                el = lambda pg, k=m["i"]: pg.locator(f'[data-dot-img="{k}"]').first
+                box = d.call(lambda pg: (el(pg).scroll_into_view_if_needed(timeout=4000), _box(el(pg)))[1])
+                _aim(i, box, f"looking at “{m['alt'] or 'a picture'}”")
+                shot = _jpeg(d.call(lambda pg: el(pg).screenshot(type="jpeg", quality=85, timeout=6000)))
+                verdict, seen = _judge(shot, who)
+                if verdict == "me":
+                    best = (m, shot, seen, "me")
+                    break
+                if verdict == "style" and not best:
+                    best = (m, shot, seen, "style")
+            if not best:
+                return _set_step(i, status="failed", detail=f"none of the {len(order)} pictures it looked at was {who}, or fit its look")
+            m, shot, seen, verdict = best
+            try:  # the full picture, else the screenshot of it when the site refuses
+                spec = chibi.pick(who, shot if m["src"].startswith("data:") else m["src"], shot, char.get_profile()["look"])
+            except ValueError as e:
+                return _set_step(i, status="failed", detail=f"it could not take that picture: {e}")
+            RUN["form"] = spec
+            how = "itself" if verdict == "me" else "not itself, but its kind and look"
+            read.append({"page": RUN.get("title", ""), "thought": f"I took the form of a picture of {how}: {seen}", "text": seen})
+            return _set_step(i, status="ok", detail=f"changed form into “{m['alt'] or 'a picture'}” ({how})", thought=seen)
         # read and scroll: the page's words, a piece at a time
         if not RUN.get("url"):
             return _set_step(i, status="failed", detail="no page is open, so there is nothing to read")
@@ -513,6 +612,45 @@ def _step(i: int, p: dict[str, str], read: list[dict[str, str]], d: Any) -> None
         _set_step(i, status="failed", detail=f"the browser could not do it: {e}")
 
 
+# when is the task done? (words in the task, what must have happened, what to tell the planner if it has not). A new kind of task is a line here.
+DONE = [(re.compile(r"\b(?:play|listen|watch|song|music|video)\b", re.I), lambda: any(s["cmd"].startswith("play") and s["status"] == "ok" for s in RUN["steps"]),
+         "nothing is playing yet"),
+        (re.compile(r"\bnew form\b|\bbecome\b", re.I), lambda: bool(RUN.get("form")), "your form has not changed yet")]
+MORE_ROUNDS = 2  # times it may plan again when the task is not done
+MORE_STEPS = 4
+
+
+def undone() -> str:
+    """Why the task is not done yet, or "" when it is (or when nothing says how to tell)."""
+    return next((why for words, ok, why in DONE if words.search(RUN.get("task", "")) and not ok()), "")
+
+
+def _blank_step(p: dict[str, str]) -> dict[str, Any]:
+    return {"cmd": _text(p), "status": "waiting", "detail": "", "thought": "", "box": None, "url": ""}
+
+
+def _next_steps(read: list[dict[str, str]]) -> list[dict[str, str]]:
+    """The plan ran out with the task not done: it is shown where it is now and what it can click, and plans a few steps more.
+    Nothing when the task is done, no page is open, or it has planned again MORE_ROUNDS times."""
+    why = undone()
+    if not why or not RUN.get("url") or RUN.get("more", 0) >= MORE_ROUNDS or _stop.is_set():
+        return []
+    RUN["more"] = RUN.get("more", 0) + 1
+    d = launch()
+    items = d.call(lambda pg: pg.evaluate(CLICKABLES)) or []
+    who = char.get_profile()["name"]
+    cat = "\n".join(f"- {k}{' <' + a + '>' if a else ''}: {t}" for k, (a, t) in COMMANDS.items() if k != "opinion")
+    did = "\n".join(f"- {s['cmd']}: {s['status']}, {s['detail']}" for s in RUN["steps"] if s["status"] in ("ok", "failed"))
+    msgs = [{"role": "system", "content": f"You are {who}, using a web browser. Your plan ran out, but the task is not done: {why}. Write the next commands, "
+                                          f"at most {MORE_STEPS}, one per line: the command name, a space, then its argument. No other text." + char._fix("browse")},
+            {"role": "user", "content": f"Task: {RUN['task']}\n\nWhat you did:\n{did}\n\nYou are on: {RUN.get('title', '')} ({RUN['url']})\n"
+                                        "On this page you can click:\n" + "\n".join(f"- {it['text']}" for it in items[:15]) + f"\n\nCommands:\n{cat}"}]
+    from harness_char import harness
+    cmds, _ = harness.parse(_complete(msgs, 120, "plan more"))
+    more, _ = validate([{"name": c["name"], "arg": c["arg"]} for c in cmds], need_page=False)
+    return [m for m in more if m["name"] != "opinion"][:MORE_STEPS]
+
+
 def _run() -> None:
     read: list[dict[str, str]] = []
     try:
@@ -524,6 +662,12 @@ def _run() -> None:
                 RUN["status"] = "stopped"
                 break
             _set_step(i, status="doing")
+            if p["name"] == "opinion" and (more := _next_steps(read)):  # the plan ran out but the task is not done: it looks where it is and goes on
+                RUN["plan"][i:i] = more
+                RUN["steps"][i:i] = [_blank_step(m) for m in more]
+                RUN["plan_text"] = plan_text(RUN["plan"])
+                p = RUN["plan"][i]
+                _set_step(i, status="doing")
             if p["name"] == "opinion":
                 if not any(s["status"] == "ok" for s in RUN["steps"]):
                     _set_step(i, status="failed", detail="nothing worked, so it has nothing to say")
@@ -554,9 +698,17 @@ def _run() -> None:
     char._engine("browse", "ok" if RUN["status"] == "done" else RUN["status"], f"{RUN['task'][:60]}: {RUN['status']}")
 
 
-def _planner(note: str = "") -> None:
+def _given(text: str) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
+    """A plan handed over whole (the adapt step knows its steps): checked like any other, with no planner call."""
+    from harness_char import harness
+    cmds, bad = harness.parse(text)
+    plan, rejected = validate([{"name": c["name"], "arg": c["arg"]} for c in cmds])
+    return f"I'll {RUN['task'][0].lower()}{RUN['task'][1:]}", plan, rejected + [{"cmd": b, "why": "could not read it as a command"} for b in bad]
+
+
+def _planner(note: str = "", given: str = "") -> None:
     try:
-        intent, plan, rejected = _plan(RUN["task"], note)
+        intent, plan, rejected = _given(given) if given else _plan(RUN["task"], note)
     except RuntimeError as e:
         RUN.update(status="failed", error=str(e))
         return
@@ -564,6 +716,11 @@ def _planner(note: str = "") -> None:
         RUN["status"] = "stopped"
         return
     RUN.update(status="waiting", intent=intent, plan=plan, plan_text=plan_text(plan), rejected=rejected)
+    if RUN.get("auto"):  # it chose to do this itself (the chat's adapt step): no one waits to press Go
+        try:
+            go()
+        except RuntimeError as e:
+            RUN.update(status="failed", error=str(e))
 
 
 def _go(target: Any, *args: Any) -> None:
@@ -582,8 +739,9 @@ def _model_free() -> str:
     return ""
 
 
-def start(task: str) -> dict[str, Any]:
-    """Plan a browse for the task; the plan then waits for you to steer it or press Go."""
+def start(task: str, auto: bool = False, plan: str = "") -> dict[str, Any]:
+    """Plan a browse for the task; the plan then waits for you to steer it or press Go (with `auto`, it goes by itself).
+    A `plan` given (one command per line) is checked and used instead of asking the planner."""
     task = " ".join((task or "").split())[:500]
     if not task:
         raise ValueError("Tell it what to do on the web, like: go to youtube and play a song you like.")
@@ -596,8 +754,8 @@ def start(task: str) -> dict[str, Any]:
         keep = {k: RUN[k] for k in ("url", "title") if k in RUN and DRIVER.get("d") and DRIVER["d"].alive()}  # the browser stays where it was
         RUN.clear()
         RUN.update({"task": task, "status": "planning", "intent": "", "plan": [], "plan_text": "", "rejected": [], "steps": [], "url": "", "title": "",
-                    "chunks": None, "done": [], "opinion": "", "grounding": None, "error": "", "note": None} | keep)
-        _go(_planner)
+                    "chunks": None, "done": [], "opinion": "", "grounding": None, "error": "", "note": None, "auto": auto, "form": None} | keep)
+        _go(_planner, "", plan) if plan else _go(_planner)
     return status()
 
 

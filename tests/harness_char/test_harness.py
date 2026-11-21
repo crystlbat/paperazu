@@ -190,3 +190,14 @@ def test_a_step_the_planner_keeps_leaving_out_is_added_to_the_cycle():
     assert harness.starved([{"name": "reflect", "arg": ""}]) in harness.COMMANDS
     assert harness.starved([{"name": "reflect", "arg": ""}]) != "reflect"
     assert harness.starved([]) != "" and harness.starved([{"name": k, "arg": ""} for k in harness.COMMANDS]) == ""
+
+
+def test_a_planner_that_recites_the_catalogue_still_answers_the_open_questions(monkeypatch):
+    qs = ["Who is Cooper?", "Who is Laura?", "What is the Lodge?"]
+    monkeypatch.setattr(harness.char, "_open_questions", lambda since=0: qs)
+    _models(monkeypatch, "plan: research the town\nbake: consolidate\njournal: write a page\ngoal: turn a plan line into a question")
+    r = harness.cycle()
+    assert r["proposed"][0] == 'reflect "Who is Cooper?"'  # the work that can happen now leads, though the planner left it out
+    assert ('reflect "Who is Cooper?"', "ok") in [(x["cmd"], x["outcome"]) for x in r["executed"]]
+    why = {x["cmd"].split()[0]: x["why"] for x in r["rejected"]}
+    assert why["plan"] == why["goal"] == "3 questions already open: answer them first"

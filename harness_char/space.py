@@ -226,9 +226,14 @@ def sleep(arg: str, fired: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"sleep": True, "keeper": job["name"], "keeper_job": job}
 
 
+def voice(arg: str, fired: dict[str, Any] | None = None) -> dict[str, Any]:
+    """"like a soldier": the character keeps who it is and changes how it talks; the chat applies it (char.adapt_voice)."""
+    return {"voice": arg.strip()}
+
+
 # action -> (the argument, e.g. who to become) -> {"learned": what Dot now carries, ...}
 # A rule may run several: act "make+paper" with act_arg "action_taken | bias".
-ACTIONS: dict[str, Callable[..., dict[str, Any]]] = {"become": become, "recolor": recolor, "search": web, "make": make, "paper": paper, "spawn": spawn, "sleep": sleep}
+ACTIONS: dict[str, Callable[..., dict[str, Any]]] = {"become": become, "recolor": recolor, "search": web, "make": make, "paper": paper, "spawn": spawn, "sleep": sleep, "voice": voice}
 
 DOT = ("You are Dot, a small yellow research buddy inside a paper-reading app. Reply in one to three short "
        "sentences of plain text, no markdown. Answer or react in your own words; never repeat the user's message back. "
@@ -267,7 +272,7 @@ def variables() -> list[dict[str, Any]]:
     return vs
 
 
-DOING = {"recolor": "turn Dot {}", "search": "search the web for “{}”", "become": "learn {} from the web and talk like them", "make": "make the variable {}",
+DOING = {"recolor": "turn Dot {}", "search": "search the web for “{}”", "become": "learn {} from the web and talk like them", "voice": "talk {}", "make": "make the variable {}",
          "paper": "open or suggest a {} paper", "spawn": "hatch the creature {}", "sleep": "let {} put Dot to sleep, and reflect"}
 
 
@@ -408,6 +413,8 @@ def fold(made: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
 
 LOOKUP = re.compile(r"\b(look(?:s|ing)? (?:\w+ )?up|search|learn|become|talk(?:s|ing)? like|act(?:s|ing)? like|personality)\b", re.I)
 SEARCHY = re.compile(r"\bsearch(?:es|ing)?\s+(?:the web |online |the internet )?(?:for|about|on)\s+(.+?)(?=\s*[;.!?]|,?\s+(?:and|when|where|then|every|each|if)\b|$)", re.I)
+# "talk like a soldier", "speak more Shakespearean": a manner, not a someone ("talk like JARVIS" is a become)
+VOICEY = re.compile(r"\b(?:talk|speak|sound)(?:s|ing)?\s+((?:more|less)\s+\w+(?:\s+and\s+\w+)?|like\s+(?:an?|the|some)\s+\w+(?:\s+\w+){0,2}?)(?=\s+(?:when|whenever|every|each|if|and|after)\b|\s*[;,.!?]|$)", re.I)
 BECOMING = re.compile(r"\b(?:talk|speak|act)(?:s|ing)? like|\bbecome\b|\bpersonality\b", re.I)
 TURNISH = re.compile(r"\b(?:x\s*(?:=|is|as)\s*(?:the\s+)?(?:conversation|convo|chat)?\s*turns?|turn number|conversation turns?|convo turns?)\b", re.I)
 CATCH = re.compile(r"\b(?:catches(?: up with)?|reaches|equals|matches|meets|hits)\s+(?:the\s+)?(?:value of\s+)?([a-z_]\w*)", re.I)
@@ -477,6 +484,13 @@ def _turns(made: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
 def _acting(v: dict[str, Any], text: str) -> dict[str, Any]:
     """Small models write "look up JARVIS and talk like him" as a say. Turn it into the become action, on the
     trigger the user named ("past 10" rather than the model's "every 10")."""
+    vo = VOICEY.search(text)
+    if vo and v["act"] in ("", "become"):  # a small model writes "talk like a soldier" as become: that would swap who it is
+        on = v["act_on"] or next((t for t in TRIGGERS if v[t] or (t == "at" and v[t] is not None)), "")
+        if on:
+            v[f"{on}_say"] = "" if v[f"{on}_say"] == HELD or not re.search(r"\bsay\b", text, re.I) else v[f"{on}_say"]
+            v["act"], v["act_arg"], v["act_on"] = "voice", vo.group(1).strip()[:60], on
+            return v
     if v["act"]:
         return v
     qs = list(SEARCHY.finditer(text))

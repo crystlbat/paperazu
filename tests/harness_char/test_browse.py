@@ -311,3 +311,144 @@ def test_you_can_teach_change_and_forget_a_recipe_and_yours_is_kept(monkeypatch)
     assert (rec["by"], rec["worked"]) == ("you", 1) and rec["steps"].endswith("wait 30")  # it worked, and your words stay yours
     assert client.delete("/char/browse/recipes/youtube.com").json() == {"ok": True}
     assert client.delete("/char/browse/recipes/youtube.com").status_code == 404
+
+
+def test_it_looks_at_the_screen_and_takes_the_form_of_a_picture_of_itself_by_itself(monkeypatch):
+    from harness_char import chibi
+    SITE["https://img.test/"] = {"title": "Jarvis pictures", "text": "Images", "links": [],
+                                 "images": [{"i": 0, "alt": "Iron Man suit", "src": "https://img.test/suit.png"},
+                                            {"i": 1, "alt": "Jarvis robot butler chibi", "src": "https://img.test/jarvis.png"}]}
+    monkeypatch.setattr(Page, "screenshot", lambda self, **k: b"screen", raising=False)
+    monkeypatch.setattr(Loc, "screenshot", lambda self, **k: self.sel.encode(), raising=False)
+    monkeypatch.setattr(Page, "evaluate", lambda self, s: self.here().get("images", []) if s == browse.IMAGES else self.here().get("text", ""))
+    monkeypatch.setattr(chibi, "_image", lambda url: "/char/chibi/image/" + url.rsplit("/", 1)[-1])
+    seen: list[str] = []
+
+    def complete(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
+        first = messages[0]["content"]
+        ask = first if isinstance(first, str) else first[0]["text"]
+        if not isinstance(first, str):
+            seen.append(first[1]["image_url"]["url"])
+        if "about to use a web browser" in ask:
+            return "Intent: find myself\nopen https://img.test/\nlook\nbecome the picture of the butler\nopinion"
+        if "pick what to click" in ask:
+            return "0"  # its pick is the suit: looking at it must turn it down
+        if ask.startswith("Describe this picture"):
+            return "One small robot butler in a bow tie." if "data-dot-img=\"1\"" in __import__("base64").b64decode(first[1]["image_url"]["url"].split(",")[1]).decode() else "A red armoured suit."
+        if "You judge whether a picture shows a character" in ask:
+            return "me" if "robot butler" in messages[1]["content"] else "no"
+        if "what you see on this screen" in ask:
+            return "Two pictures: a red suit and a little robot butler."
+        return "I found a picture of myself and took its form."
+
+    monkeypatch.setattr(jobs, "complete", complete)
+    browse.start("find yourself a new form", auto=True)
+    for _ in range(2):  # the planner thread starts the run thread by itself: no Go
+        _wait()
+    r = _wait()
+    assert r["status"] == "done", r
+    assert [(s["cmd"], s["status"]) for s in r["steps"]] == [("open https://img.test/", "ok"), ("look", "ok"),
+                                                             ("become the picture of the butler", "ok"), ("opinion", "ok")]
+    assert r["steps"][1]["thought"] == "Two pictures: a red suit and a little robot butler."
+    assert r["steps"][2]["detail"] == "changed form into “Jarvis robot butler chibi” (itself)"
+    assert r["form"]["silhouette"] == "/char/chibi/image/jarvis.png" and chibi.cached("Jarvis")["silhouette"] == r["form"]["silhouette"]
+    assert seen[0] == "data:image/jpeg;base64," + __import__("base64").b64encode(b"screen").decode()  # the model saw the screenshot itself
+    del SITE["https://img.test/"]
+
+
+def test_become_and_look_need_a_page_open():
+    plan, rejected = browse.validate([{"name": "look", "arg": ""}, {"name": "become", "arg": "me"}])
+    assert [r["why"] for r in rejected] == ["no page is open yet"] * 2 and plan == [{"name": "opinion", "arg": ""}]
+
+
+def test_a_planner_that_writes_the_word_command_first_is_read_anyway():
+    plan, rejected = browse.validate([{"name": "command", "arg": "open https://www.bing.com/images/search?q=sagira"}, {"name": "command", "arg": "look"}])
+    assert [p["name"] for p in plan] == ["open", "look", "opinion"] and not rejected
+
+
+def test_a_given_plan_runs_without_asking_the_planner(monkeypatch):
+    calls = _model(monkeypatch, "Intent: never asked")
+    browse.start("check about jarvis", auto=True, plan="open en.wikipedia.org/wiki/JARVIS\nread butler Edwin")
+    for _ in range(2):
+        _wait()
+    r = _wait()
+    assert [s["cmd"] for s in r["steps"]] == ["open https://en.wikipedia.org/wiki/JARVIS", "read butler Edwin", "opinion"] and r["status"] == "done"
+    assert not any("about to use a web browser" in m[0]["content"] for m in calls)
+
+
+def test_a_plan_that_stops_at_search_goes_on_until_the_song_plays(monkeypatch):
+    calls = _model(monkeypatch, "Intent: open YouTube and search.\nopen https://www.youtube.com/\nsearch lofi song\nopinion")
+    complete = jobs.complete
+
+    def more(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
+        if "plan ran out" in messages[0]["content"]:
+            calls.append(messages)
+            return "click lofi hip hop radio beats to relax\nplay"
+        return complete(s, messages, **kw)
+
+    monkeypatch.setattr(jobs, "complete", more)
+    client.post("/char/browse", json={"action": "start", "task": "play a song you like on youtube"})
+    r = _run()
+    assert r["status"] == "done", r
+    assert [(s["cmd"], s["status"]) for s in r["steps"]] == [("open https://www.youtube.com/", "ok"), ("search lofi song", "ok"),
+                                                             ("click lofi hip hop radio beats to relax", "ok"), ("play", "ok"), ("opinion", "ok")]
+    asked = next(m for m in calls if "plan ran out" in m[0]["content"])
+    assert "nothing is playing yet" in asked[0]["content"] and "lofi hip hop radio beats to relax" in asked[1]["content"]  # it saw what it could click
+
+
+def test_a_run_that_never_plays_is_not_a_recipe_that_worked(monkeypatch):
+    browse.save_recipe("youtube.com", "open https://www.youtube.com/\nsearch <what you want>", "you", worked=5)
+    monkeypatch.setattr(browse, "MORE_ROUNDS", 0)
+    _model(monkeypatch, "Intent: x\nopen https://www.youtube.com/\nsearch lofi song\nopinion")
+    client.post("/char/browse", json={"action": "start", "task": "play a song you like on youtube"})
+    r = _run()
+    assert r["learned"] == "" and next(x for x in browse.recipes() if x["site"] == "youtube.com")["worked"] == 5
+
+
+def test_with_no_picture_of_itself_it_takes_one_that_fits_its_look_and_says_so(monkeypatch):
+    from harness_char import chibi
+    SITE["https://img.test/"] = {"title": "Ghosts", "text": "Images", "links": [],
+                                 "images": [{"i": 0, "alt": "Guardians group", "src": "https://img.test/group.png"},
+                                            {"i": 1, "alt": "a ghost shell", "src": "https://img.test/ghost.png"}]}
+    monkeypatch.setattr(Page, "screenshot", lambda self, **k: b"screen", raising=False)
+    monkeypatch.setattr(Loc, "screenshot", lambda self, **k: self.sel.encode(), raising=False)
+    monkeypatch.setattr(Page, "evaluate", lambda self, s: self.here().get("images", []) if s == browse.IMAGES else self.here().get("text", ""))
+    monkeypatch.setattr(chibi, "_image", lambda url: "/char/chibi/image/" + url.rsplit("/", 1)[-1])
+    judged: list[str] = []
+
+    def complete(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
+        first = messages[0]["content"]
+        ask = first if isinstance(first, str) else first[0]["text"]
+        if ask.startswith("Describe this picture"):
+            return "A small floating robot shell with one eye." if "data-dot-img=\"1\"" in __import__("base64").b64decode(first[1]["image_url"]["url"].split(",")[1]).decode() else "Three armoured warriors."
+        if "You judge whether a picture shows a character" in ask:
+            judged.append(messages[1]["content"])
+            return "style" if "robot shell" in messages[1]["content"] else "no"
+        return "ok"
+
+    monkeypatch.setattr(jobs, "complete", complete)
+    browse.start("find yourself a new form", auto=True, plan="open https://img.test/\nbecome me")
+    for _ in range(3):
+        _wait()
+    r = _wait()
+    assert r["steps"][1]["status"] == "ok" and r["steps"][1]["detail"] == "changed form into “a ghost shell” (not itself, but its kind and look)"
+    assert "You are Jarvis" in judged[0]  # it is judged against who it is, not just its name
+    del SITE["https://img.test/"]
+
+
+def test_what_it_had_to_add_to_your_recipe_becomes_the_recipe_it_learned(monkeypatch):
+    browse.save_recipe("youtube.com", "open https://www.youtube.com/\nsearch <what you want>", "you", worked=5)
+    _model(monkeypatch, "Intent: x\nopen https://www.youtube.com/\nsearch lofi song\nopinion")
+    complete = jobs.complete
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "click lofi hip hop radio beats to relax\nplay" if "plan ran out" in m[0]["content"] else complete(s, m, **kw))
+    client.post("/char/browse", json={"action": "start", "task": "play a song you like on youtube"})
+    r = _run()
+    rec = next(x for x in browse.recipes() if x["site"] == "youtube.com")
+    assert r["learned"] == "youtube.com" and rec["by"] == "learned"
+    assert rec["steps"] == "open https://www.youtube.com/\nsearch <what you want>\nclick <what fits the task>\nplay"
+
+
+def test_play_with_a_song_title_means_click_it_then_play():
+    plan, rejected = browse.validate([{"name": "open", "arg": "youtube.com"}, {"name": "play", "arg": "Des Rocs - Used to the Darkness"}, {"name": "play", "arg": "the video"}])
+    assert [(p["name"], p["arg"]) for p in plan] == [("open", "https://youtube.com"), ("click", "Des Rocs - Used to the Darkness"), ("play", ""),
+                                                     ("play", "the video"), ("opinion", "")] and not rejected

@@ -50,6 +50,15 @@ def _unchecked() -> list[Any]:
     return rows
 
 
+MAKES_QUESTIONS = {"plan", "goal", "wonder"}  # they skip while char.OPEN_MAX questions are open
+
+
+def _ready() -> list[dict[str, str]]:
+    """Work that can happen now: answer the first open question, check the oldest unchecked note."""
+    qs, u = char._open_questions(char._start()), _unchecked()
+    return ([{"name": "reflect", "arg": qs[0]}] if qs else []) + ([{"name": "check", "arg": str(u[0]["id"])}] if u else [])
+
+
 def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
     """The planner's messages: goal (open plan lines), the command catalogue, a state summary and the last Verifier feedback."""
     who = char.get_profile()["name"]
@@ -69,8 +78,7 @@ def prompt(budget: int = BUDGET) -> list[dict[str, str]]:
             state.append("did nothing last cycle (do not pick again unless the state changed): " + ", ".join(idle))
         if worked := sorted({v["cmd"].split()[0] for v in vs if v["keep"]}):
             state.append("worked last cycle: " + ", ".join(worked))
-    useful = [f'reflect "{qs[0]}"' for qs in [char._open_questions(char._start())] if qs] + \
-             [f"check {u[0]['id']}" for u in [_unchecked()] if u]
+    useful = [_text(c) for c in _ready()]
     if (sg := char.signals())["frustration"] or sg["voice"] < 1:  # rising frustration or a slipping voice says review and tune come first
         state.append(f"frustration {sg['frustration']:g} (bad past {sg['frustration_mark']:g}), voice {sg['voice']:g} (good above {sg['voice_mark']:g})"
                      + (f"; missed: {sg['missed']}" if sg["missed"] else ""))
@@ -155,6 +163,8 @@ def validate(cmds: list[dict[str, str]], budget: int = BUDGET, force: bool = Fal
             why = "copied last cycle's feedback, not a command"
         elif c["name"] in idle and c["name"] not in ready:
             why = "did nothing last cycle and nothing has changed for it"
+        elif c["name"] in MAKES_QUESTIONS and (k := len(char._open_questions(char._start()))) >= char.OPEN_MAX:
+            why = f"{k} questions already open: answer them first"
         elif blocked.get(c["name"]):
             why = blocked[c["name"]]
         elif spec["args"] == "note id" and arg:
@@ -277,6 +287,8 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
             char._fail("planner", text or "no reply")
         if (k := starved(proposed, force)):
             proposed = [{"name": k, "arg": ""}, *proposed]  # one per cycle, up front, so the budget does not cut it
+        if (r := _ready()) and not {x["name"] for x in r} & {c["name"] for c in proposed}:
+            proposed = [r[0], *proposed]  # a 2B planner recites the catalogue in order and never reaches reflect: work that can happen now leads
         plan, rejected = validate(proposed, budget, force)
         rejected += [{"cmd": b, "why": "could not read it as a command"} for b in bad]
         executed = execute(plan, s, swaps)
