@@ -491,3 +491,14 @@ def test_pick_steer_skips_the_truth_fit_when_eps_is_zero(monkeypatch):
     assert harness.pick_steer(settings.get_all()) == ("w", 0.0, "")
     monkeypatch.setattr(harness, "steer_arms", lambda: {0.0: (1.0, 9.0), 0.01: (1.0, 9.0), 0.02: (1.0, 9.0), 0.03: (9.0, 1.0)})
     assert harness.pick_steer(settings.get_all()) == ("w", 0.03, "t")
+
+
+def test_a_planner_that_recites_the_catalogue_still_answers_the_open_questions(monkeypatch):
+    qs = ["Who is Cooper?", "Who is Laura?", "What is the Lodge?"]
+    monkeypatch.setattr(harness.char, "_open_questions", lambda since=0: qs)
+    _models(monkeypatch, "plan: research the town\nbake: consolidate\njournal: write a page\ngoal: turn a plan line into a question")
+    r = harness.cycle()
+    assert r["proposed"][0] == 'reflect "Who is Cooper?"'  # the work that can happen now leads, though the planner left it out
+    assert ('reflect "Who is Cooper?"', "ok") in [(x["cmd"], x["outcome"]) for x in r["executed"]]
+    why = {x["cmd"].split()[0]: x["why"] for x in r["rejected"]}
+    assert why["plan"] == why["goal"] == "3 questions already open: answer them first"

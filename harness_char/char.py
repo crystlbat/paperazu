@@ -12,6 +12,7 @@ import math
 import random
 import re
 import time
+import urllib.parse
 from collections import deque
 from collections.abc import Callable
 from typing import Any
@@ -153,6 +154,67 @@ BECOME_PATTERN = re.compile(
     r"\b(?:become|became|be like|speak like|talk like|act like|pretend to be|switch to|turn into|transform into|you are now)\s+(?:an? |the )?(.+?)(?:[;.!?]|\Z)",
     re.I,
 )
+
+# the adapt step: you ask it to change itself mid-chat and it decides how. Each way is data: name -> what it does; a new way is a line here and a branch in adapt()
+ADAPTS = {"voice": "change how you talk from now on (argument: how, in a few words)",
+          "form": "change how you look: find a picture of yourself on the web, look at it and take its form (argument: what picture to look for)",
+          "none": "nothing about you should change"}
+ADAPTISH = re.compile(r"\b(?:talk|speak|sound|voice|tone|accent|style|manner|look|form|appear|picture|avatar|chibi|shape)\w*", re.I)  # what about it would change
+CHANGE = re.compile(r"\b(?:more|less|instead|change|new|different|another|from now on|start|stop|be)\b|\b\w+(?:ian|ish|ese|esque|ly)\b", re.I)  # that it should; both, or no model call
+
+
+GENERIC_LOOK = {"a", "an", "the", "like", "new", "look", "looks", "form", "outfit", "picture", "image", "on", "of", "for", "my", "me", "your", "yourself", "character",
+                "self", "different", "another", "something", "some", "find", "change", "to", "into", "in", "and", "with", "i", "you", "want"}
+
+
+def adapt_intent(text: str) -> tuple[str, str]:
+    """Which way you asked it to change, and how: ("voice", "more Shakespearean"), or ("none", "") for plain chat. One small model call."""
+    if not (ADAPTISH.search(text) and CHANGE.search(text)):
+        return "none", ""
+    ways = "\n".join(f"- {k}: {d}" for k, d in ADAPTS.items())
+    said = _ask(f"You are {get_profile()['name']}. Does the person's message ask you to change yourself? Pick one way:\n{ways}\n"
+                "Reply with one line: the way, a colon, the argument. Example: voice: like a pirate", text[:400], 30)
+    m = re.match(r"\W*(\w+)[\s*_]*(?::\s*(.*))?", said or "")  # "voice: more X", "**form**: a robot"
+    way = (m[1].lower() if m else "none")
+    return (way, (m[2] or "").strip(" .\"'")[:200]) if way in ADAPTS and way != "none" else ("none", "")
+
+
+def adapt_voice(arg: str) -> dict[str, Any]:
+    """Talk another way from now on: kept in its grown line and its tone, so this reply and every one after speak that way.
+    Asked in chat (adapt) or fired by a rule ("when it reaches 3, talk like a soldier")."""
+    p = get_profile()
+    persona = grow(p["persona"], arg)
+    update_profile(p["name"], persona, p["look"], p["tint"])
+    add_memory("Var: direction", arg[:300], source="sheet")
+    now = next((ln.split(": ", 1)[1] for ln in persona.splitlines() if ln.startswith(f"{GROWN}: ")), arg)
+    add_memory("Tone", f"Your manner of speech, in every sentence: {now.rstrip('.')}. Rewrite plain facts in that manner; never drop it.", source="sheet")  # a tone the tune step adopted before would win over the new direction
+    _engine("adapt", "ok", f"voice: {arg[:60]}")
+    return {"way": "voice", "arg": arg, "event": {"var": 999997, "name": "Voice", "trigger": "adapted", "say": ""}}
+
+
+def adapt(text: str) -> dict[str, Any] | None:
+    """Act on the adapt step: a voice change is kept in its grown line and its tone, so this reply and every one after speak that way;
+    a form change sends it browsing on its own. None for plain chat."""
+    way, arg = adapt_intent(text)
+    if way == "voice" and arg:
+        return adapt_voice(arg)
+    if way == "form":
+        from harness_char import browse  # browse imports char
+        who = get_profile()["name"]
+        named = re.sub(r"\s+from\s+", " ", who, flags=re.I)  # "Sagira From Destiny 2": her name and her game, or the web finds someone else called Sagira
+        extra = " ".join(w for w in re.findall(r"[A-Za-z0-9'-]+", arg) if w.lower() not in GENERIC_LOOK)[:60]  # a small model pads it: "like a new outfit on a character"
+        look_for = f"{named} {extra or 'chibi'}"
+        url = f"https://www.bing.com/images/search?q={urllib.parse.quote_plus(look_for)}"
+        task = f"Find a new form for yourself: a picture of {who} ({look_for})."
+        try:  # it knows the steps this takes, so it does not leave them to the planner: a 2B planner dropped "become" and then said it had chosen
+            run = browse.start(task, auto=True, plan=f"open {url}\nlook\nbecome the picture that looks most like {who}")
+        except (RuntimeError, ValueError) as e:
+            _engine("adapt", "failed", f"form: {e}"[:80])
+            return {"way": "form", "arg": arg, "said": f"I wanted to find a new form, but I can't browse right now: {e}"}
+        _engine("adapt", "ok", f"form: {look_for[:60]}")
+        return {"way": "form", "arg": arg, "browse": run, "said": f"I'll go and find a picture of myself ({look_for}), look at it, and take its form. Watch my screen."}
+    return None
+
 
 RESEARCH_PATTERN = re.compile(
     r"\b(?:research|investigate|find out(?: about)?|look up|explore|learn about|what is|tell me about)\s+(.+?)(?:[?.!]|\Z)",
@@ -526,6 +588,11 @@ def _chat_since() -> list[Any]:
     return rows
 
 
+# the lines the app says in its place (switching, sleeping, taking notes). shortcut: matched by their fixed words; mark app-said turns in the table if more appear
+OPEN_MAX = 3  # open questions before plan, goal and wonder stop making more: answer them first
+APP_SAID = re.compile(r"Tap Learn, or let me sleep|^Zzz|^Then I will sleep on it|^Noted\. From now on|^Here are some I found|^I'll go and find a picture of myself|^I wanted to find a new form|^Removed |^There was nothing to remove|^A wish: |^I got curious:|^Earlier you asked|^I.m too tired to take that on")  # with NOT_A_REPLY: lines the app wrote
+
+
 def sorter(limit: int = 1) -> dict[str, Any]:
     """Sorter, the first /char creature: reads the character's past chat, one message per model call, and pulls out the names in it.
     The names land in the knowledge graph; `limit` is how many messages one run may read (the factory's dial)."""
@@ -534,7 +601,7 @@ def sorter(limit: int = 1) -> dict[str, Any]:
     con = db.connect()
     done = {r["title"].removeprefix("Entities: t") for r in con.execute("SELECT title FROM char_memories WHERE source = 'sheet' AND title LIKE 'Entities: t%'")}
     con.close()
-    todo = [t for t in turns if str(t["id"]) not in done]
+    todo = [t for t in turns if str(t["id"]) not in done and not (t["role"] == "dot" and APP_SAID.search(t["text"]))]  # the app's own lines are not its world: "Tap Learn" made it research "Learn" and found Microsoft's Cortana
     read = [{"turn": t["id"], "role": t["role"], "text": t["text"][:120], "names": _entities_of(f"t{t['id']}", t["text"], who)} for t in todo[:max(1, min(limit, 20))]]
     asked = asker([n for r in read for n in r["names"]])  # the Sorter hands what it found to the Asker
     return {"creature": "Sorter", "read": read, "asked": asked, "left": len(todo) - len(read), "total": len(turns), "graph": graph()}
@@ -2529,18 +2596,22 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
                 return no("nothing read yet to plan from")
             if any(pl["title"].startswith("Plan: ") and not asked_from(pl["id"]) for pl in plans):
                 return no("a plan is still waiting for questions")
-            if (k := len(_open_questions(since))) >= 3:
+            if (k := len(_open_questions(since))) >= OPEN_MAX:
                 return no(f"{k} questions already open")
             g = graph()
+            asked = " ".join(r["content"] for r in titles("source = 'question' AND id > ?", (since,)))
+            unread = [x["name"] for x in g["nodes"] if not x["known"] and x["name"] in asked]  # a name the in-world gate has not passed (an actor, a console) never reaches the plan
+            loose = [x["name"] for x in g["nodes"] if not x["known"] and x["name"] not in unread] + sorted(_offworld(since))
+            names_loose = lambda x: any(re.search(rf"\b{re.escape(n)}\b", x, re.I) for n in loose)
             # no persona here: given the voice, a small model answers in character instead of planning
             out = _ask("You are a research planner. Reply with 3 topics, one per line, 2 to 6 words each. No sentences, no numbering. Only the topics." + _fix("plan"),
                        f"Character: {me['who']}\nAlready read about: {', '.join(x['name'] for x in g['nodes'] if x['known']) or 'nothing'}\n"
-                       f"Not read about yet: {', '.join(x['name'] for x in g['nodes'] if not x['known']) or 'nothing'}\nWhich 3 new topics about this character's world should be researched next?", 50)
+                       f"Not read about yet: {', '.join(unread) or 'nothing'}\nWhich 3 new topics about this character's world should be researched next?", 50)
             had, ww = {pl["content"].lower() for pl in plans}, world_words()
             lines = [x for x in dict.fromkeys(re.sub(r"^[\s\-*\d.)]+", "", ln).strip(" .\"'") for ln in out.splitlines()) if 4 <= len(x) <= 80 and x.lower() not in had]
-            for x in [x for x in lines if not on_world(x, ww)]:
+            for x in [x for x in lines if not on_world(x, ww) or names_loose(x)]:
                 add_memory(f"Off-world: {x}"[:80], f"plan line names nothing from {me['who']}'s world", source="sheet")
-            lines = [x for x in lines if on_world(x, ww)][:3]
+            lines = [x for x in lines if on_world(x, ww) and not names_loose(x)][:3]
             for ln in lines[::-1]:  # titles() reads newest first, so the first line is saved last and S1 takes it first
                 add_memory(f"Plan: {ln}"[:80], ln, source="sheet")
             if not lines:
@@ -2645,7 +2716,7 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             pl = next((x for x in titles("source = 'sheet' AND title LIKE 'Plan: %' AND id > ?", (since,)) if not asked_from(x["id"])), None)
             if not pl:
                 return no("no plan waiting for questions")
-            if (k := len(_open_questions(since))) >= 3:
+            if (k := len(_open_questions(since))) >= OPEN_MAX:
                 return no(f"{k} questions already open")
             had = {r["content"].split(" (from")[0].lower() for r in titles("source = 'question' AND id > ?", (since,))}
             q = _clean(_ask("Write one short question that asks about this topic. Only the question." + _fix("goal"), pl["content"], 30), 101).rstrip("?").strip()
@@ -2734,7 +2805,7 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             last = (titles("source = 'reflection' AND id > ?", (since,)) or [None])[0]
             if not last:
                 return no("nothing new to read")
-            if (k := len(_open_questions(since))) >= 3:
+            if (k := len(_open_questions(since))) >= OPEN_MAX:
                 return no(f"{k} questions already open")
             if any(q["content"].endswith(f"(from {last['id']})") for q in titles("source = 'question' AND id > ?", (since,))):
                 return no("already asked about the newest note")
@@ -2883,6 +2954,18 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
     return {**out, "questions": _open_questions(since)[::-1][:3], "graph": graph() if on_char else {"nodes": [], "edges": []}}
 
 
+NOTHING = "NOTHING"
+
+
+def about_me(goal: str, who: str) -> str:
+    """A question put to the character, asked about it: "Where do you live" -> "Where does Cortana live". The web knows nothing about "you"."""
+    q = re.sub(r"\bdo you\b", f"does {who}", goal, flags=re.I)
+    q = re.sub(r"\bare you\b", f"is {who}", q, flags=re.I)
+    q = re.sub(r"\byour\b", f"{who}'s", q, flags=re.I)
+    q = re.sub(r"\byou\b", who, q, flags=re.I)
+    return q if who.split()[0].lower() in q.lower() else f"{who} {q}"
+
+
 def dispatch_job(goal: str) -> dict[str, Any]:
     """Autonomous knowledge gathering job: searches web / synthesizes takeaways into memory."""
     s = settings.get_all()
@@ -2892,7 +2975,7 @@ def dispatch_job(goal: str) -> dict[str, Any]:
     web_snippet = ""
     try:
         who = get_profile()["name"]  # "the IMC" alone finds a trading firm; with the character's name it finds its world
-        search_res = websearch.search(s, clean_goal if who.split()[0].lower() in clean_goal.lower() else f"{who} {clean_goal}")
+        search_res = websearch.search(s, about_me(clean_goal, who))
         results = search_res.get("results", [])
         if results:
             web_snippet = "\n".join(f"- {r['title']}: {r['snippet']}" for r in results[:4])
@@ -2903,21 +2986,23 @@ def dispatch_job(goal: str) -> dict[str, Any]:
         {
             "role": "system",
             "content": (
-                "You are an autonomous knowledge synthesizer. "
-                "Synthesize the given topic or search snippets into 2-3 essential key takeaways "
-                "for a knowledge base. Be concrete, concise, and informative. Plain text only."
+                f"You are {get_profile()['name']}, writing a note to yourself about your own world. From the snippets only, write "
+                f"2 or 3 short facts that answer the topic for {get_profile()['name']}. If the snippets say nothing about "
+                f"{get_profile()['name']} or your world, write exactly: {NOTHING}"
             ),
         },
         {
             "role": "user",
-            "content": f"Topic: {clean_goal}\n\nContext:\n{web_snippet or 'No external web context.'}",
+            "content": f"Topic: {about_me(clean_goal, get_profile()['name'])}\n\nSnippets:\n{web_snippet or '(none)'}",
         },
     ]
 
     try:
         summary = jobs.complete(s, prompt, max_tokens=250).strip(); _log("research job", prompt, summary)
     except Exception:
-        summary = f"Synthesized research on {clean_goal} completed."
+        summary = ""
+    if not web_snippet or not summary or NOTHING.lower() in summary.lower():  # nothing about it: no note, and nothing to say it found
+        return {"id": None, "title": title, "goal": clean_goal, "status": "empty", "result": "", "memory": None}
 
     mem = add_memory(title=title, content=summary, source=f"job:{clean_goal[:30]}")
 
@@ -3177,6 +3262,7 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
     if turn_into:
         prof, _ = become_persona(turn_into["act_arg"])
         extra_events.append(_became(prof)); become_match = True
+    extra_events += [adapt_voice(arg.strip())["event"] for f in rules if f.get("act") for a, arg in zip(f["act"].split("+"), f["act_arg"].split(" | ")) if a == "voice" and arg.strip()]
     extra_events += zeroed[1] if zeroed else [{"var": v["id"], "name": v["name"], "trigger": "removed", "say": ""} for v in gone or []]
     # what the app itself did this turn is said as it is, with no model to deny or embroider it
     direct = zeroed[0] if zeroed else None if gone is None else f"Removed {', '.join(v['name'] for v in gone)}." if gone else "There was nothing to remove."
@@ -3201,6 +3287,11 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
         refs = chibi.find_refs(prof["name"], prof["persona"])
         direct = "Here are some I found. Pick one and I'll pour myself into it." if refs else "I couldn't find any pictures just now. The image search didn't answer."
         refs_card = {"kind": "chibi", "refs": refs} if refs else None
+    adapted = None  # "talk more Shakespearean", "find yourself a new look": it decides how to change itself
+    if direct is None and not become_match and not rules and outfit is None and (adapted := adapt(text)):
+        if adapted.get("event"):
+            extra_events.append(adapted["event"])
+        direct = adapted.get("said")  # a voice change has nothing to say for it: the reply itself, in the new voice, shows it
 
     # 4. The character's own moods
     _, moods = update_coupled_system(text)
@@ -3272,20 +3363,19 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
                                  "You are very curious: after answering, ask one short question about something in your world you have not looked up yet.")
     if me_now := self_model(text)["prompt"]:  # self-awareness: its own record as a learner, where this message touches it
         system_directives.append(me_now)
-    if spawned_job:
+    if spawned_job and spawned_job["result"]:
         system_directives.append(
             f"You have just autonomously dispatched research on '{spawned_job['title']}'. "
             f"Findings logged to memory: {spawned_job['result']}"
         )
     if learn_mode:
         system_directives.append(
-            "ACTIVE LEARN MORE MODE:\n"
-            "You and the user are collaborating in an interactive, compounding research inquiry loop. "
-            "Each question you ask and each search you perform builds more context. "
-            "1. Synthesize the newest research findings concisely in 1 to 2 crisp sentences. "
-            "2. Pose a thought-provoking follow-up question that opens the next layer of depth. "
-            "3. On the final line, provide three short direction choices (each 3 to 6 words) formatted as: "
-            '>>> OPTIONS: ["Direction 1", "Direction 2", "Direction 3"]'
+            "You are learning about your own world with the person, and you stay yourself while you do: never a researcher, "
+            "never an assistant summing up findings. "
+            "1. Answer as yourself, in one or two sentences, from what you know and what you just found. "
+            "2. Ask one short question about your own world that you want to know next. "
+            "3. On the final line, give three short things to ask you about your world (each 3 to 6 words) formatted as: "
+            '>>> OPTIONS: ["...", "...", "..."]'
         )
 
     full_system = "\n\n".join(system_directives) + memory_context
@@ -3323,23 +3413,18 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
 
     # Extract learn options if present
     suggested_questions = []
-    options_match = re.search(r">>> OPTIONS:\s*(\[.*?\])", raw_reply, re.S)
+    options_match = re.search(r"^\W*>+\s*options\s*:?\s*(\[.*?\])?.*$", raw_reply, re.I | re.S | re.M)  # a 2B model writes ">>> Options: [...]}" too
     if options_match:
         try:
-            suggested_questions = json.loads(options_match.group(1))
+            suggested_questions = [str(q) for q in json.loads(options_match.group(1) or "[]")][:3]
         except Exception:
-            suggested_questions = []
-        clean_raw = raw_reply[:options_match.start()].strip()
+            suggested_questions = re.findall(r'"([^"]{3,80})"', options_match.group(0))[:3]
+        clean_raw = raw_reply[:options_match.start()].strip()  # the options line never reaches the chat, half-parsed or not
     else:
         clean_raw = raw_reply.strip()
 
-    if learn_mode and not suggested_questions:
-        clean_word = text.strip()[:20]
-        suggested_questions = [
-            f"Mechanisms of {clean_word}",
-            "Key trade-offs & limits",
-            "2026 cutting-edge benchmarks"
-        ]
+    if learn_mode and not suggested_questions:  # its own open questions about its world, never a template ("Mechanisms of ...")
+        suggested_questions = [q["text"] if isinstance(q, dict) else str(q) for q in _open_questions(_start())[::-1][:3]]
 
     # 8. Correct steering phrases
     said = [t["text"] for t in turn_rows if t["role"] == "dot"][-3:]
@@ -3373,14 +3458,7 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
         add_memory(f"Asking: {dot_id}", json.dumps({"asked": text[:300], "said": "", "why": ASK_WAY, "chat": dot_id, "kind": "direction"}), source="sheet")
 
     card = tool_card or spawned_card or refs_card
-    if not card and spawned_job:
-        card = {
-            "kind": "job",
-            "title": spawned_job["title"],
-            "goal": spawned_job["goal"],
-            "result": spawned_job["result"],
-            "status": "completed",
-        }
+    # what a look-up found reaches you in its own reply (the directive above), never as a system card over its world
 
     # Fetch current memory notes as papers so moons update live
     con = db.connect()
@@ -3399,6 +3477,7 @@ def say(text: str, learn_mode: bool = False, answering: bool = False) -> dict[st
         "graph": graph(),
         "recall": _leaned({"notes": [{"id": str(r["id"]), "title": r["title"]} for r in mem_rows], "names": lit}),
         "outfit": outfit,
+        "browse": (adapted or {}).get("browse"),
     }
 
 

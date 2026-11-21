@@ -135,6 +135,15 @@ def unavailable(force: bool = False) -> set[str]:
     return {k for k in stale() if k not in ready} | {k for k in COMMANDS if blocked.get(k)}
 
 
+MAKES_QUESTIONS = {"plan", "goal", "wonder"}  # they skip while char.OPEN_MAX questions are open
+
+
+def _ready_work() -> list[dict[str, str]]:
+    """The commands for the work waiting now: answer the first open question, check the oldest unchecked note."""
+    qs, u = char._open_questions(char._start()), _unchecked()
+    return ([{"name": "reflect", "arg": qs[0]}] if qs else []) + ([{"name": "check", "arg": str(u[0]["id"])}] if u else [])
+
+
 def prompt(budget: int = BUDGET, force: bool = False) -> list[dict[str, str]]:
     """The planner's messages: goal (open plan lines), the command catalogue, a state summary and the last Verifier feedback."""
     who = char.get_profile()["name"]
@@ -157,8 +166,7 @@ def prompt(budget: int = BUDGET, force: bool = False) -> list[dict[str, str]]:
     state.append(f"its score J = {sc['J']} (0 to 1, push it up: how much it has answered {sc['know']} times how often its guesses come out right {round(1 - sc['surprise'], 3)})")
     if g:
         state.append("what each command did to J on average (pick the ones that raised it): " + ", ".join(f"{k} {v['gain']:+.3f} over {v['runs']}" for k, v in list(g.items())[:8]))
-    useful = [f'reflect "{qs[0]}"' for qs in [char._open_questions(char._start())] if qs] + \
-             [f"check {u[0]['id']}" for u in [_unchecked()] if u]
+    useful = [_text(c) for c in _ready_work()]
     if (sg := char.signals())["frustration"] or sg["voice"] < 1:  # rising frustration or a slipping voice says review and tune come first
         state.append(f"frustration {sg['frustration']:g} (bad past {sg['frustration_mark']:g}), voice {sg['voice']:g} (good above {sg['voice_mark']:g})"
                      + (f"; missed: {sg['missed']}" if sg["missed"] else ""))
@@ -250,6 +258,8 @@ def validate(cmds: list[dict[str, str]], budget: int = BUDGET, force: bool = Fal
             why = "copied last cycle's feedback, not a command"
         elif c["name"] in idle and c["name"] not in ready:
             why = "skipped last time and nothing has changed for it"
+        elif c["name"] in MAKES_QUESTIONS and (k := len(char._open_questions(char._start()))) >= char.OPEN_MAX:
+            why = f"{k} questions already open: answer them first"
         elif blocked.get(c["name"]):
             why = blocked[c["name"]]
         elif spec["args"] == "note id" and arg:
@@ -432,6 +442,8 @@ def cycle(budget: int = BUDGET, force: bool = False, wait: float = 0) -> dict[st
             char._fail("planner", text or "no reply")
         if (k := starved(proposed, force)):
             proposed = [{"name": k, "arg": ""}, *proposed]  # one per cycle, up front, so the budget does not cut it
+        if (r := _ready_work()) and not {x["name"] for x in r} & {c["name"] for c in proposed}:
+            proposed = [r[0], *proposed]  # a 2B planner recites the catalogue in order and never reaches reflect: work that can happen now leads
         plan, rejected = validate(proposed, budget, force)
         rejected += [{"cmd": b, "why": "could not read it as a command"} for b in bad]
         plan, rejected, dv = steer(plan, rejected, budget, force)
