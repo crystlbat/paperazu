@@ -945,6 +945,7 @@ async function renderSpace(base = "/space") {
     const opened = (r.events || []).find((e) => e.open); // a rule opened a paper: Dot takes you there
     const sheetEv = (r.events || []).find((e) => e.trigger === "set" && e.sheet); // Dot became someone: show who
     if (r.outfit) web?.reform(r.outfit); // it changed its chibi outfit: the new look shows at once
+    if (r.browse) { browsing?.close(); browsing = browseView(r.browse); } // it chose to go and find itself a new form: its screen shows the browse
     if (r.card) showCard(r.card);
     else if (sheetEv) showCard({ kind: "job", title: `${sheetEv.name}'s sheet`, status: "Character sheet",
       result: Object.entries(sheetEv.sheet).map(([k, v]) => `${k}: ${v || "learns this while asleep"}`).join("\n") });
@@ -1200,6 +1201,7 @@ async function renderSpace(base = "/space") {
     const WORDS = { planning: "Planning…", waiting: "Your turn: change the plan, or press Go", running: "Browsing…", done: "Done", failed: "It ran into a problem", stopped: "Stopped" };
     function apply(r) {
       if (gone || r.task !== r0.task) return;
+      if (r.form && r.form.silhouette !== seen.form) { seen.form = r.form.silhouette; web?.reform(r.form); } // a become step changed its form
       const over = ["done", "failed", "stopped"].includes(r.status); // the server runs ahead of the show: the end is said when the show gets there
       if (!over) statusEl.textContent = WORDS[r.status] || r.status; else if (r.status === "stopped" || r.error) stopBtn.hidden = true;
       if (r.status === "running") el.dataset.phase = "run";
@@ -1271,7 +1273,9 @@ async function renderSpace(base = "/space") {
           h("small", {}, `Grounded ${Math.round((r.grounding ?? 1) * 100)}%: how many of the names in it it really saw.${r.note ? ` Saved as note #${r.note}.` : ""}`),
           ...(r.learned ? [h("p", { class: "sp-b-learned" }, `It wrote down how it did this: a recipe for ${r.learned}. `, h("button", { type: "button", onclick: () => openRecipes() }, "See recipes"))] : [])); end.dataset.kind = "ok"; mood("happy"); }
       else { end.replaceChildren(h("h3", {}, r.status === "stopped" ? "Stopped" : "It couldn't finish"), h("p", {}, r.error || (r.status === "stopped" ? "You stopped it. What it did so far is in the steps." : "Something went wrong."))); end.dataset.kind = "bad"; mood(r.status === "stopped" ? "" : "sad"); }
-      end.hidden = false; await travel(at(end, .97, .25)); }
+      end.hidden = false; await travel(at(end, .97, .25));
+      if (r.opinion && !gone) { await wait(1200); hide(); // the space is its own again: what it thinks comes out of it in dots, as its replies do; /browse brings the screen back
+        web?.say({ text: r.opinion + (r.learned ? `\n(I wrote down how: a recipe for ${r.learned}.)` : ""), events: [] }); } }
     bdot.style.translate = `${pos[0]}px ${pos[1]}px`; show(); apply(r0);
     return { show, close, hide };
   }

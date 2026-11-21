@@ -28,7 +28,7 @@ def mock_model(monkeypatch: pytest.MonkeyPatch) -> list[list[dict[str, Any]]]:
     def complete(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
         calls.append(messages)
         sys_msg = messages[0]["content"]
-        if "autonomous knowledge synthesizer" in sys_msg:
+        if "writing a note to yourself about your own world" in sys_msg:
             return "1. Surface codes demonstrated below fault tolerance threshold.\n2. Logical qubits successfully outliving physical qubits."
         return "Indeed, sir. At your service."
 
@@ -50,7 +50,13 @@ def test_char_initial_state_and_default_vars():
     assert "proactivity" in var_names
 
 
-def test_semi_supervised_research_job_creation_and_memory_assimilation(mock_model: list[Any]):
+def _web(monkeypatch, asked=None):
+    from shared import websearch
+    monkeypatch.setattr(websearch, "search", lambda s, q: (asked.append(q) if asked is not None else None) or {"results": [{"title": "Qubits", "snippet": "Surface codes beat the threshold.", "url": "https://q.example"}]})
+
+
+def test_semi_supervised_research_job_creation_and_memory_assimilation(mock_model: list[Any], monkeypatch):
+    _web(monkeypatch)
     # 1. User asks Jarvis to investigate a topic
     r = char.say("Jarvis, investigate quantum error correction breakthroughs")
 
@@ -58,11 +64,9 @@ def test_semi_supervised_research_job_creation_and_memory_assimilation(mock_mode
     assert any(e["name"] == "proactivity" for e in r["events"])
     assert "I shall look into that immediately, sir." in r["reply"]
 
-    # An autonomous job was dispatched and returned as a card
-    assert r["card"] is not None
-    assert r["card"]["kind"] == "job"
-    assert "quantum error correction" in r["card"]["title"].lower()
-    assert "Surface codes" in r["card"]["result"]
+    # it looked it up, and what it found reaches you in its own reply: never as a system card over its world
+    assert r["card"] is None
+    assert any("Findings logged to memory" in m[0]["content"] and "Surface codes" in m[0]["content"] for m in mock_model)
 
     # A knowledge memory note was synthesized and saved
     notes = char.all_notes()
@@ -182,13 +186,15 @@ def test_bias_counter_triggers_action_taken_and_opens_paper(mock_model: list[Any
     assert "bias123" == r6["card"]["pick"]
 
 
-def test_learn_more_continuous_inquiry_loop(mock_model: list[Any]):
+def test_learn_more_continuous_inquiry_loop(mock_model: list[Any], monkeypatch):
+    _web(monkeypatch)
+    complete = jobs.complete
+    monkeypatch.setattr(jobs, "complete", lambda st, m, **kw: 'Indeed, sir.\n>>> Options: ["Who built you?", "Where were you made?", "What do you guard?"]}'
+                        if "learning about your own world" in m[0]["content"] else complete(st, m, **kw))
     # 1. Turn on Learn More mode and explore an initial question
     r1 = char.say("How does quantum error correction protect physical qubits?", learn_mode=True)
-
-    # Autonomous job should have run and returned research card
-    assert r1["card"] is not None
-    assert r1["card"]["kind"] == "job"
+    assert r1["card"] is None and ">>>" not in r1["reply"] and "Options" not in r1["reply"]  # the options line never leaks into its words
+    assert r1["questions"] == ["Who built you?", "Where were you made?", "What do you guard?"]
 
     # Memory note should have been created
     notes1 = char.all_notes()
@@ -212,7 +218,7 @@ def test_learn_more_continuous_inquiry_loop(mock_model: list[Any]):
 
     # Next round of follow-up questions produced
     assert len(r2["questions"]) >= 1
-    assert r2["card"] is not None
+    assert r2["card"] is None
 
 
 
@@ -1666,3 +1672,101 @@ def test_a_correction_that_does_not_ask_for_a_look_up_researches_nothing(monkeyp
     ("I remember the Mind Stone well.", False)])
 def test_base_model_disclaimers_are_slips_but_an_ai_persona_is_not(reply, slip):
     assert bool(char.SLIP.search(reply)) == slip
+
+
+def test_asked_mid_chat_to_talk_another_way_it_changes_its_own_voice_and_keeps_it(monkeypatch):
+    char.update_profile("Jarvis", "You are Jarvis.\nVoice: dry", [], "#fff")
+    char.add_memory("Tone", "Your manner of speech, in every sentence: dry and brief.", source="sheet")  # a tone tune adopted before must not win
+    seen: list[str] = []
+
+    def complete(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
+        seen.append(json.dumps(messages))
+        if "ask you to change yourself" in messages[0]["content"]:
+            return "voice: more Shakespearean"
+        return "Verily, good sir, the day is fair."
+
+    monkeypatch.setattr(jobs, "complete", complete)
+    r = char.say("talk more shakespearean while we chat")
+    assert any(e["trigger"] == "adapted" and e["name"] == "Voice" for e in r["events"])
+    assert "more Shakespearean" in char.get_profile()["persona"] and "more Shakespearean" in char._tone()
+    assert "more Shakespearean" in seen[-1]  # the reply to that very message is already in the new voice
+    char.say("how is the weather?")
+    assert "more Shakespearean" in seen[-1]  # and it stays
+
+
+def test_asked_for_a_new_look_it_goes_browsing_by_itself(monkeypatch):
+    from harness_char import browse
+    started: list[tuple[str, bool, str]] = []
+    monkeypatch.setattr(browse, "start", lambda task, auto=False, plan="": started.append((task, auto, plan)) or {"task": task, "status": "planning"})
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "form: robot butler chibi" if "ask you to change yourself" in m[0]["content"] else "ok")
+    r = char.say("change your form into something new")
+    assert started and started[0][1] is True and "robot+butler+chibi" in started[0][2]
+    assert [ln.split()[0] for ln in started[0][2].splitlines()] == ["open", "look", "become"]  # its own steps: the planner is not asked
+    assert r["browse"]["status"] == "planning" and "take its form" in r["reply"]
+
+
+def test_plain_chat_about_looks_never_asks_the_adapt_step(monkeypatch):
+    asked: list[str] = []
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: asked.append(m[0]["content"]) or "ok")
+    char.say("what does the arc reactor look like?")
+    assert not any("ask you to change yourself" in a for a in asked)
+
+
+def test_a_padded_look_still_searches_its_own_name(monkeypatch):
+    from harness_char import browse
+    started: list[str] = []
+    monkeypatch.setattr(browse, "start", lambda task, auto=False, plan="": started.append(plan) or {"task": task, "status": "planning"})
+    char.update_profile("Sagira From Destiny 2", "a ghost", [], "#fff")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "form: like a new outfit on a character" if "ask you to change yourself" in m[0]["content"] else "ok")
+    char.say("change your form, find yourself a new look")
+    assert "q=Sagira+Destiny+2+chibi\n" in started[0]  # her game too, or the web finds someone else called Sagira
+
+
+def test_a_question_to_it_is_looked_up_about_it_and_nothing_found_says_nothing(monkeypatch):
+    asked: list[str] = []
+    _web(monkeypatch, asked)
+    char.update_profile("Cortana", "You are Cortana.", [], "#fff")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "NOTHING" if "note to yourself" in m[0]["content"] else "I live in the ship's systems.")
+    r = char.say("Where do you live?", learn_mode=True)
+    assert asked[0] == "Where does Cortana live" and r["card"] is None
+    assert not any(n["note"] for n in char.all_notes() if "Where" in n.get("title", ""))  # nothing about it found: no note
+
+
+def test_the_sorter_never_mines_the_apps_own_lines_for_names(monkeypatch):
+    con = db.connect()
+    with con:
+        con.execute("INSERT INTO char_turns (role, text) VALUES ('dot', 'I am Cortana now. Tap Learn, or let me sleep, and I will study my world.')")
+        con.execute("INSERT INTO char_turns (role, text) VALUES ('dot', 'A wish: Could you find me a source I can trust on Who or what is Halo?')")
+    con.close()
+    seen: list[str] = []
+    monkeypatch.setattr(char, "_entities_of", lambda key, text, who: seen.append(text) or [])
+    char.sorter(5)
+    assert not any("Tap Learn" in t or "A wish" in t for t in seen)
+
+
+def test_a_rule_that_fires_a_voice_keeps_the_character_and_changes_how_it_talks(mock_model: list[Any]):
+    char.update_profile("Cortana", "You are Cortana.", [], "")
+    char.say("count spartan every 2 talk like a soldier")
+    v = next(v for v in char.mine() if v["name"] == "spartan")
+    assert (v["act"], v["act_arg"]) == ("voice", "like a soldier")  # a manner, not a someone: no become
+    char.say("a spartan")
+    r = char.say("another spartan")
+    assert char.get_profile()["name"] == "Cortana" and "like a soldier" in char.get_profile()["persona"]
+    assert any(e.get("name") == "Voice" and e.get("trigger") == "adapted" for e in r["events"])
+
+
+def test_the_plan_never_reaches_for_a_name_its_world_gate_has_not_passed(monkeypatch):
+    char.update_profile("Cortana From Halo", "You are Cortana.", [], "")
+    char.add_memory("Resting: char Cortana", "0", source="sheet")
+    note = char.add_memory("Reflection: Cortana world and setting", "Master Chief and Xbox One.", source="reflection")["id"]
+    con = db.connect()
+    with con:
+        for name in ("Master Chief", "Xbox One"):
+            con.execute("INSERT INTO char_memories (title, content, source) VALUES (?, ?, 'entity')", (f"Entity: {name}", str(note)))
+    con.close()
+    char.add_memory("Question: Who or what is Master Chief?", "Who or what is Master Chief? (from 0)", source="question")
+    seen: list[str] = []
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: seen.append(user) or "Xbox One's Halo games\nMaster Chief's armour")
+    r = char.rest(True, only="plan", force=True)
+    assert "Master Chief" in seen[0] and "Xbox One" not in seen[0]  # an ungated name is not offered to the planner
+    assert r["note"] == "Master Chief's armour"  # and a line that names it anyway is dropped
