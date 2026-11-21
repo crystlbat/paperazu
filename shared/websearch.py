@@ -5,12 +5,14 @@ reads the titles, links and snippets it returns. The loaded model often answers 
 memory instead of calling the tool, so a direct DuckDuckGo lookup is the fallback.
 Only the query is sent. Paper text never goes in the request.
 """
+import base64
 import html
 import json
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
+import time
 from typing import Any
 
 from shared.llm import pick_model
@@ -178,14 +180,72 @@ def pages_from_html(page: str) -> list[dict[str, str]]:
     return out
 
 
+_BING_HIT = re.compile(r'<li class="b_algo".*?<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?<p[^>]*>(.*?)</p>', re.S)
+
+
+def _get(url: str, timeout: float) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "text/html,application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — a search for the query being looked up
+        return resp.read().decode("utf-8", "replace")
+
+
+def _bing_url(href: str) -> str:
+    """Bing wraps each link in a click-tracker; the real address is u=a1<base64url> inside it."""
+    href = html.unescape(href)
+    u = urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get("u", [""])[0]
+    if u.startswith("a1"):
+        try:
+            return base64.urlsafe_b64decode(u[2:] + "=" * (-len(u[2:]) % 4)).decode()
+        except (ValueError, UnicodeDecodeError):
+            pass
+    return href
+
+
+def pages_from_bing(page: str) -> list[dict[str, str]]:
+    """Titles, links and snippets from a Bing results page."""
+    out = []
+    for href, title, snippet in _BING_HIT.findall(page):
+        url = _bing_url(href)
+        if url.startswith(("http://", "https://")):
+            out.append({"title": _plain(title)[:180] or url, "url": url, "snippet": _plain(snippet)[:280]})
+        if len(out) == _MAX:
+            break
+    return out
+
+
+def pages_from_wikipedia(data: str) -> list[dict[str, str]]:
+    """Titles, links and snippets from Wikipedia's search API."""
+    return [{"title": x["title"], "url": "https://en.wikipedia.org/wiki/" + urllib.parse.quote(x["title"].replace(" ", "_")), "snippet": _plain(x.get("snippet", ""))[:280]}
+            for x in json.loads(data).get("query", {}).get("search", [])][:_MAX]
+
+
+_PROVIDERS = (  # tried in order; the first with results answers
+    ("duckduckgo", lambda q: "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": q}), pages_from_html),
+    ("bing", lambda q: "https://www.bing.com/search?" + urllib.parse.urlencode({"q": q}), pages_from_bing),
+    ("wikipedia", lambda q: "https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode({"action": "query", "list": "search", "srsearch": q, "format": "json", "srlimit": _MAX}), pages_from_wikipedia),
+)
+COOLDOWN = 600.0  # seconds a provider that failed to answer is skipped, so a blocked one does not cost every search its timeout
+_down: dict[str, float] = {}
+
+
 def _web(query: str) -> dict[str, Any]:
-    """A real web search when Unsloth's tool does not run. Raises RuntimeError if the web cannot be reached."""
-    url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
-    req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "text/html"})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 — the query the user just typed
-            page = resp.read().decode("utf-8", "replace")
-    except (urllib.error.URLError, TimeoutError, OSError):
+    """A real web search when Unsloth's tool does not run: each provider in turn. Raises RuntimeError if none can be reached."""
+    reached = False
+    for name, url, parse in _PROVIDERS:
+        if time.time() < _down.get(name, 0):
+            continue
+        try:
+            page = _get(url(query), 10)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            _down[name] = time.time() + COOLDOWN
+            continue
+        reached = True
+        try:
+            results = parse(page)
+        except ValueError:  # a page we cannot read is no answer; try the next
+            results = []
+        if results:
+            return {"results": results, "note": "", "via": name}
+    if not reached:
         raise RuntimeError("I could not reach the web from here.")
-    results = pages_from_html(page)
-    return {"results": results, "note": "" if results else "Nothing came back for that."}
+    return {"results": [], "note": "Nothing came back for that."}

@@ -9,6 +9,7 @@ In this hidden mode:
 """
 import json
 import math
+import random
 import re
 import time
 import urllib.parse
@@ -226,23 +227,27 @@ MAKE_VARS_PATTERN = re.compile(
 )
 
 
+_SCHEMA_DONE: set[str] = set()  # DB files whose schema and migrations ran in this process: a training step calls init_db hundreds of times
+
+
 def init_db() -> None:
     """Ensure char tables and default variables exist."""
     con = db.connect()
     with con:
-        con.executescript(CHAR_SCHEMA)
-        # Migration for existing char_vars table
-        cols = {r["name"] for r in con.execute("PRAGMA table_info(char_vars)")}
-        for col, ctype in (
-            ("min_val", "REAL"),
-            ("max_val", "REAL"),
-            ("decay", "REAL DEFAULT 0"),
-            ("act", "TEXT NOT NULL DEFAULT ''"),
-            ("act_arg", "TEXT NOT NULL DEFAULT ''"),
-            ("act_on", "TEXT NOT NULL DEFAULT ''"),
-        ):
-            if col not in cols:
-                con.execute(f"ALTER TABLE char_vars ADD COLUMN {col} {ctype}")
+        if str(db.DB_PATH) not in _SCHEMA_DONE:
+            con.executescript(CHAR_SCHEMA)
+            # Migration for existing char_vars table
+            cols = {r["name"] for r in con.execute("PRAGMA table_info(char_vars)")}
+            for col, ctype in (
+                ("min_val", "REAL"),
+                ("max_val", "REAL"),
+                ("decay", "REAL DEFAULT 0"),
+                ("act", "TEXT NOT NULL DEFAULT ''"),
+                ("act_arg", "TEXT NOT NULL DEFAULT ''"),
+                ("act_on", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if col not in cols:
+                    con.execute(f"ALTER TABLE char_vars ADD COLUMN {col} {ctype}")
 
         # Ensure profile exists
         row = con.execute("SELECT id FROM char_profile WHERE id = 1").fetchone()
@@ -270,6 +275,7 @@ def init_db() -> None:
                     ),
                 )
     con.close()
+    _SCHEMA_DONE.add(str(db.DB_PATH))
 
 
 def get_profile() -> dict[str, Any]:
@@ -388,9 +394,8 @@ def state() -> dict[str, Any]:
     """Current state payload for the Space UI."""
     init_db()
     con = db.connect()
-    mark = con.execute("SELECT created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Resting: char %' ORDER BY id DESC LIMIT 1").fetchone()
     rows = con.execute(  # the live persona's own chat only, as _chat_since reads it: another persona's turns never show here
-        "SELECT * FROM (SELECT * FROM char_turns WHERE created_at >= ? ORDER BY id DESC LIMIT 40) ORDER BY id", (mark["created_at"] if mark else "",)
+        "SELECT * FROM (SELECT * FROM char_turns WHERE created_at >= ? ORDER BY id DESC LIMIT 40) ORDER BY id", (_turn_mark(con),)
     ).fetchall()
     mem_rows = con.execute(
         "SELECT id, title, content, source FROM char_memories WHERE source NOT IN ('lesson', 'sheet', 'question', 'entity') AND id > ? ORDER BY id DESC LIMIT 12", (_start(),)  # its notes: the moons on /char
@@ -453,7 +458,7 @@ def add_memory(title: str, content: str, source: str = "manual") -> dict[str, An
     with con:
         cur = con.execute(
             "INSERT INTO char_memories (title, content, source) VALUES (?, ?, ?)",
-            (title.strip(), content.strip(), source.strip()),
+            (title.lstrip(), content.strip(), source.strip()),  # not rstrip: callers look titles up as f"...{x}"[:80], which can end on a space
         )
         mem_id = cur.lastrowid
         # Update knowledge accumulator variable
@@ -469,6 +474,9 @@ def _start() -> int:
     row = con.execute("SELECT id FROM char_memories WHERE source = 'sheet' AND title LIKE 'Resting: char %' ORDER BY id DESC LIMIT 1").fetchone()
     con.close()
     return row["id"] if row else 0
+
+
+ACT_DECAY = 0.5  # ACT-R's d: a mention's weight falls as its age (in rows, not seconds, so idle time does not erase it) to the -0.5
 
 
 def graph(since: int | None = None) -> dict[str, Any]:
@@ -493,6 +501,14 @@ def graph(since: int | None = None) -> dict[str, Any]:
         for x in notes:
             seen.setdefault(x, []).append(name)
     edges = sorted({(a, b) for names in seen.values() for i, a in enumerate(names) for b in names[i + 1:]})
+    deg: dict[str, int] = {}
+    for a, b in edges:
+        deg[a], deg[b] = deg.get(a, 0) + 1, deg.get(b, 0) + 1
+    last = max((int(x) for x in seen if x.isdigit()), default=0)
+    for n, r in zip(nodes, [r for r in rows if r["title"].removeprefix("Entity: ").removeprefix("Idea: ") not in off]):
+        ids = [int(x) for x in r["content"].split(",") if x.isdigit()]
+        act = sum((last - i + 1) ** -ACT_DECAY for i in ids)  # ACT-R base level, exp(B) = sum of age^-d: often and lately mentioned
+        n |= {"deg": deg.get(n["name"], 0), "lev": round((1 + deg.get(n["name"], 0)) * act, 4)}  # Reddin's leverage, deg(v) * sum W, with ACT-R's decay as W
     have = {n["name"] for n in nodes}
     links = [list(m.groups()) for t in sorted(titles) if (m := re.match(r"Reflection: How are (.+) and (.+) connected\?$", t)) and set(m.groups()) <= have]
     # the inner layer, what it worked out for itself: names it has folded into a summary, and pairs it looked up a connection for
@@ -556,12 +572,18 @@ def _ideas_of(note_id: int, text: str, names: list[str]) -> list[str]:
     return kept
 
 
+def _turn_mark(con: Any) -> str:
+    """Where the live persona's chat starts. Becoming a character writes a marker that cuts the chat before it; the empty marker _since
+    writes on a first rest only says resting began, so the chat already there stays (it used to drop any turn from an earlier second)."""
+    row = con.execute("SELECT content, created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Resting: char %' ORDER BY id DESC LIMIT 1").fetchone()
+    return row["created_at"] if row and row["content"] != "" else ""
+
+
 def _chat_since() -> list[Any]:
     """The current character's own chat: the turns since it was become."""
     init_db()
     con = db.connect()
-    mark = con.execute("SELECT created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Resting: char %' ORDER BY id DESC LIMIT 1").fetchone()
-    rows = con.execute("SELECT id, role, text, created_at FROM char_turns WHERE created_at >= ? ORDER BY id", (mark["created_at"] if mark else "",)).fetchall()
+    rows = con.execute("SELECT id, role, text, created_at FROM char_turns WHERE created_at >= ? ORDER BY id", (_turn_mark(con),)).fetchall()
     con.close()
     return rows
 
@@ -608,10 +630,20 @@ def world_words() -> set[str]:
     return words if len(words - own) >= 3 else set()  # too little known of its world to judge by: no gate rather than no learning
 
 
+OTHER_WORK = re.compile(r"(?i)\b(?:mytholog\w*|ancient (?:egypt\w*|greek|greece|rome|roman|norse)|real[- ]world)\b")  # a world word reused by myth or history: Osiris the god, not the Warlock
+SET_IN = re.compile(r"\bin \*?([A-Z][\w'-]+(?: [A-Z0-9][\w'-]*)*)\*?")  # "Vex in *Mass Effect*": a title it is set in
+
+
 def on_world(text: str, words: set[str] | None = None) -> bool:
-    """A topic the model made up belongs to its world only if it names something from it: no model, so a small one can't drift it to "the political landscape"."""
+    """A topic the model made up belongs to its world only if it names something from it, and does not set it in another work or in myth:
+    no model, so a small one can't drift it to "the political landscape", or carry a name off to another game.
+    shortcut: a set phrase list and "in <Title>", not a judgement; the intake gate's model check still catches what this lets by."""
     words = world_words() if words is None else words
-    return not words or any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
+    if not words:
+        return True
+    if OTHER_WORK.search(text) or any(not set(t.split()) & words for t in SET_IN.findall(text)):
+        return False
+    return any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
 
 
 def in_voice(said: str | None, who: str) -> bool:
@@ -635,7 +667,7 @@ def asker(names: list[str] | None = None, limit: int = 3) -> list[str]:
     done = {r["title"] for r in con.execute("SELECT title FROM char_memories WHERE id > ?", (since,))}
     con.close()
     g = graph(since)
-    pool = names if names is not None else [n["name"] for n in sorted(g["nodes"], key=lambda n: (-n["n"], n["kind"] == "abstract"))]  # most-mentioned first; a name before an idea
+    pool = names if names is not None else [n["name"] for n in sorted(g["nodes"], key=lambda n: (-n.get("lev", n["n"]), n["kind"] == "abstract"))]  # most leverage first (linked, often and lately mentioned); a name before an idea
     known = {n["name"] for n in g["nodes"] if n["known"]}
     ideas = {n["name"] for n in g["nodes"] if n["kind"] == "abstract"}
     room = max(0, limit - len(_open_questions(since)))  # a factory limit: only so many open questions at once
@@ -689,7 +721,7 @@ def speak(text: str) -> bytes:
 def mind() -> dict[str, Any]:
     """Everything the character holds, newest first, and the prompts it last sent the model."""
     con = db.connect()
-    rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? AND NOT (source = 'sheet' AND (title LIKE 'Resting: %' OR title LIKE 'Entities: %' OR title LIKE 'Kept: %' OR title LIKE 'System: _' OR title = 'Mode' OR title LIKE 'Guess: %' OR title LIKE 'Checked: %' OR title LIKE 'Ground: %' OR title LIKE 'Sources: %' OR title LIKE 'Gate: %' OR title LIKE 'Dial: %' OR title IN ('Tick', 'Reply', 'Baked') OR title LIKE 'Fail: %' OR title LIKE 'Correction: %' OR title LIKE 'Reviewed: %' OR title LIKE 'Asking: %' OR title LIKE 'Answered: %' OR title LIKE 'Run: %')) ORDER BY id DESC", (_start(),)).fetchall()
+    rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? AND NOT (source = 'sheet' AND (title LIKE 'Resting: %' OR title LIKE 'Entities: %' OR title LIKE 'Kept: %' OR title LIKE 'System: _' OR title = 'Mode' OR title LIKE 'Guess: %' OR title LIKE 'Checked: %' OR title LIKE 'Ground: %' OR title LIKE 'Claims: %' OR title LIKE 'Sources: %' OR title LIKE 'Gate: %' OR title LIKE 'Dial: %' OR title IN ('Tick', 'Reply', 'Baked') OR title LIKE 'Fail: %' OR title LIKE 'Correction: %' OR title LIKE 'Reviewed: %' OR title LIKE 'Asking: %' OR title LIKE 'Answered: %' OR title LIKE 'Run: %' OR title LIKE 'Stuck: %')) ORDER BY id DESC", (_start(),)).fetchall()
     con.close()
     p = get_profile()
     return {"who": p["name"], "persona": p["persona"], "memories": [dict(r) for r in rows], "open": _open_questions(_start()), "prompts": list(PROMPTS)[::-1]}
@@ -702,11 +734,10 @@ def mesh() -> dict[str, Any]:
     start = _start()
     con = db.connect()
     rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? ORDER BY id", (start,)).fetchall()
-    mark = next((r["created_at"] for r in con.execute("SELECT created_at FROM char_memories WHERE source = 'sheet' AND title LIKE 'Resting: char %' ORDER BY id DESC LIMIT 1")), "")
-    turns = con.execute("SELECT id, role, text, created_at FROM char_turns WHERE created_at >= ? ORDER BY id DESC LIMIT 40", (mark,)).fetchall()[::-1]
+    turns = con.execute("SELECT id, role, text, created_at FROM char_turns WHERE created_at >= ? ORDER BY id DESC LIMIT 40", (_turn_mark(con),)).fetchall()[::-1]
     con.close()
     sheet = lambda p: {r["title"].removeprefix(p): r for r in rows if r["source"] == "sheet" and r["title"].startswith(p)}
-    checked, reviewed = sheet("Checked: "), sheet("Reviewed: ")
+    checked, reviewed, read_for_names = sheet("Checked: "), sheet("Reviewed: "), sheet("Entities: ")
     nodes: list[dict[str, Any]] = []
     edges: list[list[str]] = []
     note_at: dict[str, str] = {}  # a note's title (and its topic) -> node id, for linking
@@ -722,13 +753,15 @@ def mesh() -> dict[str, Any]:
         elif s in ("reflection", "summary") or s.startswith("job:") or (s == "sheet" and t.startswith("Reflection: ") and r["content"].startswith("(rejected)")):
             v = checked.get(str(rid))
             state = "rejected" if r["content"].startswith("(rejected)") or (v and v["content"] == "drop") else "verified" if v else "unchecked"
-            nodes.append({"id": f"m{rid}", "layer": "note", "label": t.split(": ", 1)[-1], "body": r["content"], "state": state, "kind": "summary" if s == "summary" else "research" if s.startswith("job:") else "note"})
+            read = str(rid) in read_for_names  # extract has read it: a note that named nothing has nothing left below it to find
+            nodes.append({"id": f"m{rid}", "layer": "note", "label": t.split(": ", 1)[-1], "body": r["content"], "state": state, "kind": "summary" if s == "summary" else "research" if s.startswith("job:") else "note", **({"spent": True} if state == "rejected" or read else {})})
             note_at[t] = note_at[t.split(": ", 1)[-1]] = f"m{rid}"
+    probed = {r["title"] for r in rows}  # a look-up that found nothing still leaves its marker: the question was asked of the world
     for n in nodes:  # a question answered by a note
-        if n["layer"] == "question" and (to := note_at.get(n.pop("key"))):
+        if n["layer"] == "question" and (to := note_at.get(key := n.pop("key"))):
             edges.append([n["id"], to]); n["state"] = "answered"
         elif n["layer"] == "question":
-            n["state"] = "open"
+            n["state"] = "spent" if key in probed else "open"  # spent: looked up, nothing to keep; Reddin's lens is spent once probed, answered or not
     g = graph(start)
     for x in g["nodes"]:
         nodes.append({"id": f"n:{x['name']}", "layer": "name", "label": x["name"], "state": "known" if x["known"] else "curious", "kind": "idea" if x["kind"] == "abstract" else "name", "n": x["n"]})
@@ -969,6 +1002,88 @@ def _open_questions(since: int = 0) -> list[str]:
     return [q for q in qs if f"Reflection: {q}"[:80] not in done]
 
 
+def speculations() -> list[dict[str, Any]]:
+    """Its checked speculations, newest first: what it guessed, the question that checked it, how far off it was, and whether it held."""
+    con = db.connect()
+    rows = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Speculated: %' AND id > ? ORDER BY id DESC", (_start(),)).fetchall()
+    con.close()
+    return [json.loads(r["content"]) for r in rows]
+
+
+def _speculated(q: str) -> str:
+    """The guess a speculation made before it asked q, so the look-up scores the speculation itself."""
+    con = db.connect()
+    r = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Speculation: %' AND content LIKE ? AND id > ? ORDER BY id DESC LIMIT 1", (f'%"question": {json.dumps(q)}%', _start())).fetchone()
+    con.close()
+    return json.loads(r["content"]).get("guess", "") if r else ""
+
+
+SPECULATE = re.compile(r"(?is)guess:\s*(.+?)\s*question:\s*(.+)")
+
+
+CLAIM_OVERLAP = 0.6
+CLAIM_STOP = set("this that with from their they them have been were which what when where also into than then about after before would could should".split())
+
+
+def _unsteered(system: str, user: str, max_tokens: int) -> str:
+    """A judge on the steer engine stays unsteered: steering must not shape the labels it is trained on."""
+    from shared import steer
+
+    saved = dict(steer.ON)
+    steer.ON.clear()
+    try:
+        return _ask(system, user, max_tokens)
+    finally:
+        steer.ON.update(saved)
+
+
+def _claims(note: str, lines: list[str]) -> tuple[list[str], list[str]]:
+    """A note is the model's summary, and a summary can add what no snippet says: each sentence is kept only if the snippets back it."""
+    sents = [x for x in re.split(r"(?<=[.!?])\s+", note.strip()) if len(x.split()) >= 3]
+    have = set(re.findall(r"[a-z]{4,}", " ".join(lines).lower()))
+    words = [[w for w in re.findall(r"[a-z]{4,}", x.lower()) if w not in CLAIM_STOP] for x in sents]
+    ok = [not w or sum(v in have for v in w) / len(w) >= CLAIM_OVERLAP for w in words]  # exact, no model
+    todo = [i for i, o in enumerate(ok) if not o]
+    out = ""
+    if todo:  # one call for all the rest; no verdict is unsupported
+        out = _unsteered("Judge each numbered sentence only against the snippets. Reply one line per sentence: its number, then SUPPORTED or UNSUPPORTED.",
+                         "Snippets:\n" + "\n".join(lines) + "\n\nSentences:\n" + "\n".join(f"{n + 1}. {sents[i]}" for n, i in enumerate(todo)), 60)
+        for n, v in re.findall(r"(?im)^\D*?(\d+)\W+(SUPPORTED|UNSUPPORTED)\b", out):
+            if v.upper() == "SUPPORTED" and 0 < int(n) <= len(todo):
+                ok[todo[int(n) - 1]] = True
+    skip = set(todo) if not out else set()  # a failed call judged nothing: those sentences are neither kept nor dropped
+    return [x for x, o in zip(sents, ok) if o], [x for i, (x, o) in enumerate(zip(sents, ok)) if not o and i not in skip]
+
+
+def polish() -> dict[str, Any]:
+    """Notes written before the claim checker were never pruned: check each now against the snippets it was written from, no new search."""
+    con = db.connect()
+    rows = con.execute("""SELECT m.id, m.content, s.content AS src FROM char_memories m JOIN char_memories s ON s.title = 'Sources: ' || m.id
+        WHERE m.source = 'reflection' AND m.id > ? AND NOT EXISTS (SELECT 1 FROM char_memories c WHERE c.title = 'Claims: ' || m.id)
+        AND NOT EXISTS (SELECT 1 FROM char_memories c WHERE c.title = 'Checked: ' || m.id AND c.content = 'drop')""", (_start(),)).fetchall()
+    con.close()
+    out = {"checked": 0, "trimmed": 0, "dropped": 0, "failed": 0}
+    for r in rows:
+        lines = [f"- {x.get('title') or ''}: {x.get('snippet') or ''}" for x in json.loads(r["src"]) if x.get("title") or x.get("snippet")]
+        kept, dropped = _claims(r["content"], lines)
+        if not kept and not dropped:  # the check failed: no Claims row, so the next polish tries again
+            out["failed"] += 1
+            continue
+        add_memory(f"Claims: {r['id']}", json.dumps({"kept": kept, "dropped": dropped}), source="sheet")
+        out["checked"] += 1
+        if not kept:  # nothing in it held up: the note is turned away, as the Verifier would
+            add_memory(f"Checked: {r['id']}", "drop", source="sheet")
+            out["dropped"] += 1
+        elif dropped:
+            con = db.connect()
+            with con:
+                con.execute("UPDATE char_memories SET content = ? WHERE id = ?", (" ".join(kept), r["id"]))
+            con.close()
+            out["trimmed"] += 1
+    _engine("polish", "ok" if out["checked"] else "skipped", f"{out['checked']} old notes checked, {out['trimmed']} trimmed, {out['dropped']} dropped, {out['failed']} failed")
+    return out
+
+
 def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
     """One look-up while asleep: the first topic not yet reflected on (or the one named), searched, noted, saved."""
     if on_char:
@@ -997,8 +1112,8 @@ def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
         return {"done": True, "topic": "", "note": "", "left": 0}
     topic = todo[0]
     # curiosity as guess and correction: it commits to an answer before looking, and the gap between guess and find is the surprise
-    guess = ""
-    if on_char and topic.endswith("?"):  # the guess sees its world and its nearest notes, so a miss is a real gap, not a blank mind (lower surprise is better: target SURPRISE_TARGET)
+    guess = _speculated(topic) if on_char else ""
+    if on_char and topic.endswith("?") and not guess:  # the guess sees its world and its nearest notes, so a miss is a real gap, not a blank mind (lower surprise is better: target SURPRISE_TARGET)
         known = "\n".join(f"- {r['title'].removeprefix('Reflection: ')}: {_clean(r['content'], 220)}" for r in recall(topic, 3)[0])
         guess = _clean(_ask("Answer in one short sentence from what you already know about your world. Use its own names and terms. If unsure, guess.",
                             f"Your world:\n{get_profile()['persona'][:600]}\nWhat you have read so far:\n{known or '- (nothing yet)'}\nQuestion: {topic}", 40), 200)
@@ -1023,7 +1138,15 @@ def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
     if on_char and _start() != start0:  # the persona changed while this step waited on the model: its find belongs to no one here
         _engine("reflect", "skipped", f"{topic}: dropped, the persona changed while it was being written")
         return {"done": False, "topic": topic, "note": "", "left": len(todo) - 1, "stale": True}
+    kept, dropped = _claims(note, lines)
+    if not kept:  # the same shape as "(nothing found)": a marker, and the dropped claims stay as negatives
+        add_memory(f"Reflection: {topic}"[:80], "(nothing supported)", source="sheet")
+        add_memory("Claims: 0", json.dumps({"kept": [], "dropped": dropped}), source="sheet")
+        _engine("reflect", "skipped", f"{topic}: no claim in it held up against its sources")
+        return {"done": False, "topic": topic, "note": "", "left": len(todo) - 1, "pruned": True}
+    note = " ".join(kept)
     saved = add_memory(f"Reflection: {topic}"[:80], note, source="reflection")
+    add_memory(f"Claims: {saved['id']}", json.dumps({"kept": kept, "dropped": dropped}), source="sheet")
     # grounding, for the Verifier: the share of the note's names that its sources also say. A name from nowhere is the model making it up.
     named = set(re.findall(r"(?<=[a-z,;] )[A-Z][a-z]{2,}", note))  # capitals inside a sentence, so not its first word
     add_memory(f"Ground: {saved['id']}", f"{sum(n in ' '.join(lines) for n in named) / len(named) if named else 1:.2f}", source="sheet")
@@ -1031,10 +1154,15 @@ def reflect(on_char: bool = False, topic: str | None = None) -> dict[str, Any]:
     out = {"done": False, "topic": topic, "note": note, "left": len(todo) - 1}
     if on_char:
         out["admitted"] = _intake(saved["id"], who, topic, note, lines)
-    if guess:
+    if guess and on_char and out.get("admitted") is False:  # the find was turned away (off-world or unsupported): there is nothing to hold the guess against, so it is not scored
+        out["unscored"] = guess
+    elif guess:
         sur = _surprise(guess, note)
         add_memory(f"Guess: {saved['id']}", f"{sur:.2f}|{guess}", source="sheet")
         out |= {"guess": guess, "surprise": sur}
+        if on_char and guess == _speculated(topic):  # a speculation checked: kept if what it found backs it, filtered out if not
+            out["held"] = sur < SPECULATION_KEEP
+            add_memory(f"Speculated: {saved['id']}", json.dumps({"question": topic, "guess": guess, "surprise": sur, "held": out["held"]}), source="sheet")
     return out
 
 
@@ -1050,7 +1178,7 @@ def _intake(i: int, who: str, topic: str, note: str, lines: list[str]) -> bool |
     elif anchors and not any(a in f"{topic} {note}".lower() for a in anchors):  # exact, no model: a small judge passed notes that only matched their own topic
         ok, why = False, f"not about {who}'s world: it mentions nothing {who} knows"
     else:
-        out = _ask(f"You decide what enters {who}'s memory. Admit the note only if the snippets support it, it answers the topic, and it is about {who}'s own world, "
+        out = _unsteered(f"You decide what enters {who}'s memory. Admit the note only if the snippets support it, it answers the topic, and it is about {who}'s own world, "
                    f"not a fan mod, another game or work, or something else with a similar name. Reply ADMIT or REJECT, then a reason of at most twelve words.",
                    f"Topic: {topic}\nSnippets:\n" + "\n".join(lines)[:1500] + f"\nNote: {note}", 30).strip()
         if not out:
@@ -1070,6 +1198,7 @@ def _intake(i: int, who: str, topic: str, note: str, lines: list[str]) -> bool |
 
 
 SURPRISE_TARGET = 0.1  # the share of a guess the search does not back; lower is better
+SPECULATION_KEEP = 0.3  # a speculation whose surprise is under this held up and is kept; the same line training calls "came out right"
 
 
 def _surprise(guess: str, found: str) -> float:
@@ -1107,7 +1236,7 @@ def self_model(text: str | None = None) -> dict[str, Any]:
     return out
 
 
-EXPLORES = ("reflect", "wonder", "ask", "plan", "goal", "fold")  # the steps that reach outward: the ones the brake holds
+EXPLORES = ("reflect", "wonder", "speculate", "ask", "plan", "goal", "fold")  # the steps that reach outward: the ones the brake holds
 LAYERS = ("plan", "question", "note", "name")  # the mesh layers the frontier walks, top to bottom
 BAKE_EVERY = 4  # answers between two consolidations
 
@@ -1115,12 +1244,13 @@ BAKE_EVERY = 4  # answers between two consolidations
 def frontier() -> dict[str, Any]:
     """How much of the mesh still points nowhere. Per layer n (plan, question, note) paired with the next layer: open(n) = nodes with no edge down to
     a node of layer n+1, c(n) = open(n) / (open(n) + count(n+1)); a pair with both 0 is skipped. F = mean of the kept c(n), 0 if none.
-    D = index of the deepest non-empty layer (plan 1 ... name 4, 0 if empty). term = D * (1 - F)."""
+    D = index of the deepest non-empty layer (plan 1 ... name 4, 0 if empty). term = D * F: the open work pulls, so answering it brings curiosity down.
+    (It was D * (1 - F) before: that rose as questions were answered, so learning kept curiosity up and it could never settle.)"""
     m = mesh()
     layer = {n["id"]: n["layer"] for n in m["nodes"]}
     count = {k: sum(v == k for v in layer.values()) for k in LAYERS}
     down = lambda a, b: layer[a] in LAYERS[:3] and layer[b] == LAYERS[LAYERS.index(layer[a]) + 1]
-    linked = {a for a, b in m["edges"] if down(a, b)}
+    linked = {a for a, b in m["edges"] if down(a, b)} | {n["id"] for n in m["nodes"] if n.get("state") == "spent" or n.get("spent")}  # a spent question, a rejected note or one read for names no longer pulls
     cs = {}
     for n, nxt in zip(LAYERS, LAYERS[1:]):
         o = sum(v == n and i not in linked for i, v in layer.items())
@@ -1128,7 +1258,7 @@ def frontier() -> dict[str, Any]:
             cs[n] = o / (o + count[nxt])
     F = sum(cs.values()) / len(cs) if cs else 0.0
     D = max((i + 1 for i, k in enumerate(LAYERS) if count[k]), default=0)
-    return {"F": round(F, 4), "D": D, "layers": {k: round(c, 4) for k, c in cs.items()}, "term": round(D * (1 - F), 4)}
+    return {"F": round(F, 4), "D": D, "layers": {k: round(c, 4) for k, c in cs.items()}, "term": round(D * F, 4)}
 
 
 def dial() -> float:
@@ -1213,12 +1343,15 @@ def _direction() -> str:
     return r["content"] if r else ""
 
 
+MOMENTUM_EASE = 0.9  # each step that did something keeps this share of momentum
+
+
 def _ease_momentum() -> None:
     """Learning matures it: every step that did something takes a tenth off momentum, so the push you gave is optimised away.
     Asleep, it is learning in the direction you gave; when the push is spent it wakes and tells you."""
     if (m := _var("momentum", 0)) <= 0.05:
         return
-    m = _set_var("momentum", round(m * 0.9, 2))
+    m = _set_var("momentum", round(m * MOMENTUM_EASE, 2))
     if _var("asleep", 0) == 1 and m < WAKE_BELOW:
         _set_var("momentum", 0)
         _set_var("asleep", 0)
@@ -1230,18 +1363,35 @@ def _ease_momentum() -> None:
         con.close()
 
 
+def compression(g: dict[str, Any] | None = None) -> dict[str, float]:
+    """Reddin's S_comp over its ideas: mentions per folded idea, less the spread (entropy) between them. High is a settled routine;
+    a drop means new ideas arrive faster than they fold together, a new chapter (Schmidhuber: what counts is the change, not the level)."""
+    ns = [n["n"] for n in (g or graph())["nodes"] if n["kind"] == "abstract" and n["n"]]
+    if not ns:
+        return {"S": 0.0, "K": 0, "H": 0.0}
+    tot = sum(ns)
+    H = -sum(x / tot * math.log2(x / tot) for x in ns)
+    return {"S": round(tot / (len(ns) + H), 4), "K": len(ns), "H": round(H, 4)}
+
+
+PHASE_W = 1.0  # weight of the new-chapter term in curiosity
+
+
 def disposition() -> dict[str, Any]:
     """The two variables every character starts with, read from its graph and never set by hand (the Riddiary formula, as kept in ghost's memory harness):
         tau       = unmet / x     per name: the share of its questions (its lenses, the quota x) still unanswered; here the mean over names
         maturity  = 1 - exp(-nAE / nE)   answers per name, from counts frozen at the last consolidation ("baked"), not the live graph
-        curiosity = tau * dnE * exp(-nAE / nE) + D * (1 - F)   dnE: names met since that consolidation; D, F: see frontier()
-    Curiosity is the brake: at 0 the character stops reaching outward. With the frontier term the brake only holds when D == 0 or F == 1. New names (from your chat, or from notes it has not read for names) raise it again."""
+        curiosity = dial * (tau * dnE * exp(-nAE / nE) + D * F) + momentum   dnE: names met since that consolidation; D, F: see frontier()
+    Curiosity is the brake: at 0 the character stops reaching outward. It reaches 0 when no new names wait and nothing in its mesh is left open.
+    New names, and new open questions (its own speculations included), raise it again."""
     start = _start()
     con = db.connect()
     done = {r["title"] for r in con.execute("SELECT title FROM char_memories WHERE source IN ('reflection', 'sheet') AND title LIKE 'Reflection: %' AND id > ?", (start,))}
     bake = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Baked' AND id > ? ORDER BY id DESC LIMIT 1", (start,)).fetchone()
+    sur = [float(r["content"].split("|")[0]) for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Guess: %' AND id > ? ORDER BY id DESC LIMIT 5", (start,)) if r["content"].split("|")[0]]
     con.close()
-    who, names = get_profile()["name"], [n for n in graph()["nodes"] if n["kind"] == "concrete"]
+    g = graph()
+    who, names = get_profile()["name"], [n for n in g["nodes"] if n["kind"] == "concrete"]
     met = [sum((i == 0 and n["known"]) or f"Reflection: {lens.format(name=n['name'], who=who)}"[:80] in done for i, lens in enumerate(LENSES)) for n in names]
     nE, nAE, x = len(names), sum(met), len(LENSES)
     baked = json.loads(bake["content"]) if bake else {"nE": 0, "nAE": 0}
@@ -1251,14 +1401,110 @@ def disposition() -> dict[str, Any]:
     fr = frontier()
     k = dial()
     mo = _var("momentum", 0)
-    return {"curiosity": round(k * (tau * dnE * damper + fr["term"]) + mo, 2), "dial": k, "momentum": mo, "frontier": fr, "maturity": round(1 - damper, 2), "tau": round(tau, 2), "dnE": dnE, "nE": nE, "nAE": nAE, "baked": baked}
+    sp, comp = speculations(), compression(g)
+    phase = round(max(0.0, baked["S"] - comp["S"]) / baked["S"], 4) if baked.get("S") else 0.0  # how far compression fell since the last consolidation
+    know, miss = 1 - math.exp(-nAE / nE) if nE else 0.0, sum(sur) / len(sur) if sur else 0.5  # no guess checked yet: as likely right as wrong
+    return {"curiosity": round(k * (tau * dnE * damper + fr["term"] + PHASE_W * phase) + mo, 2), "compression": {**comp, "baked": baked.get("S"), "phase": phase}, "dial": k, "momentum": mo, "frontier": fr, "maturity": round(1 - damper, 2), "tau": round(tau, 2), "dnE": dnE, "nE": nE, "nAE": nAE, "baked": baked,
+            "terms": {"names": round(tau * dnE * damper, 3), "damper": round(damper, 3), "frontier": fr["term"], "phase": round(PHASE_W * phase, 4)},  # the formula's parts, so the page can show which one holds curiosity up
+            "optim": {"ease": MOMENTUM_EASE, "bake_every": BAKE_EVERY, "since_bake": max(0, nAE - baked["nAE"]), "keep": SPECULATION_KEEP, "target": SURPRISE_TARGET,
+                      "speculated": len(sp), "held": sum(bool(x.get("held")) for x in sp), "last_surprise": sp[0]["surprise"] if sp else None},
+            "score": {"J": round(know * (1 - miss), 3), "know": round(know, 3), "surprise": round(miss, 3)}}  # the one number to push up: how much it has answered, times how often its guesses come out right
 
 
 def _tick(what: str) -> None:
     """One row per thing it does, so the page can draw how each variable moved and how many cycles it took."""
     d = disposition()
-    add_memory("Tick", json.dumps({"at": time.strftime("%H:%M:%S"), "what": what, "curiosity": d["curiosity"], "maturity": d["maturity"], "frontier": d["frontier"]["term"], "names": d["nE"], "answers": d["nAE"],
+    add_memory("Tick", json.dumps({"at": time.strftime("%H:%M:%S"), "what": what, "curiosity": d["curiosity"], "maturity": d["maturity"], "frontier": d["frontier"]["term"], "score": d["score"]["J"], "names": d["nE"], "answers": d["nAE"],
                                    **{f"var:{v['name']}": v["value"] for v in mine()}}), source="sheet")
+
+
+def _deltas(last: int = 200) -> dict[str, list[float]]:
+    """Each kind of step's changes to J, oldest first, from consecutive ticks."""
+    con = db.connect()
+    ticks = [json.loads(r["content"]) for r in con.execute("SELECT content FROM (SELECT id, content FROM char_memories WHERE source = 'sheet' AND title = 'Tick' AND id > ? ORDER BY id DESC LIMIT ?) ORDER BY id", (_start(), last))]
+    con.close()
+    by: dict[str, list[float]] = {}
+    for a, b in zip(ticks, ticks[1:]):
+        if "score" in a and "score" in b:  # ticks written before the score existed carry none
+            by.setdefault(b["what"], []).append(b["score"] - a["score"])
+    return by
+
+
+def gains(last: int = 200) -> dict[str, dict[str, float]]:
+    """What each kind of step did to the score J, from the ticks: the mean change it made and how often it ran. The planner reads this to pick what pays."""
+    by = _deltas(last)
+    return {k: {"gain": round(sum(v) / len(v), 4), "runs": len(v)} for k, v in sorted(by.items(), key=lambda kv: -sum(kv[1]) / len(kv[1]))}
+
+
+DISCOUNT = 0.9  # discounted Thompson sampling: each later run of the same step weighs old evidence down by this much, so a step that stopped paying is tried less
+STILL = 0.25  # a step that left J where it was counts as a quarter of a miss: it cost a turn
+
+
+def arms(last: int = 200) -> dict[str, tuple[float, float]]:
+    """A Beta(a, b) per kind of step, newest evidence weighted most. Untried steps sit at Beta(1, 1), so they still get picked.
+    A check step pays when it raised J. An explore step pays when it moved J either way (MAGELLAN's absolute learning progress):
+    new names lower J until they are answered, and that is the gap it was sent to find."""
+    out = {}
+    for k, ds in _deltas(last).items():
+        a = b = 1.0
+        for i, x in enumerate(reversed(ds)):
+            w = DISCOUNT ** i
+            x = abs(x) if k in EXPLORE else x
+            a, b = (a + w, b) if x > 1e-4 else (a, b + w) if x < -1e-4 else (a, b + STILL * w)
+        out[k] = (round(a, 3), round(b, 3))
+    return out
+
+
+def _steer_state() -> dict[str, Any]:
+    """The last cycle's steering (concept, strength, what it did to J) and each strength's Beta, for the formula panel."""
+    from harness_char import harness  # harness imports char
+    con = db.connect()
+    r = con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Steer' AND id > ? ORDER BY id DESC LIMIT 1", (_start(),)).fetchone()
+    con.close()
+    return {"last": json.loads(r["content"]) if r else {}, "arms": {str(k): v for k, v in harness.steer_arms().items()}}
+
+
+def judge_trust() -> dict[str, float]:
+    """How often the judge model agreed with an exact check it was shown blind (Noisy but Valid: estimate the judge from items whose answer is known).
+    A Beta mean, newest first and discounted; starts at a half."""
+    con = db.connect()
+    rows = [r["content"] for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title = 'Judge' AND id > ? ORDER BY id DESC LIMIT 50", (_start(),))]
+    con.close()
+    a = 1 + sum(DISCOUNT ** i for i, r in enumerate(rows) if r == "1")
+    b = 1 + sum(DISCOUNT ** i for i, r in enumerate(rows) if r != "1")
+    return {"value": round(a / (a + b), 3), "probes": len(rows)}
+
+
+EXPLORE = ("speculate", "wonder", "goal", "ask", "extract", "ideas", "plan", "want")  # System 1: reach for the new
+CHECK = ("reflect", "check", "fold")  # System 2: answer, verify, compress what it has
+TAU0 = 0.5  # softmax temperature at maturity 0; it cools as maturity rises, so a mature character picks more firmly
+TAU_MIN = 0.1  # never colder: at 0.05 a small lead won every draw and the other side never ran
+REST_AT = 0.05  # driving force under this: nothing pulls it, it rests (Reddin's deterministic silence)
+
+
+def drive(d: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The two drives and who wins (the virtual-clone softmax): explore E from curiosity, check C from open questions times
+    how wrong its guesses run or how little the judge can be trusted, whichever is worse."""
+    d = d or disposition()
+    start = _start()
+    con = db.connect()
+    unchecked = con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE source = 'reflection' AND id > ? AND CAST(id AS TEXT) NOT IN "
+                            "(SELECT substr(title, 10) FROM char_memories WHERE source = 'sheet' AND title LIKE 'Checked: %')", (start,)).fetchone()["c"]
+    con.close()
+    u, jt = len(_open_questions(start)) + unchecked, judge_trust()  # check-side work: questions to answer and notes to verify
+    m = d["maturity"]
+    E = d["curiosity"] / (1 + d["curiosity"]) * (1 - m / 2)  # maturity tips the balance, explore early and check later: the temperature only sets how sharp the pick is
+    C = u / (u + 1) * max(d["score"]["surprise"], 1 - jt["value"]) * (0.5 + m / 2)
+    tau = round(max(TAU_MIN, TAU0 * (1 - m)), 3)
+    p = 1 / (1 + math.exp(-(E - C) / tau))
+    df = p * E + (1 - p) * C
+    return {"E": round(E, 3), "C": round(C, 3), "tau": tau, "p_explore": round(p, 3), "DF": round(df, 3), "rest": df < REST_AT, "open": u, "unchecked": unchecked, "judge": jt}
+
+
+def thompson(kinds: list[str]) -> str:
+    """The step to take from these, by one draw from each one's Beta: mostly the one that has paid, now and then a long shot."""
+    A = arms()
+    return max(kinds, key=lambda k: random.betavariate(*A.get(k, (1.0, 1.0)))) if kinds else ""
 
 
 def monitor() -> dict[str, Any]:
@@ -1270,9 +1516,9 @@ def monitor() -> dict[str, Any]:
     cycles = con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE source = 'sheet' AND title LIKE 'Answered: %' AND id > ?", (start,)).fetchone()["c"]
     steps = con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE source = 'sheet' AND title = 'Tick' AND id > ?", (start,)).fetchone()["c"]
     con.close()
-    keys = ["curiosity", "maturity", "frontier", *dict.fromkeys(k for t in ticks for k in t if k.startswith("var:"))]
+    keys = ["curiosity", "maturity", "frontier", "score", *dict.fromkeys(k for t in ticks for k in t if k.startswith("var:"))]
     rv, d = review(), disposition()
-    return {"disposition": d, "steps": steps, "series": [{"name": k.removeprefix("var:"), "yours": k.startswith("var:"), "points": [t[k] for t in ticks if k in t]} for k in keys],
+    return {"disposition": d, "gains": gains(), "steps": steps, "series": [{"name": k.removeprefix("var:"), "yours": k.startswith("var:"), "points": [t[k] for t in ticks if k in t]} for k in keys],
             "last": json.loads(last["content"]) if last else None,
             "loop": {"reviewed": rv["reviewed"], "mistakes": rv["mistakes"], "cycles": cycles, "instructions": len(rv["instructions"]), "fixes": sum(c["state"] == "on" for c in corrections())}, "prompt": prompt_size(), "signals": signals()}
 
@@ -1340,7 +1586,7 @@ PROMPTS: deque[dict[str, Any]] = deque(maxlen=40)  # shortcut: the prompt log li
 # S2 thinks (writes a plan), S1 turns the plan and the names it knows into goals (questions, its own sheet), S0 just executes (search, note, names, voice).
 SYSTEMS: dict[int, tuple[str, str, tuple[str, ...]]] = {
     2: ("Plan", "Thinks about what the character should learn next and writes a short plan, and consolidates what it has answered so far, and writes its study journal.", ("plan", "bake", "journal")),
-    1: ("Goals", "Turns the plan and the names it knows into questions to answer, and fills in its own sheet.", ("goal", "ask", "wonder", "fill", "want")),
+    1: ("Goals", "Turns the plan and the names it knows into questions to answer, and fills in its own sheet.", ("goal", "ask", "wonder", "speculate", "fill", "want")),
     0: ("Execute", "Just does the work: looks a question up, writes the note, pulls out names and ideas from notes and from your chat, practises its voice.", ("reflect", "extract", "ideas", "practise", "sort", "fold")),
     3: ("Verify", "Watches the other three: picks the next step from everything that could run, checks each new note, and proposes a prompt fix when a system keeps slipping.", ("check", "review", "tune")),
 }
@@ -1841,7 +2087,7 @@ def _felt(kind: str, got: tuple[str, str]) -> None:
         con.close()
         sur = float(g["content"].split("|")[0]) if g else 0.5
         d |= {"joy": 0.1} if sur < 0.3 else {"joy": -0.05, "wonder": 0.05} if sur >= 0.5 else {}
-    elif kind in ("wonder", "ask", "plan", "goal"):
+    elif kind in ("wonder", "speculate", "ask", "plan", "goal"):
         d["wonder"] = 0.1
     elif kind == "check" and got[1].startswith("rejected"):
         d["calm"] = -0.1
@@ -1958,10 +2204,10 @@ def trust() -> dict[str, Any]:
     return {"kept": kept, "n": len(rows), "value": value, "trusted": len(rows) >= TRUST_AFTER and value >= HIGH}
 
 
-TOOL_MAKES = {"plan": ("plan", None), "goal": ("question", None), "ask": ("question", None), "wonder": ("question", None), "reflect": ("note", None),
+TOOL_MAKES = {"plan": ("plan", None), "goal": ("question", None), "ask": ("question", None), "wonder": ("question", None), "speculate": ("question", None), "reflect": ("note", None),
               "check": ("note", None), "extract": ("name", "name"), "ideas": ("name", "idea"), "fold": ("name", None), "reply": ("chat", "it"), "review": ("chat", "it"), "tune": ("trait", None)}
 TOOL_FLOW = [("plan", "goal"), ("goal", "reflect"), ("ask", "reflect"), ("wonder", "reflect"), ("want", "reflect"), ("reflect", "check"), ("reflect", "extract"),
-             ("extract", "ideas"), ("extract", "fold"), ("check", "journal"), ("reply", "review"), ("review", "tune"), ("bake", "plan")]  # which step feeds which
+             ("extract", "ideas"), ("extract", "fold"), ("fold", "speculate"), ("speculate", "reflect"), ("check", "journal"), ("reply", "review"), ("review", "tune"), ("bake", "plan")]  # which step feeds which
 
 
 def prompt_now() -> str:
@@ -2033,7 +2279,7 @@ def _choose(kinds: tuple[str, ...]) -> tuple[tuple[str, ...], str]:
     got = [float(r["content"].split("|")[0]) for r in con.execute("SELECT content FROM char_memories WHERE source = 'sheet' AND title LIKE 'Guess: %' AND id > ? ORDER BY id DESC LIMIT 5", (_start(),))]
     con.close()
     sur = sum(got) / len(got) if got else 0.5
-    order = ("check", "review", "tune", "sort", "extract", "bake", "journal", "want", "reflect", "goal", "ask", "plan", "fold", "ideas", "wonder", "fill", "practise") if sur >= 0.3 else ("check", "review", "tune", "sort", "extract", "bake", "journal", "want", "goal", "ask", "plan", "reflect", "ideas", "wonder", "fill", "practise")
+    order = ("check", "review", "tune", "sort", "extract", "bake", "journal", "want", "reflect", "goal", "ask", "plan", "fold", "ideas", "wonder", "fill", "practise") if sur >= 0.3 else ("check", "review", "tune", "sort", "extract", "bake", "journal", "want", "goal", "ask", "plan", "reflect", "ideas", "wonder", "fill", "practise")  # speculate is not in the idle rotation: it runs when the harness sees it is stuck, or the planner picks it
     first = ("check", "review")  # verify before building on a note, always
     waited = [k for k in order if k not in first and TRIED["n"] - TRIED.get(k, -STARVE) >= STARVE]  # starved: at the end of the line too long, it gets a turn
     n = needs()
@@ -2053,7 +2299,7 @@ class _Trace(deque):
 TRACE: deque[dict[str, Any]] = _Trace(maxlen=60)  # shortcut: the run log lives in memory like PROMPTS; a restart clears it
 NOW: dict[str, Any] = {}  # the engine at work this moment, {"sys", "kind"}: what a training run samples into its system lanes
 ENGINES: dict[str, dict[str, Any]] = {}  # kind -> what it did the last time it was tried, for /char/engines; in memory like TRACE
-ENGINE_ORDER = ("plan", "goal", "ask", "wonder", "fill", "want", "reflect", "extract", "ideas", "practise", "sort", "fold", "evaluate", "check", "review", "tune", "rehearse", "bake", "journal", "reply", "correction", "persona", "model", "cycle")
+ENGINE_ORDER = ("plan", "goal", "ask", "wonder", "speculate", "fill", "want", "reflect", "extract", "ideas", "practise", "sort", "fold", "evaluate", "check", "review", "tune", "rehearse", "bake", "journal", "reply", "correction", "persona", "model", "cycle")
 NO_MODEL = ("bake", "correction")  # the engines that never call the model
 _sys: int | None = None  # the system whose step is running, so its prompts are filed under it
 _failed = ""  # set by _ask when the model call failed or said nothing, so a step that did nothing can tell "model failed" from "nothing to do"
@@ -2161,13 +2407,13 @@ def report(up: bool, label: str) -> dict[str, Any]:
     return {"notes": notes, "who": get_profile()["name"], "you": you(), "life": life(), "since": mark["created_at"] if mark else "", "model": {"up": up, "label": label},
             "totals": {"steps": len(runs), "ok": outcomes.count("ok"), "skipped": outcomes.count("skipped"), "failed": outcomes.count("failed"), "cycles": cycles,
                        "replies": sum(t["role"] == "dot" and not t["text"].startswith(NOT_A_REPLY) for t in _chat_since())},
-            "corrections": corr, "learned": learned, "disposition": disposition(), "series": monitor()["series"], "harness": harness, "trace": runs[:300]}
+            "corrections": corr, "learned": learned, "disposition": (dsp := disposition()), "drive": drive(dsp), "series": monitor()["series"], "gains": gains(), "arms": arms(), "steer": _steer_state(), "harness": harness, "trace": runs[:300]}
 
 
 def _notes(start: int) -> list[dict[str, Any]]:
     """Every note the live persona wrote, with what the Verifier and the exact checks said about it."""
     con = db.connect()
-    rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? AND title LIKE 'Reflection: %' AND NOT (source = 'sheet' AND content = '(nothing found)') ORDER BY id DESC", (start,)).fetchall()
+    rows = con.execute("SELECT id, title, content, source, created_at FROM char_memories WHERE id > ? AND title LIKE 'Reflection: %' AND NOT (source = 'sheet' AND content IN ('(nothing found)', '(nothing supported)')) ORDER BY id DESC", (start,)).fetchall()
     side = {r["title"]: r["content"] for r in con.execute("SELECT title, content FROM char_memories WHERE id > ? AND source = 'sheet' AND (title LIKE 'Checked: %' OR title LIKE 'Ground: %' OR title LIKE 'Guess: %' OR title LIKE 'Sources: %' OR title LIKE 'Gate: %')", (start,))}
     con.close()
     out = []
@@ -2295,7 +2541,7 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
         d = disposition()  # curiosity is the brake: at 0 it stops reaching outward, but still reads your chat and checks its own work. A character that knows no names yet is not braked: it has to start somewhere
         braked = not force and (d["nE"] > 0 or d["dial"] == 0) and d["curiosity"] <= 0
     off = systems_off()
-    kinds = tuple(k for k in ("reflect", "wonder", "fill", "practise", "extract", "ideas", "ask", "plan", "goal", "check", "review", "tune", "sort", "fold", "bake", "journal", "want") if SYS_OF[k] not in off and not (braked and k in EXPLORES)) or ("check",)
+    kinds = tuple(k for k in ("reflect", "wonder", "speculate", "fill", "practise", "extract", "ideas", "ask", "plan", "goal", "check", "review", "tune", "sort", "fold", "bake", "journal", "want") if SYS_OF[k] not in off and not (braked and k in EXPLORES)) or ("check",)
     for k in SYS_OF:
         if k not in kinds:
             _engine(k, "blocked", _blocked(k, off, braked, False))
@@ -2321,6 +2567,8 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             r = reflect(on_char, target)
             if r["done"]:
                 return no("nothing left to look up")
+            if r.get("pruned"):
+                return no(f"no claim held up against its sources for {r['topic']}")
             return (r["topic"], r["note"]) if r["note"] else no(f"nothing found on the web for {r['topic']}")
         if kind == "extract":  # the names in the newest note not yet read for names: the graph grows from these
             done_ids = {r["title"].removeprefix("Entities: ") for r in titles("source = 'sheet' AND title LIKE 'Entities: %'")}
@@ -2471,8 +2719,8 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             if (k := len(_open_questions(since))) >= OPEN_MAX:
                 return no(f"{k} questions already open")
             had = {r["content"].split(" (from")[0].lower() for r in titles("source = 'question' AND id > ?", (since,))}
-            q = _clean(_ask("Write one short question that asks about this topic. Only the question." + _fix("goal"), pl["content"], 30), 100).rstrip("?").strip()
-            if not re.match(r"(?i)(?:who|what|where|when|why|how|which)\b.{6}", q) or re.match(r"(?i)\w+,\s*\w+,", q) or q.lower() + "?" in had:  # clipped, parroted or asked before
+            q = _clean(_ask("Write one short question that asks about this topic. Only the question." + _fix("goal"), pl["content"], 30), 101).rstrip("?").strip()
+            if len(q) > 99 or not re.match(r"(?i)(?:who|what|where|when|why|how|which)\b.{6}", q) or re.match(r"(?i)\w+,\s*\w+,", q) or q.lower() + "?" in had:  # clipped, parroted or asked before
                 _fail("goal", q)
                 q = f"What matters about {pl['content']}"
             if q.lower() + "?" in had:  # nothing new to ask of it: the line is spent
@@ -2531,7 +2779,7 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
                 return no("bakes only on the character page")
             if (k := d["nAE"] - d["baked"]["nAE"]) < BAKE_EVERY:
                 return no(f"{k} new answers, needs {BAKE_EVERY}")
-            add_memory("Baked", json.dumps({"nE": d["nE"], "nAE": d["nAE"]}), source="sheet")
+            add_memory("Baked", json.dumps({"nE": d["nE"], "nAE": d["nAE"], "S": d["compression"]["S"]}), source="sheet")
             return "what it has answered", f"maturity {d['maturity']:.2f} → {disposition()['maturity']:.2f} · {d['nAE']} answers about {d['nE']} names"
         if kind == "fold":  # compression: a name with three or more notes about it gets one summary, so a reply reads one note instead of many
             # shortcut: a name is folded once and the summary does not grow with later notes; refold when its notes double if that bites
@@ -2562,8 +2810,8 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
             if any(q["content"].endswith(f"(from {last['id']})") for q in titles("source = 'question' AND id > ?", (since,))):
                 return no("already asked about the newest note")
             topic = last["title"].removeprefix("Reflection: ")
-            q = _clean(_ask("Read the note. Ask one short follow-up question about something the note does not say. Start with Who, What, Where, When, Why or How. Only the question." + _fix("wonder"), last["content"], 30), 100).rstrip("?").strip()
-            if not re.match(r"(?i)(?:who|what|where|when|why|how|which)\b.{6}", q) or re.match(r"(?i)\w+,\s*\w+,", q):  # "Who, What, Where…" is the prompt parroted back  # a clipped or empty question: ask the plain one, but never about a question
+            q = _clean(_ask("Read the note. Ask one short follow-up question about something the note does not say. Start with Who, What, Where, When, Why or How. Only the question." + _fix("wonder"), last["content"], 30), 101).rstrip("?").strip()
+            if len(q) > 99 or not re.match(r"(?i)(?:who|what|where|when|why|how|which)\b.{6}", q) or re.match(r"(?i)\w+,\s*\w+,", q):  # "Who, What, Where…" is the prompt parroted back  # a clipped or empty question: ask the plain one, but never about a question
                 _fail("wonder", q)
                 if topic.endswith("?"):
                     return no("the model's question was unusable")
@@ -2580,6 +2828,29 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
                 con.execute("UPDATE char_vars SET value = MIN(max_val, value + 0.5) WHERE name = 'curiosity'")
             con.close()
             return "a question", q
+        if kind == "speculate":  # on its own: a guess from what it has compressed (summaries, else its newest notes), and the question that would prove it right or wrong
+            done = {r["title"].removeprefix("Speculation: ") for r in titles("source = 'sheet' AND title LIKE 'Speculation: %' AND id > ?", (since,))}
+            src = next((r for r in [*titles("source = 'summary' AND id > ?", (since,))[::-1], *titles("source = 'reflection' AND id > ?", (since,))] if str(r["id"]) not in done), None)
+            if not src:
+                return no("nothing it knows is left to speculate on")
+            if (k := len(_open_questions(since))) >= 3:
+                return no(f"{k} questions already open")
+            who = get_profile()["name"]
+            got = SPECULATE.search(_ask(f"You are {who}. From what you know below, speculate: make one bold guess about something it does not say, then write the one question whose answer would prove the guess right or wrong. "
+                                        "Two lines exactly:\nGuess: <one sentence>\nQuestion: <one short question starting with Who, What, Where, When, Why or How>" + _fix("speculate"),
+                                        f"{src['title']}\n{src['content'][:1500]}", 90))
+            guess, q = (_clean(got[1], 200), _clean(got[2], 101).rstrip("?").strip()) if got else ("", "")
+            if not guess or len(q) > 99 or not re.match(r"(?i)(?:who|what|where|when|why|how|which)\b.{6}", q) or not on_world(q + " " + guess):
+                _fail("speculate")
+                add_memory(f"Speculation: {src['id']}", json.dumps({"from": src["title"], "unusable": True}), source="sheet")  # move on to the next node, not retry this one forever
+                return no("the speculation was unusable or off its world")
+            q += "?"
+            if q.lower() in {r["content"].split(" (from")[0].lower() for r in titles("source = 'question' AND id > ?", (since,))}:
+                add_memory(f"Speculation: {src['id']}", json.dumps({"from": src["title"], "repeat": q}), source="sheet")
+                return no("that question was asked before")
+            add_memory(f"Speculation: {src['id']}", json.dumps({"from": src["title"], "guess": guess, "question": q}), source="sheet")
+            add_memory(f"Question: {q}"[:80], f"{q} (from {src['id']})", source="question")
+            return src["title"].split(": ", 1)[-1], f"guess: {guess} · to check: {q}"
         if not me:
             return no("no character yet")
         who = me["who"]
@@ -2628,8 +2899,9 @@ def rest(on_char: bool = False, n: int | None = 0, force: bool = False, only: st
     elif n is None and on_char and 3 not in off:  # no step named: the Verifier decides
         order, why = _choose(kinds)
     else:
-        start = (len(TRACE) if n is None else n) % len(kinds)
-        order, why = kinds[start:] + kinds[:start], ""
+        turn = tuple(k for k in kinds if k != "speculate") or kinds  # speculate runs when it is stuck, not in turn
+        start = (len(TRACE) if n is None else n) % len(turn)
+        order, why = turn[start:] + turn[:start], ""
     if on_char and not only and "reflect" in kinds and _var("asleep", 0) == 1:  # asleep, it learns the way you told it to grow before any housekeeping
         order = ("reflect",) + tuple(k for k in order if k != "reflect")
     tried: list[str] = []

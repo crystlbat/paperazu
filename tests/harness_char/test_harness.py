@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from harness_char import char, harness
-from shared import db, llm, settings, websearch
+from shared import db, llm, settings, steer, websearch
 from pdf_research import jobs
 import app as main
 
@@ -23,6 +23,10 @@ def setup(monkeypatch):
 
     monkeypatch.setattr(llm, "_api", no_http)
     monkeypatch.setattr(websearch, "search", lambda s, q: {"results": [{"title": "Fog", "snippet": "London fog over Baker Street"}]})
+    monkeypatch.setattr(harness, "steer", lambda plan, rejected, budget=harness.BUDGET, force=False: (plan, rejected, {}))  # the drive has its own tests; the rest pin the planner's plan
+
+
+_steer = harness.steer.__wrapped__ if hasattr(harness.steer, "__wrapped__") else harness.steer
 
 
 def _sheet(title_like: str) -> list[Any]:
@@ -56,6 +60,61 @@ def test_controller_rejects_with_reasons():
     assert why["extract"] == why["sort"] == "over budget (3)"
 
 
+def test_a_skipped_command_stays_off_the_plan_until_something_new_comes_in():
+    char._engine("tune", "skipped", "no grown traits to meet")
+    char._engine("tune", "skipped", "no grown traits to meet")
+    assert "tune" in harness.stale()
+    harness.char.add_memory("Feedback: 1", "[]", source="sheet")  # its own bookkeeping is not news
+    plan, rejected = harness.validate([{"name": "tune", "arg": ""}])
+    assert not plan and rejected[0]["why"] == "skipped last time and nothing has changed for it"
+    char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")
+    char.add_memory("Needs", "{}", source="sheet")  # its mood, written after every step, is not news either
+    assert "tune" in harness.stale()  # a note is not what tune works on: only review feeds it
+    char._engine("review", "ok", "a reply judged")
+    assert "tune" not in harness.stale()
+
+
+def test_the_planner_is_not_offered_a_step_it_would_be_turned_away_from():
+    char._engine("tune", "skipped", "no grown traits to meet")
+    cat = harness.prompt()[1]["content"].split("State:")[0]
+    assert "- tune:" not in cat and "- reflect" in cat
+    char._engine("review", "ok", "a reply judged")  # something feeds tune: it is back on offer
+    assert "- tune:" in harness.prompt()[1]["content"].split("State:")[0]
+
+
+def test_a_step_that_reads_the_chat_waits_for_a_new_turn():
+    char._engine("review", "skipped", "no new reply to review")
+    char._engine("reflect", "ok", "a note")  # busy elsewhere: still nothing for review
+    assert "review" in harness.stale()
+    con = db.connect()
+    with con:
+        con.execute("INSERT INTO char_turns (role, text, created_at) VALUES ('dot', 'A new reply.', datetime('now', '+1 second'))")
+    con.close()
+    assert "review" not in harness.stale()
+
+
+def test_stuck_it_names_the_wall_tries_a_way_out_and_then_rests_without_you(monkeypatch):
+    calls = _models(monkeypatch, "{{ not a command")  # a planner that gives it nothing to run
+    monkeypatch.setattr(websearch, "search", lambda s, q: {"results": []})  # and a web with nothing on it, so it does run out
+    r = harness.cycle()
+    me = r["self"]
+    assert me["stuck"] and me["try"] == harness.UNSTICK[0] and me["said"].startswith("I keep hitting the same wall")
+    assert [x["cmd"] for x in r["executed"]] == [me["try"]]  # its own way out ran
+    assert "what it noticed about itself last cycle: I keep hitting" in harness.prompt()[1]["content"]
+    for _ in range(40):  # it answers what it can first, then each way out is tried and goes stale, until none is left
+        r = harness.cycle()
+        if r["self"].get("spent"):
+            break
+    assert r["self"]["spent"] and r["self"]["try"] == "" and "I will rest until something new comes in" in r["self"]["said"]
+    assert _sheet("Stuck: %")
+
+
+def test_not_stuck_when_the_plan_has_work():
+    char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")
+    assert harness.notice(1, [{"name": "check", "arg": "", "role": "chat"}], []) == {"stuck": False}
+    assert _sheet("Stuck: %") == []
+
+
 def _models(monkeypatch, planner: str, judge: str = "1 KEEP useful\n2 DROP repeats itself") -> list[list[dict[str, Any]]]:
     calls: list[list[dict[str, Any]]] = []
 
@@ -68,7 +127,7 @@ def _models(monkeypatch, planner: str, judge: str = "1 KEEP useful\n2 DROP repea
             return judge
         if "Reply KEEP or DROP" in sys_msg:
             return "KEEP"
-        return "Remember the London fog."
+        return "London fog over Baker Street."
 
     monkeypatch.setattr(jobs, "complete", complete)
     return calls
@@ -76,8 +135,10 @@ def _models(monkeypatch, planner: str, judge: str = "1 KEEP useful\n2 DROP repea
 
 def test_full_cycle_runs_records_and_feeds_back(monkeypatch):
     note = char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")["id"]
-    calls = _models(monkeypatch, f'check {note}\nreflect "Baker Street"\nteleport now')
+    calls = _models(monkeypatch, f'why: 1 unchecked note, so check first\ncheck {note}\nreflect "Baker Street"\nteleport now')
     r = client.post("/char/cycle", json={}).json()
+    assert r["why"] == "1 unchecked note, so check first"  # its reason, kept with the cycle and never run as a command
+    assert r["reason"] == "planner: 1 unchecked note, so check first"  # steering is off in this test: no numbers of its own to give
     assert r["cycle"] == 1 and r["proposed"] == [f'check "{note}"', 'reflect "Baker Street"', 'teleport "now"']
     assert r["rejected"] == [{"cmd": 'teleport "now"', "why": "unknown command"}]
     assert [(x["cmd"], x["outcome"]) for x in r["executed"]] == [(f'check "{note}"', "ok"), ('reflect "Baker Street"', "ok")]
@@ -93,12 +154,13 @@ def test_full_cycle_runs_records_and_feeds_back(monkeypatch):
     calls2 = _models(monkeypatch, "{{ not a command")
     r2 = harness.cycle()
     assert "worked last cycle: check, reflect" in calls2[0][1]["content"] and ": keep (" not in calls2[0][1]["content"]  # plain words, nothing to copy back as a command
-    assert r2["executed"] == [] and r2["rejected"] == [{"cmd": "{{ not a command", "why": "could not read it as a command"}]
+    assert [x["cmd"] for x in r2["executed"]] == [r2["self"]["try"]] and r2["self"]["stuck"]  # nothing to run: it picks its own way out
+    assert r2["rejected"] == [{"cmd": "{{ not a command", "why": "could not read it as a command"}]
     assert len(_sheet("Fail: planner")) == 1  # a parse failure is a self-correction
     got = client.get("/char/cycles").json()["cycles"]
     assert [c["cycle"] for c in got] == [2, 1]
     loop = harness.totals()
-    assert loop == {"cycles_run": 2, "proposed": 3, "rejected": 2, "executed": 2, "kept": 2, "dropped": 0, "swaps": 0, "swap_seconds": 0}
+    assert loop == {"cycles_run": 2, "proposed": 3, "rejected": 2, "executed": 3, "kept": 3, "dropped": 0, "swaps": 0, "swap_seconds": 0}  # its own way out (reflect) ran and found something
 
 
 def test_arg_ignored_and_planner_mode_rest(monkeypatch):
@@ -138,6 +200,19 @@ def test_ensure_swaps_and_records(monkeypatch):
     assert json.loads(_sheet("Run: model")[0]["content"])["outcome"] == "ok"
     assert client.get("/model/swap").json().keys() == {"busy", "from", "to", "phase", "fraction", "started"}
     assert llm.ensure(settings.get_all(), "B", poll=0) is None  # already active: nothing to do
+
+
+def test_a_failed_load_puts_the_old_model_back(monkeypatch):
+    calls = _server(monkeypatch, [{"active_model": "A", "loaded": ["A"], "loading": []}])
+    real = llm._api
+    def api(s, method, path, body=None, timeout=10):
+        if path == "load" and body == {"model_path": "dory"}:
+            raise RuntimeError("Some Ollama models do not work with llama.cpp")
+        return real(s, method, path, body, timeout)
+    monkeypatch.setattr(llm, "_api", api)
+    sw = llm.ensure(settings.get_all(), "dory", poll=0)
+    assert sw["ok"] is False and ("POST", "load", {"model_path": "A"}) in calls  # not left with nothing loaded
+    assert "A loaded back" in char.ENGINES["model"]["detail"]
 
 
 def test_ensure_noop_and_unknown_shape(monkeypatch):
@@ -190,6 +265,232 @@ def test_a_step_the_planner_keeps_leaving_out_is_added_to_the_cycle():
     assert harness.starved([{"name": "reflect", "arg": ""}]) in harness.COMMANDS
     assert harness.starved([{"name": "reflect", "arg": ""}]) != "reflect"
     assert harness.starved([]) != "" and harness.starved([{"name": k, "arg": ""} for k in harness.COMMANDS]) == ""
+
+
+class _FakeProc:
+    def __init__(self, *a, **k):
+        self.alive, self.cmd = True, a[0]
+    def poll(self):
+        return None if self.alive else 0
+    def terminate(self):
+        self.alive = False
+    def wait(self, timeout=None):
+        return 0
+
+
+def _engines(monkeypatch, dory_starts=True):
+    """Unsloth with A loaded on 8888, and a dory llama-server that answers on 8080 once this app has started it."""
+    settings.update({"base_url": "http://127.0.0.1:8888/v1", "dory_cmd": "~/llama.cpp-dory/build/bin/llama-server -m dory.gguf --alias dory --port 8080"})
+    calls: list[tuple[str, str, Any]] = []
+    state = {"active": "A"}
+    def api(s, method, path, body=None, timeout=10):  # a stateful Unsloth: unload empties it, load makes the model active
+        calls.append((method, path, body))
+        if path == "unload":
+            state["active"] = ""
+        elif path == "load":
+            state["active"] = body["model_path"]
+        return {"active_model": state["active"], "loaded": [state["active"]] if state["active"] else [], "loading": []} if path == "status" else {}
+    monkeypatch.setattr(llm, "_api", api)
+    started: list[_FakeProc] = []
+    def popen(*a, **k):
+        p = _FakeProc(*a, **k)
+        p.alive = dory_starts
+        started.append(p)
+        return p
+    monkeypatch.setattr(llm.subprocess, "Popen", popen)
+    monkeypatch.setattr(llm, "_up", lambda url, timeout=3: url.startswith("http://127.0.0.1:8080") and any(p.alive for p in started))
+    llm._dory["proc"] = None
+    return calls, started
+
+
+def test_dory_swaps_unsloth_out_starts_its_server_and_takes_the_calls(monkeypatch):
+    calls, started = _engines(monkeypatch)
+    sent: list[tuple[str, str]] = []
+    def client(s, timeout=None, base_url=None):
+        from types import SimpleNamespace as NS
+        def create(model, **kw):
+            sent.append((base_url, model))
+            return NS(choices=[NS(message=NS(content="ok"))])
+        return NS(chat=NS(completions=NS(create=create)))
+    monkeypatch.setattr(llm, "client", client)
+    s = settings.get_all().model_copy(update={"model_name": "dory"})
+    assert llm.chat(s, [{"role": "user", "content": "hi"}]) == "ok"
+    assert ("POST", "unload", {"model_path": "A"}) in calls and len(started) == 1 and started[0].cmd[0].endswith("llama.cpp-dory/build/bin/llama-server")
+    assert sent == [("http://127.0.0.1:8080/v1", "dory")]  # the call went to the dory engine
+    llm.chat(s, [{"role": "user", "content": "again"}])
+    assert len(started) == 1  # up already: no second start
+    # back to Unsloth: our dory stops first, then Unsloth loads the model
+    u = s.model_copy(update={"model_name": "B"})
+    llm.chat(u, [{"role": "user", "content": "now B"}])
+    assert not started[0].alive and ("POST", "load", {"model_path": "B"}) in calls and sent[-1] == ("http://127.0.0.1:8888/v1", "B")
+    assert "dory engine stopped for Unsloth" in [json.loads(r["content"])["detail"] for r in _sheet("Run: model")]
+
+
+def test_a_dory_that_will_not_start_puts_unsloths_model_back(monkeypatch):
+    calls, started = _engines(monkeypatch, dory_starts=False)
+    sw = llm.ensure(settings.get_all(), "dory", poll=0)
+    assert sw["ok"] is False and ("POST", "load", {"model_path": "A"}) in calls
+    assert "the dory server exited" in char.ENGINES["model"]["detail"] and "A loaded back" in char.ENGINES["model"]["detail"]
+
+
+def test_without_a_dory_command_dory_is_just_a_name_on_unsloth(monkeypatch):
+    settings.update({"dory_cmd": ""})
+    s = settings.get_all()
+    assert not llm.is_dory(s, "dory") and llm.url_for(s, "dory") == s.base_url
+
+
+def test_with_steps_still_to_run_it_is_never_spent_and_bookkeeping_is_no_wall(monkeypatch):
+    for _ in range(harness.STUCK_AFTER):
+        char.add_memory(f"Feedback: {_}", json.dumps([{"cmd": "reflect", "keep": False, "why": "x"}]), source="sheet")
+    char._engine("cycle", "skipped", "cycle 9: 1 proposed, 1 rejected, 0 run, 0 kept")
+    me = harness.notice(10, [{"name": "reflect", "arg": "", "role": "chat"}], [])
+    assert me["stuck"] and not me["spent"] and "cycle 9" not in me["on"]
+
+
+def test_checking_holds_back_reaching_while_questions_are_open_and_thompson_fills_an_empty_side(monkeypatch):
+    monkeypatch.setattr(char, "drive", lambda d=None: {"E": 0.2, "C": 0.6, "p_explore": 0.1, "open": 2, "tau": 0.5, "DF": 0.5, "rest": False, "judge": {"value": 0.5, "probes": 0}})
+    monkeypatch.setattr(harness.random, "random", lambda: 0.5)  # 0.5 >= p_explore: check
+    plan = [{"name": "speculate", "arg": "", "role": "planner"}, {"name": "wonder", "arg": "", "role": "planner"}]
+    got, rejected, dv = _steer(plan, [], 3, True)
+    assert dv["mode"] == "check" and all(p["name"] in char.CHECK for p in got) and len(got) == 1  # both explore steps held back, one check step put in
+    assert [r["why"].startswith("checking first") for r in rejected] == [True, True]
+    monkeypatch.setattr(harness.random, "random", lambda: 0.05)  # explore wins: the plan is left alone when it already reaches out
+    got, rejected, dv = _steer(plan, [], 3, True)
+    assert dv["mode"] == "explore" and got == plan and rejected == []
+
+
+def test_the_judge_is_shown_one_settled_step_blind_and_its_agreement_is_its_trust(monkeypatch):
+    monkeypatch.setattr(llm, "ensure", lambda s, m: None)
+    monkeypatch.setattr(jobs, "complete", lambda s, msgs, max_tokens=0: "1 KEEP fine\n2 DROP looks off")
+    executed = [{"cmd": "wonder", "name": "wonder", "outcome": "ok", "detail": "a question", "made": []},
+                {"cmd": "journal", "name": "journal", "outcome": "ok", "detail": "wrote", "made": []}]
+    monkeypatch.setattr(char, "NO_MODEL", {"journal"})
+    v = harness.verify(executed, settings.get_all(), [])
+    assert [x["keep"] for x in v] == [True, True]  # the probe never changes the settled verdict
+    assert char.judge_trust() == {"value": round(1 / 3, 3), "probes": 1}  # it said DROP to a step the exact check kept: one miss
+
+
+def test_the_reason_carries_the_drive_numbers_even_when_the_planner_gives_none(monkeypatch):
+    monkeypatch.setattr(harness, "steer", _steer)
+    monkeypatch.setattr(char, "drive", lambda d=None: {"E": 0.6, "C": 0.2, "tau": 0.3, "p_explore": 0.79, "DF": 0.5, "rest": False, "open": 0, "unchecked": 0, "judge": {"value": 0.5, "probes": 0}})
+    monkeypatch.setattr(harness.random, "random", lambda: 0.1)  # explore
+    _models(monkeypatch, 'reflect "fog"')  # a planner that skips the why line
+    r = harness.cycle()
+    assert r["reason"] == "explore: explore 0.6 vs check 0.2 at τ 0.3, P explore 0.79" and r["why"] == ""
+
+
+def test_the_controller_turns_away_other_work_and_drops_a_copied_description(monkeypatch):
+    monkeypatch.setattr(char, "world_words", lambda: {"Sagira", "Osiris", "Vex", "Destiny"})
+    plan, rejected = harness.validate([{"name": "reflect", "arg": "Vex in *Mass Effect*"}, {"name": "reflect", "arg": "Osiris in ancient Egyptian mythology"},
+                                       {"name": "reflect", "arg": "Where is Sagira in Destiny?"}, {"name": "goal", "arg": "turn the oldest open plan line into one question"}])
+    assert [r["why"].startswith("off its world") for r in rejected] == [True, True]  # run 18 searched both, and the gate had to throw one away
+    assert [(p["name"], p["arg"]) for p in plan] == [("reflect", "Where is Sagira in Destiny?"), ("goal", "")]  # its own description is not a topic
+
+
+def test_its_own_open_question_is_not_turned_away_as_off_world(monkeypatch):
+    monkeypatch.setattr(char, "world_words", lambda: {"Sagira", "Destiny"})
+    char.set_system(1, False)  # marks the persona's start, so the question comes after it
+    char.add_memory("Question", "How did unfreezing Panoptes start?", source="question")
+    plan, rejected = harness.validate([{"name": "reflect", "arg": "How did unfreezing Panoptes start?"}])
+    assert [p["arg"] for p in plan] == ["How did unfreezing Panoptes start?"] and not rejected  # run 20 turned this away eight times
+
+
+def test_a_starved_step_is_not_one_that_would_be_turned_away():
+    for k in harness.COMMANDS:
+        char._engine(k, "ok", "ran")
+    char._engine("review", "skipped", "no new reply to review")
+    for _ in range(12):
+        char.add_memory("Run: reflect", '{"outcome": "ok"}', source="sheet")
+    assert "review" in harness.unavailable()
+    assert harness.starved([{"name": k, "arg": ""} for k in harness.COMMANDS if k != "review"]) == ""  # run 20 put a stale review up front every cycle
+
+
+def test_the_steer_engine_steers_the_characters_steps_and_nothing_else(monkeypatch):
+    from shared import steer
+    note = char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")["id"]
+    seen: list[tuple[str, dict[str, float]]] = []
+    calls = _models(monkeypatch, f"check {note}")
+    inner = jobs.complete
+
+    def complete(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
+        seen.append((messages[0]["content"][:20], dict(steer.ON)))
+        return inner(s, messages, **kw)
+
+    monkeypatch.setattr(jobs, "complete", complete)
+    monkeypatch.setattr(steer, "available", lambda: True)
+    monkeypatch.setattr(steer, "world_concept", lambda: "world-x")
+    monkeypatch.setattr(llm, "ensure", lambda s, m, **k: None)
+    monkeypatch.setattr(harness.random, "random", lambda: 0.5)
+    monkeypatch.setattr(harness.random, "betavariate", lambda a, b: a / (a + b))
+    settings.update({"chat_model": llm.STEER})
+    r = harness.cycle()
+    assert r["steer"]["concept"] == "world-x" and r["steer"]["eps"] in steer.LEVELS and "steered toward its world" in r["reason"]
+    planner = [on for who, on in seen if who.startswith("You plan")]
+    judge = [on for who, on in seen if who.startswith("You judge")]
+    steps = [on for who, on in seen if not who.startswith(("You plan", "You judge"))]
+    assert planner == [{}] and all(on == {} for on in judge)  # the planner and the judge are never steered
+    assert steps and all(on == {"world-x": r["steer"]["eps"]} for on in steps)  # the character's own step is
+    assert steer.ON == {} and _sheet("Steer")
+    settings.update({"chat_model": "dory"})  # pick another engine and nothing is steered
+    assert harness.pick_steer(settings.get_all()) == ("", 0.0, "")
+
+
+def test_steer_arms_favour_the_strength_that_raised_j():
+    for dj in (0.05, 0.03, 0.03):
+        char.add_memory("Steer", json.dumps({"concept": "w", "eps": 0.03, "dJ": dj}), source="sheet")
+    char.add_memory("Steer", json.dumps({"concept": "w", "eps": 0.0, "dJ": -0.02}), source="sheet")
+    A = harness.steer_arms()
+    assert A[0.03][0] > A[0.03][1] and A[0.0][1] > A[0.0][0] and A[0.02] == (1.0, 1.0)
+
+
+def test_the_truth_concept_steers_beside_the_world_when_the_world_strength_is_above_zero(monkeypatch):
+    from shared import steer
+    note = char.add_memory("Reflection: fog", "Fog lies over London.", source="reflection")["id"]
+    seen: list[tuple[str, dict[str, float]]] = []
+    _models(monkeypatch, f"check {note}")
+    inner = jobs.complete
+
+    def complete(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
+        seen.append((messages[0]["content"][:20], dict(steer.ON)))
+        return inner(s, messages, **kw)
+
+    monkeypatch.setattr(jobs, "complete", complete)
+    monkeypatch.setattr(steer, "available", lambda: True)
+    monkeypatch.setattr(steer, "world_concept", lambda: "world-x")
+    monkeypatch.setattr(steer, "truth_concept", lambda: "truth-x")
+    monkeypatch.setattr(llm, "ensure", lambda s, m, **k: None)
+    monkeypatch.setattr(harness, "steer_arms", lambda: {e: (1 + 100 * e, 1.0) for e in steer.LEVELS})  # the strongest level wins every draw
+    monkeypatch.setattr(harness.random, "betavariate", lambda a, b: a / (a + b))
+    monkeypatch.setattr(harness.random, "random", lambda: 0.5)
+    settings.update({"chat_model": llm.STEER})
+    r = harness.cycle()
+    assert r["steer"]["eps"] > 0 and r["steer"]["truth"] == "truth-x"
+    steps = [on for who, on in seen if not who.startswith(("You plan", "You judge"))]
+    assert steps and all(on == {"world-x": r["steer"]["eps"], "truth-x": steer.TRUTH_EPS} for on in steps)
+    assert all(on == {} for who, on in seen if who.startswith(("You plan", "You judge")))
+    assert steer.ON == {}
+
+
+def test_get_settings_shows_what_is_stored_not_a_stage_override():
+    settings.update({"chat_model": "dory"})
+    settings.OVERRIDE["chat_model"] = llm.STEER
+    try:
+        assert settings.get_all().chat_model == llm.STEER
+        assert client.get("/settings").json()["chat_model"] == "dory"
+    finally:
+        settings.OVERRIDE.clear()
+
+
+def test_pick_steer_skips_the_truth_fit_when_eps_is_zero(monkeypatch):
+    monkeypatch.setattr(harness, "steerable", lambda s: True)
+    monkeypatch.setattr(harness.llm, "ensure", lambda *a, **k: None)
+    monkeypatch.setattr(steer, "world_concept", lambda: "w")
+    monkeypatch.setattr(steer, "truth_concept", lambda: "t")
+    monkeypatch.setattr(harness, "steer_arms", lambda: {0.0: (9.0, 1.0), 0.01: (1.0, 9.0), 0.02: (1.0, 9.0), 0.03: (1.0, 9.0)})
+    monkeypatch.setattr(harness.random, "betavariate", lambda a, b: a / (a + b))
+    assert harness.pick_steer(settings.get_all()) == ("w", 0.0, "")
+    monkeypatch.setattr(harness, "steer_arms", lambda: {0.0: (1.0, 9.0), 0.01: (1.0, 9.0), 0.02: (1.0, 9.0), 0.03: (9.0, 1.0)})
+    assert harness.pick_steer(settings.get_all()) == ("w", 0.03, "t")
 
 
 def test_a_planner_that_recites_the_catalogue_still_answers_the_open_questions(monkeypatch):

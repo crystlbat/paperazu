@@ -1,7 +1,10 @@
 import json
 import threading
 
+import pytest
+
 from harness_char import char, train
+from shared import llm, settings, steer
 
 
 def _run(monkeypatch, curiosities, cfg):
@@ -12,6 +15,10 @@ def _run(monkeypatch, curiosities, cfg):
         level["c"] = next(it, level["c"])
         return "ok", "reflect: something"
     monkeypatch.setattr(train, "_one_step", step)
+    return _run_with(monkeypatch, cfg)
+
+
+def _run_with(monkeypatch, cfg):
     con = train._con()
     with con:
         run_id = con.execute("INSERT INTO train_runs (persona, config, status) VALUES (?, ?, 'running')", (char.get_profile()["name"], json.dumps(cfg))).lastrowid
@@ -106,3 +113,126 @@ def test_stopping_a_run_makes_the_cycle_in_hand_skip_what_it_has_not_started(mon
     finally:
         harness.CANCEL.clear()
     assert ran == [] and out[0]["outcome"] == "skipped" and out[0]["detail"] == "stopped before it ran"
+
+
+def test_a_run_ends_in_its_own_words_when_it_has_nothing_left_to_try(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    char.add_memory("Resting: char Sagira", "0", source="sheet")
+    said = "I keep hitting the same wall (x). I have tried every way to make new work on my own and none can run now. I will rest until something new comes in."
+    steps = iter([("ok", "reflect: a"), ("stuck", said), ("ok", "never runs")])
+    run_id = _run(monkeypatch, [5.0], {"max_steps": 50, "hi": 1.0})
+    assert train.status()["runs"][0]["why"] == "used all 50 steps"  # the plain run, for contrast
+    monkeypatch.setattr(train, "_one_step", lambda: next(steps))
+    con = train._con()
+    with con:
+        run_id = con.execute("INSERT INTO train_runs (persona, config, status) VALUES ('Sagira', '{}', 'running')").lastrowid
+    con.close()
+    train.RUN.clear(); train.RUN.update(id=run_id, pause=threading.Event(), stop=threading.Event())
+    train._loop(run_id, {**train.DEFAULTS, "max_steps": 50})
+    r = train.status()["runs"][0]
+    assert r["status"] == "done" and r["why"] == said and [x["kind"] for x in r["log"]] == ["start", "ok", "stuck"]
+
+
+def test_a_late_tick_does_not_split_one_stretch_of_work_into_two_lanes(monkeypatch):
+    import threading
+    from harness_char import char, train
+    clock, ticks = [100.0], iter([0.1, 0.4, 0.1])  # the second sleep overshoots, as on a busy machine
+
+    def sleep(_):
+        clock[0] += next(ticks)
+    alive = iter([True, True, True, False])
+
+    class Run:
+        is_alive = staticmethod(lambda: next(alive))
+    monkeypatch.setattr(train.time, "sleep", sleep)
+    monkeypatch.setattr(train.time, "time", lambda: clock[0])
+    monkeypatch.setattr(train, "RUN", {"thread": Run(), "pause": threading.Event(), "lanes": [], "clock": 0.0})
+    monkeypatch.setattr(char, "NOW", {"sys": 2, "kind": "planner"})
+    train._sample(every=0.1)
+    assert train.RUN["lanes"] == [[2, "planner", 0.0, 0.6]]
+
+
+def test_a_sampler_stops_with_its_own_run_not_the_next_one(monkeypatch):
+    import threading, time as _t
+    from harness_char import char, train
+    mine = threading.Thread(target=_t.sleep, args=(0.5,)); mine.start()  # still alive when the next run takes RUN over
+    old = {"thread": mine, "pause": threading.Event(), "lanes": [], "clock": 0.0}
+    monkeypatch.setattr(train, "RUN", old)
+    nxt = threading.Thread(target=_t.sleep, args=(0.3,)); nxt.start()
+    monkeypatch.setattr(char, "NOW", {"sys": 2, "kind": "planner"})
+    sampler = threading.Thread(target=train._sample, kwargs={"every": 0.05}); sampler.start()
+    old.clear(); old.update(thread=nxt, pause=threading.Event())  # a new run starts while the old sampler is about: start() refills the same dict
+    _t.sleep(0.1)
+    old.update(lanes=[], clock=0.0)
+    sampler.join(1)
+    assert not sampler.is_alive() and old["lanes"] == []  # its run had ended: it drew nothing into the next one, and did not crash on the half-filled dict
+    nxt.join()
+
+
+def test_a_pipeline_run_gathers_fits_then_steers_round_after_round(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    models, fits = [], []
+    monkeypatch.setattr(train, "_one_step", lambda: (models.append(settings.get_all().model_name), ("ok", "x"))[1])
+    monkeypatch.setattr(llm, "ensure", lambda s, m, **k: fits.append(m))
+    monkeypatch.setattr(steer, "world_concept", lambda: "w")
+    monkeypatch.setattr(steer, "truth_concept", lambda: "")
+    monkeypatch.setattr(char, "disposition", lambda: {"curiosity": 5.0, "maturity": 0.1})
+    run_id = _run_with(monkeypatch, {"gather": "dory", "gather_steps": 2, "steer_steps": 1, "max_steps": 8})
+    log = train.status()["runs"][0]["log"][1:]
+    assert [e["stage"] for e in log] == ["gather", "gather", "fit", "steer"] * 2
+    assert models == ["dory", "dory", llm.STEER, "dory", "dory", llm.STEER]
+    assert fits == [llm.STEER, llm.STEER] and "truth not enough facts yet" in log[2]["outcome"]
+    assert settings.OVERRIDE == {} and run_id
+
+
+def test_a_pipeline_run_starts_in_planner_mode_and_needs_a_step_to_run(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    monkeypatch.setattr(train, "_loop", lambda run_id, c: None)
+    monkeypatch.setattr(train, "_sample", lambda *a: None)
+    with pytest.raises(ValueError, match="at least one"):
+        train.start({"gather": "dory", "gather_steps": 0, "steer_steps": -3})
+    assert char.mode() == "curious"
+    train.start({"gather": "dory"})
+    assert char.mode() == "planner"
+
+
+def test_a_pipeline_run_refuses_the_steer_engine_to_gather_on():
+    with pytest.raises(ValueError, match="server engine"):
+        train.start({"gather": llm.STEER})
+
+
+def test_a_pipeline_run_can_steer_another_mlx_model(monkeypatch):
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    models, fits = [], []
+    monkeypatch.setattr(train, "_one_step", lambda: (models.append(settings.get_all().model_name), ("ok", "x"))[1])
+    monkeypatch.setattr(llm, "ensure", lambda s, m, **k: fits.append(m))
+    monkeypatch.setattr(steer, "world_concept", lambda: "w")
+    monkeypatch.setattr(steer, "truth_concept", lambda: "")
+    monkeypatch.setattr(char, "disposition", lambda: {"curiosity": 5.0, "maturity": 0.1})
+    _run_with(monkeypatch, {"gather": "dory", "gather_steps": 1, "steer_steps": 1, "max_steps": 3, "steer_model": "mlx:org/gemma"})
+    assert models == ["dory", "mlx:org/gemma"] and fits == ["mlx:org/gemma"]
+    with pytest.raises(ValueError, match="in-process MLX"):
+        train.start({"gather": "dory", "steer_model": "dory"})
+
+
+def test_fit_all_fits_each_mlx_model_in_turn_one_in_memory(monkeypatch, tmp_path):
+    import numpy as np
+    loaded = []
+    monkeypatch.setattr(llm, "ensure", lambda s, m, **k: loaded.append(m))
+    monkeypatch.setattr(steer, "world_concept", lambda: f"w-{loaded[-1]}")
+    monkeypatch.setattr(steer, "truth_concept", lambda: "")
+    monkeypatch.setattr(steer, "vectors", lambda c: {"corr": np.array([0.0, 0.4, 0.9])})
+    got = train.fit_all([llm.STEER, "mlx:org/gemma", llm.STEER])
+    assert loaded == [llm.STEER, "mlx:org/gemma"]  # each once, in order
+    assert [(g["model"], g["world"], g["world_fit"], g["truth"]) for g in got] == [(llm.STEER, f"w-{llm.STEER}", 0.9, ""), ("mlx:org/gemma", "w-mlx:org/gemma", 0.9, "")]
+    with pytest.raises(ValueError, match="in-process MLX"):
+        train.fit_all(["dory"])
+
+
+def test_a_second_fit_waits_its_turn(monkeypatch):
+    train._fit_lock.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="already going"):
+            train.fit_all([llm.STEER])
+    finally:
+        train._fit_lock.release()

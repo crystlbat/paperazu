@@ -17,11 +17,12 @@ PER_SERVER = ("model_name", "embed_model", "planner_model", "chat_model", "judge
 class Engine(BaseModel):
     """A way to run models: a server and what to use on it. `kind` says what the server can do: unsloth loads and swaps
     models on demand (role models swap here); llama.cpp holds the one model it was started with; openai is any other
-    OpenAI-compatible server. New kinds of server can be added here as they come."""
+    OpenAI-compatible server; mlx runs its model in this process, where its hidden states can be read and steered (its URL is
+    the server left for embeddings). New kinds of server can be added here as they come."""
     model_config = ConfigDict(extra="forbid")
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")
     name: str = Field(min_length=1, max_length=40)
-    kind: Literal["llama.cpp", "unsloth", "openai"] = "openai"
+    kind: Literal["llama.cpp", "unsloth", "openai", "mlx"] = "openai"
     note: str = Field("", max_length=200)
     values: dict[str, Any] = {}
 
@@ -45,6 +46,9 @@ class Settings(BaseModel):
     planner_model: str = ""
     chat_model: str = ""
     judge_model: str = ""
+    # the dory engine: its own llama-server build, started on demand when a role picks "dory"; empty command = no dory engine
+    dory_cmd: str = ""
+    dory_url: str = "http://127.0.0.1:8080/v1"
     temperature: float = Field(0.2, ge=0, le=1)
     max_context_tokens: int = Field(32768, ge=2048, le=262144)
     max_output_tokens: int = Field(1024, ge=64, le=16384)
@@ -72,7 +76,7 @@ class Settings(BaseModel):
             raise ValueError("two engines have the same name")
         return out
 
-    @field_validator("base_url")
+    @field_validator("base_url", "dory_url")
     @classmethod
     def _url(cls, v: str) -> str:
         v = v.strip().rstrip("/")
@@ -101,7 +105,15 @@ def read_env(path: Path = ROOT / ".env") -> dict[str, str]:
     return {ENV_KEYS[k]: v for k, v in values.items() if k in ENV_KEYS and v != ""}
 
 
+OVERRIDE: dict[str, Any] = {}  # a pipeline stage's models; never written to the DB, so a crash cannot leave a stage's engine behind
+
+
 def get_all() -> Settings:
+    return Settings(**{**read_env(), **db.get_settings(), **OVERRIDE})
+
+
+def stored() -> Settings:
+    """What is saved, without a pipeline stage's override: what the Models panel shows and writes back."""
     return Settings(**{**read_env(), **db.get_settings()})
 
 

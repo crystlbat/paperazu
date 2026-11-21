@@ -10,7 +10,7 @@ from typing import Any
 
 from openai import APIConnectionError, APIStatusError, AuthenticationError
 
-from shared import llm, settings
+from shared import llm, settings, steer
 from shared.settings import ENGINE_KEYS, PER_SERVER, Engine, Settings
 
 
@@ -25,6 +25,7 @@ def _seeds(s: Settings) -> list[dict[str, Any]]:
                values={"base_url": "http://127.0.0.1:8080/v1", "model_name": "dory"}),
         Engine(id="unsloth", name="Unsloth Studio", kind="unsloth", note="Loads and swaps models on demand. Role models swap here.",
                values={"base_url": "http://127.0.0.1:8888/v1", "api_key": s.api_key}),
+        *([_mlx(s)] if steer.available() else []),
     ]
     out = [e.model_dump() for e in seeds]
     live = {k: getattr(s, k) for k in ENGINE_KEYS}
@@ -36,9 +37,17 @@ def _seeds(s: Settings) -> list[dict[str, Any]]:
     return out
 
 
+def _mlx(s: Settings) -> Engine:
+    return Engine(id="mlx", name="Steer (MLX)", kind="mlx", note="Runs in this process, so its hidden states can be steered. Embeddings stay on Unsloth.",
+                  values={"base_url": "http://127.0.0.1:8888/v1", "api_key": s.api_key, "model_name": llm.STEER})
+
+
 def ensure_seeded() -> Settings:
     s = settings.get_all()
     if s.engines:
+        if steer.available() and not any(e.get("kind") == "mlx" for e in s.engines):
+            # shortcut: engines saved before the mlx kind get it added once; removing it brings it back, add a "dismissed" list if that annoys
+            s = settings.update({"engines": [*s.engines, _mlx(s).model_dump()]})
         return s
     seeds = _seeds(s)
     here = next(e["id"] for e in seeds if e["values"].get("base_url") == s.base_url)
@@ -47,6 +56,10 @@ def ensure_seeded() -> Settings:
 
 def _probe(s: Settings, e: dict[str, Any]) -> dict[str, Any]:
     """Is the engine's server up, and what does it have loaded? Never raises."""
+    if e["kind"] == "mlx":  # no server to ask: it is ready when MLX is installed, loaded once a call needs it
+        name = e["values"].get("model_name") or llm.STEER
+        on = steer.loaded() and llm.mlx_loaded() == name
+        return {"status": "ready", "label": "Loaded" if on else "Loads when needed", "models": [name], "loaded": [name] if on else []}
     t = s.model_copy(update=e["values"])
     try:
         listed = list(llm.client(t, timeout=3).models.list())
@@ -98,6 +111,8 @@ def use(eid: str) -> dict[str, Any]:
     new = settings.update(patch)
     llm.forget()
     note = ""
+    if before and before["id"] != eid and before["kind"] == "mlx" and steer.unload():  # its model leaves memory with it
+        llm.on_engine("model", "ok", "steer engine unloaded")
     if before and before["id"] != eid and before["kind"] == "llama.cpp":
         note = f"{before['name']} keeps its model in memory until you stop its server. Stop it before loading a model on {e['name']}."
     return {"settings": new.model_dump(), "note": note}

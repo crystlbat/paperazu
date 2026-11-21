@@ -109,6 +109,31 @@ def char_sorter(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     return char.sorter(int(body.get("limit") or 1))
 
 
+@router.post("/char/steer/fit")
+def char_steer_fit(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Fit the world and truth vectors for each named MLX model in turn (default: the steer engine)."""
+    try:
+        return {"fits": train.fit_all([str(m) for m in body.get("models") or [llm.STEER]])}
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, detail=str(e))
+
+
+@router.post("/char/polish")
+def char_polish(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Prune the old notes on one engine (default: the saved model); the next fit refits the truth concept from what is left."""
+    model = (body.get("model") or "").strip()
+    if llm.is_steer(model):
+        raise HTTPException(400, "polish on a server engine (dory or an Unsloth model), not an in-process MLX model")
+    if model:
+        llm.ensure(settings.get_all(), model)
+        settings.OVERRIDE["model_name"] = model
+    try:
+        out = char.polish()
+    finally:
+        settings.OVERRIDE.pop("model_name", None)
+    return out
+
+
 @router.post("/char/reflect")
 def char_reflect(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     return char.reflect(on_char=bool(body.get("char")))
@@ -233,7 +258,7 @@ def char_want(want_id: int, body: dict[str, Any] = Body(default={})) -> dict[str
 def char_report() -> dict[str, Any]:
     return {**char.report(*_model()), "harness_loop": harness.totals(), "cycles": harness.cycles(30), "mode": char.mode(), "tracker": char.tracker(),
             "race": verse.live_race(), "train": train.status(), "letter": char.letter(), "now": dict(char.NOW),
-            "model_name": (lambda c: c.chat_model or c.model_name or "")(settings.get_all()), "models": _model_seen.get("models", [])}
+            "model_name": (lambda c: c.chat_model or c.model_name or "")(settings.get_all()), "models": [m for m in _model_seen.get("models", []) if "embed" not in m.lower()]}  # an embedding model cannot think: picking one breaks every reply
 
 
 @router.post("/char/cycle")

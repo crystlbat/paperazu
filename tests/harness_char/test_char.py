@@ -259,7 +259,7 @@ def _reflect_mocks(monkeypatch, found=True, model_ok=True):
 
     def search(s: Any, q: str) -> dict[str, Any]:
         topics.append(q)
-        return {"results": [{"title": "T1", "url": "u", "snippet": "S1"}, {"title": "T2", "url": "u", "snippet": "S2"}] if found else []}
+        return {"results": [{"title": "T1", "url": "u", "snippet": "S1 remember"}, {"title": "T2", "url": "u", "snippet": "S2"}] if found else []}
 
     def complete(s: Any, messages: list[dict[str, Any]], **kw: Any) -> str:
         if not model_ok:
@@ -285,7 +285,7 @@ def test_reflect_walks_the_topics_then_is_done(monkeypatch):
 def test_reflect_falls_back_to_the_snippets_when_the_model_fails(monkeypatch):
     _reflect_mocks(monkeypatch, model_ok=False)
     r = char.reflect(on_char=True)
-    assert r["note"] == "- T1: S1 - T2: S2"
+    assert r["note"] == "- T1: S1 remember - T2: S2"
     assert char.reflect(on_char=True)["topic"] != r["topic"]  # the first one was saved
 
 
@@ -296,6 +296,17 @@ def test_reflect_saves_nothing_when_search_finds_nothing(monkeypatch):
     con = db.connect(); n = con.execute("SELECT count(*) FROM char_memories WHERE source = 'reflection'").fetchone()[0]; con.close()
     assert n == 0 and _memories("sheet") == [(f"Reflection: {r['topic']}"[:80], "(nothing found)")]
     assert char.reflect(on_char=True)["topic"] != r["topic"]  # the failed topic no longer blocks the next
+
+
+def test_a_dead_topic_cut_at_a_space_is_let_go(monkeypatch):
+    # the 80-char key ends on a space here: the marker must still match it, or reflect retries this topic forever and nothing is answered
+    _reflect_mocks(monkeypatch, found=False)
+    q = 'What is the significance of the "Curse of Osiris" in the context of the ancient Egyptian "Book of th?'
+    assert f"Reflection: {q}"[:80].endswith(" ")
+    char.add_memory(f"Question: {q}"[:80], f"{q} (from 0)", source="question")
+    assert char.reflect(on_char=True)["topic"] == q
+    assert q not in char._open_questions()
+    assert char.reflect(on_char=True, topic=q)["done"]
 
 
 def test_a_reflection_reaches_the_next_char_prompt_and_the_route(monkeypatch, mock_model):
@@ -457,6 +468,16 @@ def test_wonder_falls_back_and_never_leaves_more_than_three_open(monkeypatch):
     qs = _memories("question")
     assert [c for _, c in qs][0].startswith("What else matters about t0?") and len(qs) == 3
     assert len(char.rest(True, 1)["questions"]) == 3
+
+
+def test_a_question_too_long_to_keep_is_not_saved_clipped(monkeypatch):
+    _rest_mocks(monkeypatch)
+    long_q = "What is the significance of the Curse of Osiris in the context of the ancient Egyptian Book of the Dead and Thoth"
+    monkeypatch.setattr(char, "_ask", lambda *a, **k: long_q)
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    char.add_memory("Reflection: fog", "fog", source="reflection")
+    char.rest(True, 1)
+    assert [c.split(" (from")[0] for _, c in _memories("question")] == ["What else matters about fog?"]  # the plain fallback, not the long one cut to "...Book of th?"
 
 
 def test_rest_route(monkeypatch):
@@ -725,15 +746,16 @@ def test_curiosity_and_maturity_follow_the_formula_and_curiosity_is_the_brake(mo
     char.rest(True, 0)  # a character that knows no names is not braked: it reads about its world first
     _name("Watson", known=True); _name("Moriarty")
     d = char.disposition()  # tau = mean(unmet / 3) = (2/3 + 3/3) / 2; nothing consolidated yet, so no damping and both names are new
-    assert (d["tau"], d["dnE"], d["maturity"], d["curiosity"]) == (0.83, 2, 0.0, 5.0)  # 1.67 + frontier term D*(1-F) = 4*(1-1/6): question c=0/(0+3), note c=1/(1+2) (the world note names nothing), F=1/6
+    assert (d["tau"], d["dnE"], d["maturity"], d["curiosity"]) == (0.83, 2, 0.0, 2.33)  # 1.67 + frontier term D*F = 4*(1/6): question c=0/(0+3), note c=1/(1+2) (the world note names nothing), F=1/6
     char.add_memory("Baked", '{"nE": 2, "nAE": 2}', source="sheet")
     d = char.disposition()  # consolidated: maturity = 1 - exp(-2/2), and with no new name since, curiosity is 0
-    assert (d["maturity"], d["dnE"], d["curiosity"]) == (0.63, 0, 3.33)  # only the frontier term is left
+    assert (d["maturity"], d["dnE"], d["curiosity"]) == (0.63, 0, 0.67)  # only the frontier term is left: the open share, not the answered one
+    assert round(d["dial"] * (d["terms"]["names"] + d["terms"]["frontier"]) + d["momentum"], 2) == d["curiosity"] and d["optim"]["since_bake"] == 0  # the parts the page shows add up to what it says
     assert char.rest(True, 0, force=True)["kind"] == "reflect"  # your own tap still runs a step
     _name("Irene")
     assert char.disposition()["curiosity"] == round((1 / 3 + 1 + 1) / 3 * 1 * 2.718281828 ** -1 + char.frontier()["term"], 2)  # a new name wakes it, damped by what it already knows (the tap answered one more of Watson's questions)
     assert char.rest(True, 0)["kind"] == "reflect"
-    assert [s["name"] for s in char.monitor()["series"]] == ["curiosity", "maturity", "frontier"] and char.monitor()["steps"] >= 2
+    assert [s["name"] for s in char.monitor()["series"]] == ["curiosity", "maturity", "frontier", "score"] and char.monitor()["steps"] >= 2
 
 
 def test_three_systems_plan_goal_execute_and_switch_off(monkeypatch):
@@ -771,6 +793,7 @@ def test_guess_then_correct_scores_surprise(monkeypatch):
     assert char._surprise("his loyal butler", "Alfred is the loyal butler of Bruce Wayne") == 0.0
     assert char._surprise("a rival detective", "Alfred is the loyal butler of Bruce Wayne") == 1.0
     char.add_memory("Question: Who is Alfred?", "Who is Alfred? (from 0)", source="question")
+    monkeypatch.setattr(char, "_intake", lambda *a: True)  # an admitted find: the guess is scored against it
     seen, inner = [], jobs.complete
     monkeypatch.setattr(jobs, "complete", lambda st, m, **k: seen.append(m) or inner(st, m, **k))
     r = char.reflect(True)  # the mock guesses and finds the same words: no surprise
@@ -788,7 +811,7 @@ def test_names_from_separate_chats_get_a_link_question(monkeypatch):
     for name in ("Batman", "Alfred"):  # each met in its own note: no edge between them
         note = char.add_memory(f"Reflection: {name}", f"{name} lives in Gotham.", source="reflection")
         char.add_memory(f"Entity: {name}", str(note["id"]), source="entity")
-    assert "How are Batman and Alfred connected?" in char.asker(limit=9)
+    assert {"How are Batman and Alfred connected?", "How are Alfred and Batman connected?"} & set(char.asker(limit=9))  # the more recently mentioned name leads
 
 
 def test_modes_quiet_stops_and_proactive_speaks_first(monkeypatch):
@@ -835,6 +858,7 @@ def test_a_note_naming_what_its_sources_do_not_is_rejected_without_the_model(mon
     _rest_mocks(monkeypatch)
     char.update_profile("Sherlock", "a detective", [], "#fff")
     monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "It was made by Jo Carrington in Gotham.")  # neither name is in the snippets
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "1. SUPPORTED")  # the claim checker lets it through; the gate is under test
     r = char.reflect(True)  # the intake gate reads the grounding exactly, before the model is asked
     assert r["admitted"] is False
     assert next(n for n in char.report(True, "m")["notes"] if n["topic"] == r["topic"])["gate"] == ["reject", "names things its sources do not say"]
@@ -1063,7 +1087,7 @@ def test_frontier_counts_what_points_nowhere(monkeypatch):
     fr = char.frontier()
     # plan: open 0 (has question), questions 2 -> 0/(0+2)=0; question: open 1 (q2), notes 1 -> 1/2; note: open 0, names 1 -> 0
     assert fr["layers"] == {"plan": 0.0, "question": 0.5, "note": 0.0}
-    assert (fr["F"], fr["D"], fr["term"]) == (round(0.5 / 3, 4), 4, round(4 * (1 - 0.5 / 3), 4))
+    assert (fr["F"], fr["D"], fr["term"]) == (round(0.5 / 3, 4), 4, round(4 * 0.5 / 3, 4))  # the open work pulls: one question in two still without a note
     assert char.disposition()["frontier"] == fr and char.disposition()["curiosity"] >= fr["term"] - 0.01
 
 
@@ -1074,14 +1098,15 @@ def test_frontier_empty_mesh_changes_nothing(monkeypatch):
     assert char.disposition()["curiosity"] == 0.0  # no names: tau * dnE = 0, term 0
 
 
-def test_frontier_brake_holds_only_when_nothing_deeper_is_open(monkeypatch):
+def test_curiosity_settles_when_nothing_is_open_and_an_open_question_pulls_it_up(monkeypatch):
     _rest_mocks(monkeypatch)
     char.update_profile("Sherlock", "a detective", [], "#fff")
     _name("Watson", known=True)
     char.add_memory("Baked", '{"nE": 1, "nAE": 1}', source="sheet")  # dnE = 0, so only the term is left
     d = char.disposition()
-    assert d["frontier"]["F"] == 0 and d["frontier"]["D"] > 0 and d["curiosity"] > 0  # closed mesh, D > 0: not braked
-    assert char.rest(True, 0)["kind"] == "reflect"  # an EXPLORES step runs: not braked
+    assert d["frontier"]["F"] == 0 and d["frontier"]["D"] > 0 and d["curiosity"] == 0  # all answered: it settles, the brake can hold
+    char.add_memory("q", "Who is Moriarty? (from 0)", source="question")  # a new open question, say from a speculation
+    assert char.disposition()["curiosity"] > 0
 
 
 def test_system_switch_and_mode_do_not_leak_into_a_new_persona():
@@ -1141,7 +1166,7 @@ def test_report_route_shape_counts_and_persona_scoping(monkeypatch):
     con.close()
     char.add_memory("Baked", '{"nE": 0, "nAE": 0}', source="sheet")
     r = client.get("/char/report").json()
-    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "series", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train", "letter", "now", "model_name", "models"}
+    assert set(r) == {"who", "you", "life", "since", "model", "totals", "corrections", "learned", "disposition", "drive", "series", "gains", "arms", "steer", "harness", "trace", "harness_loop", "notes", "cycles", "mode", "tracker", "race", "train", "letter", "now", "model_name", "models"}
     assert r["who"] == "Sherlock" and r["since"] and r["model"] == {"up": True, "label": "Model ready"}
     t = r["totals"]
     assert t["steps"] == t["ok"] + t["skipped"] + t["failed"] == len(r["trace"]) and t["ok"] == 3 and t["skipped"] >= 2  # reflect, the intake gate, and one more
@@ -1672,6 +1697,199 @@ def test_a_correction_that_does_not_ask_for_a_look_up_researches_nothing(monkeyp
     ("I remember the Mind Stone well.", False)])
 def test_base_model_disclaimers_are_slips_but_an_ai_persona_is_not(reply, slip):
     assert bool(char.SLIP.search(reply)) == slip
+
+
+def _speculate_mocks(monkeypatch, found: str):
+    from shared import websearch
+    monkeypatch.setattr(websearch, "search", lambda s, q: {"results": [{"title": "T", "url": "u", "snippet": found}]})
+    def complete(s, messages, **kw):
+        if "speculate" in messages[0]["content"]:
+            return "Guess: Osiris hides the Book of Thoth inside the Infinite Forest.\nQuestion: Where does Osiris hide the Book of Thoth?"
+        return found  # the note reflect writes says what the search found
+    monkeypatch.setattr(jobs, "complete", complete)
+
+
+@pytest.mark.parametrize("found, held", [("Osiris hides the Book of Thoth inside the Infinite Forest.", True), ("Panoptes guards the Mercury gardens.", False)])
+def test_it_speculates_from_a_summary_checks_the_guess_and_keeps_it_only_when_it_holds(monkeypatch, found, held):
+    from harness_char import train
+    _speculate_mocks(monkeypatch, found)
+    char.update_profile("Sagira", "You are Sagira, in a world of Osiris, Thoth and the Infinite Forest.", [], "")
+    char.add_memory("Resting: char Sagira", "0", source="sheet")
+    monkeypatch.setattr(char, "on_world", lambda *a, **k: True)
+    monkeypatch.setattr(char, "_intake", lambda *a: True)  # the find is on its world and supported: only then is the guess held against it
+    char.add_memory("Summary: Osiris", "Osiris is a Warlock. He studies the Vex. He found the Infinite Forest.", source="summary")
+    r = char.rest(True, only="speculate")
+    q = "Where does Osiris hide the Book of Thoth?"
+    assert r["kind"] == "speculate" and q in r["note"] and q in char._open_questions(char._start())
+    out = char.reflect(True, q)
+    assert out["guess"].startswith("Osiris hides") and out["held"] is held  # its own guess is what the look-up scores, no second guess call
+    sp = char.speculations()
+    assert [(x["question"], x["held"]) for x in sp] == [(q, held)]
+    assert char.rest(True, only="speculate")["done"] or char.ENGINES["speculate"]["outcome"] == "skipped"  # the summary is spent; the new note is next, not the same node twice
+    data = train.snapshot(0, 0, "test")
+    assert ({"kind": "speculation", "user": q, "assistant": out["guess"]} in [{k: e[k] for k in ("kind", "user", "assistant")} for e in data["examples"]]) is held
+    assert bool(data["works"]["speculations that held up"]) is held and bool(data["fails"]["speculations filtered out"]) is not held
+
+
+def test_an_unusable_speculation_moves_on_instead_of_retrying_the_same_node(monkeypatch):
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **k: "I am not sure.")
+    char.update_profile("Sagira", "You are Sagira.", [], "")
+    char.add_memory("Resting: char Sagira", "0", source="sheet")
+    char.add_memory("Summary: Osiris", "Osiris is a Warlock.", source="summary")
+    char.rest(True, only="speculate")
+    assert char.ENGINES["speculate"]["detail"] == "the speculation was unusable or off its world"
+    char.rest(True, only="speculate")
+    assert char.ENGINES["speculate"]["detail"] == "nothing it knows is left to speculate on"
+
+
+def test_gains_credit_each_step_kind_with_the_change_it_made_to_the_score():
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    for what, j in [("start", 0.1), ("reflect", 0.3), ("wonder", 0.25), ("reflect", 0.35)]:
+        char.add_memory("Tick", json.dumps({"what": what, "score": j}), source="sheet")
+    g = char.gains()
+    assert list(g) == ["reflect", "wonder"] and g["reflect"] == {"gain": 0.15, "runs": 2} and g["wonder"]["gain"] == -0.05
+    sc = char.disposition()["score"]
+    assert sc == {"J": 0.0, "know": 0.0, "surprise": 0.5}  # knows no names yet, and no guess checked: as likely right as wrong
+
+
+def test_the_bandit_favours_the_step_that_raised_j_lately_and_the_drive_cools_with_maturity(monkeypatch):
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    for what, j in [("start", 0.1), ("reflect", 0.2), ("speculate", 0.2), ("reflect", 0.3), ("speculate", 0.3)]:
+        char.add_memory("Tick", json.dumps({"what": what, "score": j}), source="sheet")
+    A = char.arms()
+    assert A["reflect"][0] > A["speculate"][0] and A["speculate"] == (1.0, round(1 + char.STILL * (1 + char.DISCOUNT), 3))
+    char.add_memory("Tick", json.dumps({"what": "extract", "score": 0.25}), source="sheet")  # new names: J dips until they are answered
+    char.add_memory("Tick", json.dumps({"what": "check", "score": 0.2}), source="sheet")
+    A = char.arms()
+    assert A["extract"] == (2.0, 1.0) and A["check"] == (1.0, 2.0)  # finding a gap pays an explore step; lowering J does not pay a check step
+    monkeypatch.setattr(char.random, "betavariate", lambda a, b: a / (a + b))  # the mean in place of a draw
+    assert char.thompson(["speculate", "reflect", "check"]) == "reflect"  # check is untried at a half; reflect has paid more than that
+    d = {"curiosity": 1.0, "maturity": 0.0, "score": {"surprise": 0.8}}
+    hot, cold = char.drive(d), char.drive({**d, "maturity": 0.9})
+    assert hot["tau"] > cold["tau"] == char.TAU_MIN and (hot["E"], hot["C"]) == (0.5, 0.0)  # nothing open: nothing to check, so it explores
+    char.add_memory("Question: Who is Alfred?", "Who is Alfred? (from 0)", source="question")
+    young, old = char.drive({**d, "curiosity": 1.86}), char.drive({**d, "curiosity": 1.86, "maturity": 0.9})
+    assert young["p_explore"] > 0.5 > old["p_explore"]  # the same pulls: young it reaches out, mature it checks what is open (run 18 sat at P explore 1.0 once mature)
+
+
+def test_compression_falls_when_unfolded_ideas_pile_up_and_that_wakes_curiosity():
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    for i, idea in enumerate(["fog", "fog", "fog", "fog"]):
+        char.add_memory(f"Idea: {idea}", ",".join(str(x) for x in range(1, 5)), source="entity") if i == 0 else None
+    one = char.compression()
+    assert one == {"S": 4.0, "K": 1, "H": 0.0}  # one idea seen four times: fully folded
+    for idea in ("rain", "mist", "smog"):
+        char.add_memory(f"Idea: {idea}", "9", source="entity")
+    assert char.compression()["S"] < one["S"]  # three new ideas, each seen once: less compressed
+
+
+def test_a_find_the_gate_turns_away_does_not_score_the_guess(monkeypatch):
+    _rest_mocks(monkeypatch)
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    char.add_memory("Question: Who is Alfred?", "Who is Alfred? (from 0)", source="question")
+    monkeypatch.setattr(char, "_intake", lambda *a: False)  # the search came back off-world
+    r = char.reflect(True)
+    assert "surprise" not in r and r["unscored"] == "Remember the fog."
+    con = db.connect()
+    assert con.execute("SELECT COUNT(*) AS c FROM char_memories WHERE title LIKE 'Guess: %'").fetchone()["c"] == 0  # J's surprise is not dragged up by a miss of the search
+    con.close()
+
+
+def test_chat_from_before_the_first_rest_belongs_to_the_character_and_a_new_one_cuts_it():
+    con = db.connect()
+    with con:
+        con.execute("INSERT INTO char_turns (role, text, created_at) VALUES ('user', 'hello from earlier', '2000-01-01 00:00:00')")
+    con.close()
+    char._since(True, "Sherlock")  # the first marker, written lazily on the first rest, seconds after the chat
+    assert [t["text"] for t in char._chat_since()] == ["hello from earlier"]  # was dropped whenever the clock had ticked over
+    char.add_memory("Resting: char Watson", "0", source="sheet")  # a new character
+    con = db.connect()
+    with con:
+        con.execute("INSERT INTO char_turns (role, text, created_at) VALUES ('user', 'hi Watson', '2999-01-01 00:00:00')")
+    con.close()
+    assert [t["text"] for t in char._chat_since()] == ["hi Watson"]
+
+
+def test_reflect_prunes_a_note_claim_by_claim_and_records_what_was_dropped(monkeypatch):
+    from shared import websearch
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    monkeypatch.setattr(websearch, "search", lambda s, q: {"results": [{"title": "T", "url": "u", "snippet": "Holmes lives at Baker Street in London with Watson."}]})
+    note = "Holmes lives at Baker Street in London. Moriarty commands zeppelins above Atlantis."
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: note)
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "1. UNSUPPORTED")
+    r = char.reflect(on_char=True, topic="Baker Street")
+    assert r["note"] == "Holmes lives at Baker Street in London."
+    con = db.connect(); row = con.execute("SELECT content FROM char_memories WHERE title LIKE 'Claims: %' ORDER BY id DESC").fetchone(); con.close()
+    assert json.loads(row["content"]) == {"kept": ["Holmes lives at Baker Street in London."], "dropped": ["Moriarty commands zeppelins above Atlantis."]}
+
+
+def test_reflect_with_no_supported_claim_saves_only_the_marker(monkeypatch):
+    _reflect_mocks(monkeypatch)
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "Moriarty commands zeppelins above Atlantis.")
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "")  # no verdict is unsupported
+    r = char.reflect(on_char=True, topic="Fog")
+    assert r["pruned"] is True and r["note"] == ""
+    con = db.connect()
+    rows = con.execute("SELECT source, content FROM char_memories WHERE title = ?", ("Reflection: Fog",)).fetchall()
+    claims = con.execute("SELECT content FROM char_memories WHERE title = 'Claims: 0'").fetchone()
+    con.close()
+    assert [(x["source"], x["content"]) for x in rows] == [("sheet", "(nothing supported)")]
+    assert json.loads(claims["content"]) == {"kept": [], "dropped": []}  # a failed check judged nothing: no negatives from it
+
+
+def test_polish_prunes_old_notes_against_their_saved_sources_once(monkeypatch):
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    src = json.dumps([{"title": "T", "url": "u", "snippet": "Holmes lives at Baker Street in London with Watson."}])
+    a = char.add_memory("Reflection: Baker Street", "Holmes lives at Baker Street in London. Moriarty commands zeppelins above Atlantis.", source="reflection")["id"]
+    b = char.add_memory("Reflection: Fog", "Moriarty commands zeppelins above Atlantis.", source="reflection")["id"]
+    for i in (a, b):
+        char.add_memory(f"Sources: {i}", src, source="sheet")
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "1. UNSUPPORTED")
+    assert char.polish() == {"checked": 2, "trimmed": 1, "dropped": 1, "failed": 0}
+    con = db.connect()
+    note = con.execute("SELECT content FROM char_memories WHERE id = ?", (a,)).fetchone()["content"]
+    gone = con.execute("SELECT content FROM char_memories WHERE title = ?", (f"Checked: {b}",)).fetchone()["content"]
+    con.close()
+    assert note == "Holmes lives at Baker Street in London." and gone == "drop"
+    assert char.polish()["checked"] == 0  # a note with a Claims row is done
+
+
+def test_claims_keeps_a_copied_sentence_without_asking_the_model(monkeypatch):
+    def fail(*a: Any, **kw: Any) -> str:
+        raise AssertionError("the model was called")
+    monkeypatch.setattr(jobs, "complete", fail)
+    assert char._claims("Holmes lives at Baker Street.", ["- T: Holmes lives at Baker Street in London."]) == (["Holmes lives at Baker Street."], [])
+
+
+def test_the_checker_and_the_gate_are_asked_unsteered_and_steering_comes_back(monkeypatch):
+    from shared import steer
+    seen = []
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: (seen.append(dict(steer.ON)), "1. UNSUPPORTED")[1])
+    steer.ON["world-x"] = 0.02
+    assert char._claims("Moriarty commands zeppelins above Atlantis.", ["- T: nothing"]) == ([], ["Moriarty commands zeppelins above Atlantis."])
+    assert seen == [{}] and steer.ON == {"world-x": 0.02}
+    char._unsteered("s", "u", 5)
+    assert seen[-1] == {} and steer.ON == {"world-x": 0.02}
+    steer.ON.clear()
+
+
+def test_a_pruned_reflection_is_not_a_web_miss_the_character_asks_you_about(monkeypatch):
+    _reflect_mocks(monkeypatch)
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "Moriarty commands zeppelins above Atlantis.")
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "1. UNSUPPORTED")
+    out = char.rest(True, 1, force=True, only="reflect", target="Fog")
+    assert "no claim held up against its sources for Fog" in json.dumps(out)
+    assert char._want_from() is None
+
+
+def test_report_omits_the_marker_of_a_pruned_reflection(monkeypatch):
+    _reflect_mocks(monkeypatch)
+    char.update_profile("Sherlock", "a detective", [], "#fff")
+    monkeypatch.setattr(jobs, "complete", lambda s, m, **kw: "Moriarty commands zeppelins above Atlantis.")
+    monkeypatch.setattr(char, "_ask", lambda system, user, n: "")
+    assert char.reflect(on_char=True, topic="Fog")["pruned"] is True
+    assert char.report(True, "m")["notes"] == []
 
 
 def test_asked_mid_chat_to_talk_another_way_it_changes_its_own_voice_and_keeps_it(monkeypatch):
