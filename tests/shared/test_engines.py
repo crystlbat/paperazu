@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as main
-from shared import db, engines, llm, settings
+from shared import db, engines, llm, settings, steer
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +25,7 @@ def tmp_db(tmp_path, monkeypatch):
         return SimpleNamespace(models=SimpleNamespace(list=lambda: models))
     monkeypatch.setattr(llm, "client", client)
     monkeypatch.setattr(llm, "busy", [])
+    monkeypatch.setattr(steer, "available", lambda: False)  # MLX on offer is its own test below
 
 
 def test_the_first_engines_are_this_macs_and_the_live_one_keeps_what_was_typed():
@@ -79,3 +80,21 @@ def test_settings_pointing_elsewhere_become_an_engine_of_their_own():
     settings.update({"base_url": "http://10.0.0.5:1234/v1"})
     r = TestClient(main.app).get("/settings/engines").json()
     assert r["active"] == "mine" and {e["id"] for e in r["engines"]} == {"dory", "unsloth", "mine"}
+
+
+def test_mlx_is_an_engine_when_installed_needs_no_server_and_leaving_it_frees_its_model(monkeypatch):
+    monkeypatch.setattr(steer, "available", lambda: True)
+    c = TestClient(main.app)
+    by = {e["id"]: e for e in c.get("/settings/engines").json()["engines"]}
+    assert by["mlx"]["kind"] == "mlx" and by["mlx"]["status"] == "ready" and by["mlx"]["models"] == [llm.STEER] and by["mlx"]["loaded"] == []
+    assert c.post("/settings/engines/mlx/use").status_code == 200 and settings.get_all().model_name == llm.STEER
+    freed = []
+    monkeypatch.setattr(steer, "unload", lambda: freed.append(1) or True)
+    assert c.post("/settings/engines/unsloth/use").status_code == 200 and freed == [1]
+
+
+def test_engines_saved_before_mlx_get_it_once(monkeypatch):
+    engines.ensure_seeded()  # MLX not installed: the first engines only
+    monkeypatch.setattr(steer, "available", lambda: True)
+    assert [e["id"] for e in engines.ensure_seeded().engines].count("mlx") == 1
+    assert [e["id"] for e in engines.ensure_seeded().engines].count("mlx") == 1

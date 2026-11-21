@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from harness_char import char, rehearse
-from shared import db
+from shared import db, llm, settings, steer
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS train_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, persona TEXT NOT NULL, config TEXT NOT NULL, status TEXT NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS train_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, per
 CREATE TABLE IF NOT EXISTS train_snaps (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, step INTEGER NOT NULL, why TEXT NOT NULL,
   data TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')));
 """
-DEFAULTS = {"minutes": 20.0, "lo": 0.0, "hi": 1.0, "max_steps": 60, "drop": 0.5, "rise": 0.05}
+DEFAULTS = {"minutes": 20.0, "lo": 0.0, "hi": 1.0, "max_steps": 60, "drop": 0.5, "rise": 0.05, "gather": "", "gather_steps": 4, "steer_steps": 4, "steer_model": llm.STEER}
 IDLE_STOP = 6  # this many steps in a row that do nothing: there is nothing left to learn right now
 FAIL_STOP = 3  # this many failures in a row: stop rather than spin
 RUN: dict[str, Any] = {}  # the run in this process: id, its pause and stop flags, the thread
@@ -75,15 +75,18 @@ def snapshot(run_id: int, step: int, why: str) -> dict[str, Any]:
     tones = [json.loads(r["content"]) for r in _rows("Tone tried: %", start)]
     guesses = [(int(r["title"].removeprefix("Guess: ")), *r["content"].split("|", 1)) for r in _rows("Guess: %", start) if "|" in r["content"] and r["title"].removeprefix("Guess: ").isdigit()]
     asks = [json.loads(r["content"]) for r in _rows("A%: %", start) if r["title"].startswith(("Asking: ", "Answered: "))]
+    specs = char.speculations()
     topic = lambda i: notes[i]["title"].removeprefix("Reflection: ") if i in notes else str(i)
     works = {"notes let in": [topic(i) for i, v in checked.items() if v == "keep"],
              "replies passed": [t["text"][:200] for t in turns if t["role"] == "dot" and reviewed.get(t["id"]) == "ok"],
              "tones that met its traits": [t["tone"][:300] for t in tones if t.get("met")],
-             "guesses that came out right": [f"{topic(i)}: {g[:160]}" for i, s, g in guesses if float(s) < 0.3]}
+             "guesses that came out right": [f"{topic(i)}: {g[:160]}" for i, s, g in guesses if float(s) < 0.3],
+             "speculations that held up": [f"{x['question']}: {x['guess'][:160]}" for x in specs if x["held"]]}
     fails = {"notes turned away": [topic(i) for i, v in checked.items() if v == "drop"],
              "mistakes": [f"asked {a.get('asked', '')[:120]!r}, said {a.get('said', '')[:160]!r}: {a.get('why', '')}" for a in asks],
              "tones that missed": [f"{t.get('why', '')}: {t['tone'][:200]}" for t in tones if not t.get("met")],
-             "guesses far off": [f"{topic(i)}: {g[:160]} ({round(float(s) * 100)}% off)" for i, s, g in guesses if float(s) >= 0.5]}
+             "guesses far off": [f"{topic(i)}: {g[:160]} ({round(float(s) * 100)}% off)" for i, s, g in guesses if float(s) >= 0.5],
+             "speculations filtered out": [f"{x['question']}: {x['guess'][:160]} ({round(x['surprise'] * 100)}% off)" for x in specs if not x["held"]]}
     examples = []
     frustrated = {int(r["title"].removeprefix("Frustrated: ")) for r in _rows("Frustrated: %", start) if r["title"].removeprefix("Frustrated: ").isdigit()}
     for i, t in enumerate(turns):  # what it said well: a reply the Verifier passed, with what you asked
@@ -92,6 +95,9 @@ def snapshot(run_id: int, step: int, why: str) -> dict[str, Any]:
     for t in tones:  # a better reply the tune step wrote and scored as meeting every trait
         if t.get("met") and t.get("trial") and t.get("asked"):
             examples.append({"kind": "tuned", "user": t["asked"], "assistant": t["trial"]})
+    for x in specs:  # a guess it made on its own that the web then backed: only those under the keep line are taught
+        if x["held"]:
+            examples.append({"kind": "speculation", "user": x["question"], "assistant": x["guess"]})
     for i, v in checked.items():  # what it knows: a question it asked itself, answered by a note its Verifier let in
         if v == "keep" and i in notes and notes[i]["source"] == "reflection":
             q = topic(i)
@@ -112,7 +118,10 @@ def snapshot(run_id: int, step: int, why: str) -> dict[str, Any]:
 
 def _vars(d: dict[str, Any]) -> dict[str, float]:
     """Every number that moves while it learns, for the Story charts: its needs, trust and frontier beside curiosity and maturity."""
-    return {**{k: round(v, 3) for k, v in char.needs().items()}, "trust": char.trust()["value"], **({"frontier": round(d["frontier"]["term"], 3)} if isinstance(d.get("frontier"), dict) and "term" in d["frontier"] else {})}
+    fr, t = d.get("frontier") if isinstance(d.get("frontier"), dict) else {}, d.get("terms") or {}
+    return {**{k: round(v, 3) for k, v in char.needs().items()}, "trust": char.trust()["value"], **({"frontier": round(fr["term"], 3)} if "term" in fr else {}),
+            **({"names": t["names"], "damper": t["damper"]} if t else {}), **({"F": fr["F"], "D": fr["D"]} if "F" in fr else {}), **({"momentum": d["momentum"]} if "momentum" in d else {}), **({"score": d["score"]["J"]} if "score" in d else {}),
+            **({"S": d["compression"]["S"], "phase": d["compression"]["phase"]} if "compression" in d else {}), **({"p_explore": char.drive(d)["p_explore"]} if "score" in d else {})}
 
 
 WAIT_TURN = 300.0  # seconds a run step waits for a cycle already running
@@ -129,9 +138,64 @@ def _one_step() -> tuple[str, str]:
             return "skipped", "stopped while waiting its turn"
         c = harness.cycle(force=True, wait=5)
         did = [x for x in c.get("executed", []) if x.get("outcome") == "ok"]
+        if not did and c.get("planner_failed"):  # the model could not be reached or refused: say so, so FAIL_STOP ends the run with the real reason
+            raise RuntimeError(f"the planner's model call failed: {c['planner_failed']}")
+        if not did and c.get("self", {}).get("spent"):  # it saw for itself there is nothing left to try
+            return "stuck", c["self"]["said"]
         return ("ok" if did else "skipped"), " · ".join(x["cmd"] for x in did) or "cycle did nothing"
     r = char.rest(True, None, force=True)
     return ("skipped", r.get("why") or "nothing to do") if r.get("done") else ("ok", f"{r['kind']}: {r['topic']}")
+
+
+def _stage(cfg: dict[str, Any], step: int) -> str:
+    g, i = cfg["gather_steps"], step % (cfg["gather_steps"] + 1 + cfg["steer_steps"])
+    return "gather" if i < g else "fit" if i == g else "steer"
+
+
+def _pipeline_step(cfg: dict[str, Any], step: int) -> tuple[str, str]:
+    """One step of the staged run: gather on a server engine, one fit, then steer on the in-process engine, round after round."""
+    stage = _stage(cfg, step)
+    model = cfg["gather"] if stage == "gather" else cfg["steer_model"]
+    settings.OVERRIDE.update({k: model for k in ("model_name", "chat_model", "planner_model", "judge_model")})
+    try:
+        if stage == "fit":
+            llm.ensure(settings.get_all(), cfg["steer_model"])
+            w, t = steer.world_concept(), steer.truth_concept()
+            return "ok", f"fit: world {w or '-'} · truth {t or 'not enough facts yet'}"
+        outcome, detail = _one_step()
+        return outcome, f"{stage}: {detail}"
+    finally:
+        settings.OVERRIDE.clear()
+
+
+def fit_all(models: list[str]) -> list[dict[str, Any]]:
+    """Steering vectors for each MLX model from the same clean facts: one model in memory at a time, each fitted on its own states."""
+    if not _fit_lock.acquire(blocking=False):
+        raise RuntimeError("A fit is already going: each one swaps models, so they take turns.")
+    try:
+        return _fit_all(models)
+    finally:
+        _fit_lock.release()
+
+
+_fit_lock = threading.Lock()
+
+
+def _fit_all(models: list[str]) -> list[dict[str, Any]]:
+    out = []
+    for m in dict.fromkeys(models):
+        if not llm.is_steer(m):
+            raise ValueError(f"{m}: steering vectors need an in-process MLX model (the steer engine or mlx:<repo>)")
+    for m in dict.fromkeys(models):
+        if active():
+            raise RuntimeError("A run is going: fit when it ends, so the two do not swap models under each other.")
+        t0 = time.time()
+        llm.ensure(settings.get_all(), m)
+        w, t = steer.world_concept(), steer.truth_concept()
+        fit = lambda c: round(float(steer.vectors(c)["corr"].max()), 3) if c else None  # its best layer: how cleanly the concept separates
+        out.append({"model": m, "world": w, "world_fit": fit(w), "truth": t, "truth_fit": fit(t), "seconds": round(time.time() - t0)})
+        char._engine("fit", "ok" if w else "skipped", f"{m}: world {w or '-'} ({fit(w)}) · truth {t or 'not enough facts yet'} ({fit(t)})")
+    return out
 
 
 def _loop(run_id: int, cfg: dict[str, Any]) -> None:
@@ -166,6 +230,9 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
         if steps and peaked and cfg["lo"] <= d["curiosity"] <= cfg["hi"]:
             why = f"reached the target: curiosity {d['curiosity']} settled between {cfg['lo']:g} and {cfg['hi']:g}"
             break
+        if log[-1]["kind"] == "stuck":
+            why = log[-1]["outcome"]
+            break
         if idle >= IDLE_STOP:
             why = f"{IDLE_STOP} steps in a row did nothing: nothing left to learn right now"
             break
@@ -174,13 +241,13 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
             break
         _set(run_id, status="running")
         try:
-            outcome, detail = _one_step()
+            outcome, detail = _pipeline_step(cfg, steps) if cfg["gather"] else _one_step()
             fails = 0
         except Exception as e:  # noqa: BLE001 — a run keeps going past one bad step, and stops after a few
             outcome, detail = "failed", str(e)[:200]
             fails += 1
         steps += 1
-        idle = idle + 1 if outcome == "skipped" else 0
+        idle = idle + 1 if outcome in ("skipped", "stuck") else 0
         d = char.disposition()
         peaked = peaked or d["curiosity"] > cfg["hi"]
         snap = ""
@@ -191,8 +258,9 @@ def _loop(run_id: int, cfg: dict[str, Any]) -> None:
         if snap:
             snapshot(run_id, steps, snap)
             mark = {"curiosity": d["curiosity"], "maturity": d["maturity"]}
-        log.append({"step": steps, "t": round(spent), "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": outcome, "outcome": detail[:120], "snap": bool(snap)})
+        log.append({"step": steps, "t": round(spent), "curiosity": d["curiosity"], "maturity": d["maturity"], **_vars(d), "kind": outcome, "outcome": detail[:300], "snap": bool(snap), **({"stage": _stage(cfg, steps - 1)} if cfg["gather"] else {})})
         _set(run_id, log=json.dumps(log))
+    settings.OVERRIDE.clear()
     from harness_char import harness
     harness.CANCEL.clear()  # idle learning after the run is not cancelled
     snapshot(run_id, steps, f"end: {why}")
@@ -208,10 +276,19 @@ def start(cfg: dict[str, Any]) -> dict[str, Any]:
         if active():
             raise RuntimeError("A run is already going: pause or stop it first.")
         c = {k: type(v)(cfg.get(k, v)) for k, v in DEFAULTS.items()}
+        if llm.is_steer(c["gather"]):
+            raise ValueError("gather on a server engine (dory or an Unsloth model), not the steer engine")
+        if not llm.is_steer(c["steer_model"]):
+            raise ValueError("steer on an in-process MLX model: the steer engine or mlx:<repo>")
+        c["gather_steps"], c["steer_steps"] = max(0, c["gather_steps"]), max(0, c["steer_steps"])
+        if c["gather"] and c["gather_steps"] + c["steer_steps"] < 1:
+            raise ValueError("a pipeline run needs at least one gather or steer step")
         if c["lo"] > c["hi"]:
             c["lo"], c["hi"] = c["hi"], c["lo"]
         c["minutes"], c["max_steps"] = max(0.5, min(c["minutes"], 600)), max(1, min(c["max_steps"], 2000))
         char._since(True, char.get_profile()["name"])
+        if c["gather"]:
+            char.set_mode("planner")  # only the planner's cycles run on the steer engine with steering on
         c["mem0"] = _top()  # what it knew before: every mesh node past this id was made by this run
         con = _con()
         with con:
@@ -227,22 +304,29 @@ def start(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sample(every: float = 1.0) -> None:
-    """While the run lives, once a second: the run's clock, and which system is at work, as lanes [sys, kind, t0, t1] the Story draws growing.
+    """While its run lives, once a second: the run's clock, and which system is at work, as lanes [sys, kind, t0, t1] the Story draws growing.
+    It holds on to the run it was started for: a sampler outliving its run must not draw into the next one.
     shortcut: lanes live in memory, so a past run's lanes are gone after a restart; store them on the run row if that matters."""
-    last = time.time()
-    while active():
+    run = RUN
+    th = run.get("thread")
+    last, prev = time.time(), {}
+    while th is not None and th.is_alive():
         time.sleep(every)
+        if run.get("thread") is not th:  # RUN is cleared and refilled in place for the next run: same dict, not our run any more
+            return
         now = time.time()
-        if RUN["pause"].is_set():
-            last = now
+        if run["pause"].is_set():
+            last, prev = now, {}
             continue
-        RUN["clock"] += now - last
+        t0 = round(run["clock"], 1)
+        run["clock"] += now - last
         last = now
-        lanes, w, t = RUN["lanes"], dict(char.NOW), round(RUN["clock"], 1)
-        if lanes and lanes[-1][0] == w.get("sys") and lanes[-1][1] == w.get("kind") and lanes[-1][3] >= t - every * 1.5:
+        lanes, w, t = run["lanes"], dict(char.NOW), round(run["clock"], 1)
+        if lanes and w and w == prev:  # the same work seen at the last tick too: one lane, however late this tick came (a busy machine oversleeps)
             lanes[-1][3] = t
         elif w.get("sys") is not None:
-            lanes.append([w["sys"], w["kind"], round(t - every, 1), t])
+            lanes.append([w["sys"], w["kind"], t0, t])
+        prev = w
 
 
 def control(action: str) -> dict[str, Any]:

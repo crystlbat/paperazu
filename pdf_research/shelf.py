@@ -101,7 +101,7 @@ def library_map(s: Settings, name_groups: bool = True) -> dict[str, Any]:
     con = db.connect()
     titles = {r["id"]: r["title"] for r in con.execute("SELECT id, title FROM papers")}
     try:
-        model = graph.embed_model(s)
+        model = graph.embed_model(s, probe=False)  # the map only reads stored vectors: it must not load a model and evict the chat one
     except graph.GraphError as e:
         con.close()
         return {"groups": [], "unread": sorted(titles), "reason": str(e)}

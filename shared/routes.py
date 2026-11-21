@@ -19,7 +19,7 @@ def errors(e: ValidationError) -> dict[str, str]:
 
 @router.get("/settings")
 def get_settings() -> dict[str, Any]:
-    return settings.get_all().model_dump(exclude={"engines"})  # engines carry keys: they come from /settings/engines, keys left out
+    return settings.stored().model_dump(exclude={"engines"})  # not a pipeline stage's override  # engines carry keys: they come from /settings/engines, keys left out
 
 
 @router.patch("/settings")

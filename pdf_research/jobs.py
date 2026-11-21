@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from shared import db, llm, settings, websearch
+from shared import db, llm, settings, steer, websearch
 from pdf_research import library, marks
 from shared.settings import Settings
 
@@ -636,7 +636,10 @@ def _mark(paper_id: str, page: int | None, quote: str) -> dict[str, Any] | None:
 
 
 def complete(s: Settings, messages: list[dict[str, str]], **kw: Any) -> str:
-    """One model call. Tests replace this. Raises llm.ModelError (a RuntimeError)."""
+    """One model call. Tests replace this. Raises llm.ModelError (a RuntimeError).
+    While the harness steers the character's steps, they run on the loaded MLX model whatever model the call's settings name."""
+    if steer.ON:
+        s = s.model_copy(update={"model_name": llm.mlx_loaded()})
     return llm.chat(s, messages, **kw)
 
 

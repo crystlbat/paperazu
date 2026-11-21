@@ -15,7 +15,7 @@ import pdf_research.routes
 import shared.routes
 from harness_char import char
 from pdf_research import jobs, library, primer
-from shared import db
+from shared import db, llm
 
 ROOT = Path(__file__).resolve().parent
 PORT = int(os.environ.get("PORT", "8765"))
@@ -30,6 +30,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     primer.reset_stale()
     jobs.start()
     yield
+    llm.stop_dory()  # the dory server this app started does not outlive it
 
 
 app = FastAPI(title="Paper Reading Workbench", lifespan=lifespan)
